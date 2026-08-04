@@ -1,4 +1,4 @@
-# Flutter iOS 测试辅助脚本（Windows 可用，无需 Mac）
+﻿# Flutter iOS 测试辅助脚本（Windows 可用，无需 Mac）
 # 作用: 云构建产出的 .ipa 下载到本机后，按版本号重命名，并输出安装到 iPhone 的指引
 # 用法: .\build_ipa.ps1 [-IpaPath <ipa文件路径>]
 #       不带参数时自动搜索: 当前目录、项目 build\ios、系统下载目录中最近的 .ipa
@@ -66,3 +66,4 @@ Write-Host "  3. iPhone 开启开发者模式（iOS16+）: 设置 → 隐私与�
 Write-Host "  4. Sideloadly 中: 拖入 $newName，输入你的 Apple ID 和密码（免费账号即可），点击 Start" -ForegroundColor White
 Write-Host "  5. 安装完成后: 设置 → 通用 → VPN 与设备管理 → 信任你的 Apple ID" -ForegroundColor White
 Write-Host "  6. 打开 App 测试。注意: 免费签名 7 天过期，过期后重复第 4 步重装即可" -ForegroundColor White
+
