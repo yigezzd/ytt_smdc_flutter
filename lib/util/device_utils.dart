@@ -1,7 +1,9 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_deer/res/constant.dart';
+import 'package:sp_util/sp_util.dart';
 
 /// https://medium.com/gskinner-team/flutter-simplify-platform-screen-size-detection-4cb6fc4f7ed1
 class Device {
@@ -41,12 +43,18 @@ class Device {
   /// 获取设备唯一标识（machserial）
   /// - Android: 使用 serialNumber（Build.SERIAL），降级用 id（Build.ID）
   /// - iOS: 使用 identifierForVendor
-  /// - Web: 使用 userAgent 作为标识
+  /// - Web: 使用本地持久化的随机标识（对齐 smdcapp Security.getUUID；
+  ///   userAgent 过长且含特殊字符，作为 machserial 会导致服务端校验失败）
   static String getDeviceSerial() {
     if (Constant.isDriverTest) return '';
     try {
       if (isWeb) {
-        return _webInfo.userAgent ?? '';
+        String webId = SpUtil.getString(_kWebDeviceIdKey) ?? '';
+        if (webId.isEmpty) {
+          webId = _genWebDeviceId();
+          SpUtil.putString(_kWebDeviceIdKey, webId);
+        }
+        return webId;
       } else if (isAndroid) {
         final serial = _androidInfo.serialNumber;
         // Android 10+ 无 READ_PHONE_STATE 权限时 serialNumber 为 "unknown"
@@ -91,5 +99,20 @@ class Device {
     if (ua.contains('Firefox/')) return 'Mozilla Firefox';
     if (ua.contains('Safari/') && !ua.contains('Chrome')) return 'Safari';
     return 'Web Browser';
+  }
+
+  /// Web 设备标识存储 key
+  static const String _kWebDeviceIdKey = 'web_device_id';
+
+  /// 生成 Web 设备标识（20位字母数字，对齐 smdcapp Security.getUUID 用途）
+  static String _genWebDeviceId() {
+    const String base =
+        'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    final math.Random rnd = math.Random.secure();
+    final StringBuffer sb = StringBuffer();
+    for (int i = 0; i < 20; i++) {
+      sb.write(base[rnd.nextInt(base.length)]);
+    }
+    return sb.toString();
   }
 }

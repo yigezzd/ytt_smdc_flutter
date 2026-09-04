@@ -101,6 +101,51 @@ class ProductCategory {
   final List<Product> products;
 }
 
+/// 套餐已选明细项快照（对齐 smdcapp ProductCombSet 选中态 → DetailListBean 核心字段）
+///
+/// 下单时按此生成套餐子行（combflag=0, combid=主行onlyid），
+/// 而非拼接进主行 spec（smdcapp 主行 spec 为空，见 OrderModel.productToDetailBean）
+class ComboSelectedItem {
+  const ComboSelectedItem({
+    required this.productid,
+    required this.productname,
+    required this.qty,
+    this.combaddamt = 0,
+    this.groupid = '',
+    this.combsetproductid = '',
+    this.specname = '',
+    this.sellprice = 0,
+    this.unit = '',
+  });
+
+  /// 子商品ID（对齐 combproductid 之外的明细商品 productid）
+  final String productid;
+
+  /// 子商品名称
+  final String productname;
+
+  /// 每份套餐内的实际数量（对齐 smdcapp combsetqty）
+  final double qty;
+
+  /// 每份套餐的加减价（对齐 smdcapp getSetMealInfo 明细 combaddamt，未乘套餐数量）
+  final double combaddamt;
+
+  /// 套餐分组ID（对齐 combgroupid）
+  final String groupid;
+
+  /// 套餐明细配置ID（对齐 combsetproductid）
+  final String combsetproductid;
+
+  /// 子商品规格名（对齐 smdcapp d.setSpec(specname)）
+  final String specname;
+
+  /// 子商品单价（对齐 smdcapp rrprice = combSet.price）
+  final double sellprice;
+
+  /// 单位
+  final String unit;
+}
+
 /// 购物车条目
 class CartItem {
   CartItem({
@@ -109,6 +154,7 @@ class CartItem {
     this.specText = '',
     this.extraPrice = 0,
     this.weighNum = 0,
+    this.combItems = const <ComboSelectedItem>[],
   });
 
   final Product product;
@@ -120,6 +166,13 @@ class CartItem {
 
   /// 已选规格做法描述, 如 "中份、微辣、加肉"（做法修改时可更新）
   String specText;
+
+  /// 套餐已选明细（仅套餐商品非空，对齐 smdcapp DetailListBean.itemList）
+  /// 非 final：套餐修改操作需整体替换明细列表
+  List<ComboSelectedItem> combItems;
+
+  /// 是否套餐商品（对齐 smdcapp combflag==1）
+  bool get isCombo => combItems.isNotEmpty;
 
   /// 规格做法加价合计(单份，做法修改时可更新)
   double extraPrice;
@@ -167,6 +220,50 @@ class CartItem {
 
   /// 是否退菜记录（对齐 smdcapp presentflag==2）
   bool isRefunded = false;
+
+  // ---- 临时菜字段（对齐 smdcapp DetailListBean tpdish*）----
+
+  /// 临时菜标识（对齐 smdcapp tpdishflag，1=临时菜）
+  int tpdishflag = 0;
+
+  /// 临时菜是否可打折（对齐 smdcapp tpdscflag，1=可折）
+  int tpdscflag = 0;
+
+  /// 临时菜厨打方案1（对齐 smdcapp tpdishid，-1=不打印）
+  String tpdishid = '';
+
+  /// 临时菜厨打方案2（对齐 smdcapp tpdishidzd，-1=不打印）
+  String tpdishidzd = '';
+
+  // ---- 团券核销字段（对齐 smdcapp DetailListBean douyinflag/querytoken）----
+
+  /// 团券菜标识（对齐 smdcapp douyinflag，1=团购核销菜）
+  int douyinflag = 0;
+
+  // ---- 必点菜字段（对齐 smdcapp DetailListBean mustflag/mustType）----
+
+  /// 必点菜标识（对齐 smdcapp mustflag，1=必点菜）
+  int mustflag = 0;
+
+  /// 必点菜类型（对齐 smdcapp mustType，0=固定必点 1=可选必点）
+  int mustType = 0;
+
+  /// 是否必点菜
+  bool get isMust => mustflag == 1;
+
+  /// 团券商品绑定券的唯一ID（对齐 smdcapp querytoken，用于退团券）
+  String querytoken = '';
+
+  // ---- 临时菜上传补充字段（对齐 smdcapp DetailListBean unit/typeid/typename）----
+
+  /// 单位（临时菜录入）
+  String unit = '';
+
+  /// 分类ID（临时菜录入）
+  String typeid = '';
+
+  /// 分类名称（临时菜录入）
+  String typename = '';
 
   /// 显示名称（优先自定义名称）
   String get displayName => (customName != null && customName!.isNotEmpty)

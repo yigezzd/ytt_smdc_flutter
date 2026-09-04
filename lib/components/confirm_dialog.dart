@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 /// 品牌红（全局统一）
 const Color _kBrandRed = Color(0xFFE63F31);
@@ -216,6 +217,8 @@ class InputDialog extends StatefulWidget {
     this.cancelText = '取消',
     this.confirmText = '确定',
     this.maxLines = 3,
+    this.keyboardType,
+    this.inputFormatters,
   });
 
   /// 弹窗标题
@@ -236,6 +239,12 @@ class InputDialog extends StatefulWidget {
   /// 输入框最大行数
   final int maxLines;
 
+  /// 键盘类型（金额输入弹窗传数字键盘，对齐 smdcapp PricePopup 数字键盘）
+  final TextInputType? keyboardType;
+
+  /// 输入格式化器（如仅允许数字和小数点）
+  final List<TextInputFormatter>? inputFormatters;
+
   /// 弹出输入弹窗，返回输入的文本；返回 null 表示取消
   static Future<String?> show(
     BuildContext context, {
@@ -246,6 +255,8 @@ class InputDialog extends StatefulWidget {
     String confirmText = '确定',
     int maxLines = 3,
     bool barrierDismissible = true,
+    TextInputType? keyboardType,
+    List<TextInputFormatter>? inputFormatters,
   }) {
     return showDialog<String>(
       context: context,
@@ -257,6 +268,8 @@ class InputDialog extends StatefulWidget {
         cancelText: cancelText,
         confirmText: confirmText,
         maxLines: maxLines,
+        keyboardType: keyboardType,
+        inputFormatters: inputFormatters,
       ),
     );
   }
@@ -319,6 +332,8 @@ class _InputDialogState extends State<InputDialog> {
                 controller: _controller,
                 autofocus: true,
                 maxLines: widget.maxLines,
+                keyboardType: widget.keyboardType,
+                inputFormatters: widget.inputFormatters,
                 style: TextStyle(
                   fontSize: 14,
                   color: isDark ? Colors.white : const Color(0xFF1D2129),

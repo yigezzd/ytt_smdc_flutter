@@ -1,5 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_deer/pages/order/order_models.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 
@@ -16,12 +17,14 @@ class SetMealResult {
     required this.specText,
     required this.unitPrice,
     required this.combAddAmt,
+    required this.selectedItems,
   });
 
   /// 套餐数量
   final int quantity;
 
-  /// 套餐SKU描述（选中明细拼接）
+  /// 套餐SKU描述（选中明细拼接，仅展示用；不上传 spec 字段，
+  /// 对齐 smdcapp getSetMealPrice str[2]）
   final String specText;
 
   /// 套餐单价（sellprice）
@@ -29,6 +32,9 @@ class SetMealResult {
 
   /// 套餐加减价总额
   final double combAddAmt;
+
+  /// 选中明细快照（下单时生成套餐子行，对齐 smdcapp getSetMealInfo）
+  final List<ComboSelectedItem> selectedItems;
 }
 
 /// 套餐弹窗（对齐 smdcapp SetMealPopup 完整UI与业务逻辑）
@@ -45,26 +51,41 @@ class SetMealSheet extends StatefulWidget {
     super.key,
     required this.product,
     required this.comboData,
-    required this.onAddToCart,
+    this.onAddToCart,
     this.onBuyNow,
+    this.isEditMode = false,
+    this.initialSelection,
+    this.onConfirmEdit,
   });
 
   final DishProduct product;
   final ComboMealData comboData;
 
   /// 加入购物车回调
-  final void Function(SetMealResult result) onAddToCart;
+  final void Function(SetMealResult result)? onAddToCart;
 
   /// 立即下单回调
   final void Function(SetMealResult result)? onBuyNow;
+
+  /// 编辑模式（对齐 smdcapp CombPopup2 isChange：修改已选套餐内容）
+  final bool isEditMode;
+
+  /// 编辑模式已选明细（用于恢复选中状态，对齐 smdcapp 购物车 bean 保留 setMealBean 选中态）
+  final List<ComboSelectedItem>? initialSelection;
+
+  /// 编辑模式确认修改回调
+  final void Function(SetMealResult result)? onConfirmEdit;
 
   /// 显示弹窗
   static Future<void> show(
     BuildContext context, {
     required DishProduct product,
     required ComboMealData comboData,
-    required void Function(SetMealResult result) onAddToCart,
+    void Function(SetMealResult result)? onAddToCart,
     void Function(SetMealResult result)? onBuyNow,
+    bool isEditMode = false,
+    List<ComboSelectedItem>? initialSelection,
+    void Function(SetMealResult result)? onConfirmEdit,
   }) {
     return showModalBottomSheet<void>(
       context: context,
@@ -75,6 +96,9 @@ class SetMealSheet extends StatefulWidget {
         comboData: comboData,
         onAddToCart: onAddToCart,
         onBuyNow: onBuyNow,
+        isEditMode: isEditMode,
+        initialSelection: initialSelection,
+        onConfirmEdit: onConfirmEdit,
       ),
     );
   }
@@ -101,7 +125,11 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
       duration: const Duration(milliseconds: 280),
     )..forward();
     _slideAnimation = CurvedAnimation(parent: _animController, curve: Curves.easeOutCubic);
-    _bindCombCheck();
+    if (widget.isEditMode) {
+      _restoreEditSelection();
+    } else {
+      _bindCombCheck();
+    }
   }
 
   @override
@@ -151,6 +179,48 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
         }
       }
     }
+  }
+
+  /// 编辑模式恢复已选明细选中态
+  ///
+  /// 匹配规则：优先 combsetproductid（套餐明细配置ID），回退 productid+specname。
+  /// 数量还原（对齐 _calcSetMealPrice 明细 qty 口径）：
+  /// selecttype==1 时 qty 即 selectSetMealNum；selecttype==2 时 qty = selectSetMealNum × 单次数量。
+  void _restoreEditSelection() {
+    final List<ComboSelectedItem>? selected = widget.initialSelection;
+    if (selected == null || selected.isEmpty) {
+      _bindCombCheck();
+      return;
+    }
+    for (final ComboGroup group in widget.comboData.prolist) {
+      for (final ComboItem item in group.list) {
+        final ComboSelectedItem? match = _findSelected(item, selected);
+        if (match == null) continue;
+        // 售罄商品不恢复选中（对齐 smdcapp 沽清校验）
+        if (item.sellclearflag == 1 && item.stockqty <= 0) continue;
+        item.isCheck = true;
+        item.selectSetMealNum = item.selecttype == 1
+            ? match.qty
+            : (item.qty > 0 ? match.qty / item.qty : match.qty);
+      }
+    }
+  }
+
+  /// 查找已选明细对应的配置项
+  ComboSelectedItem? _findSelected(ComboItem item, List<ComboSelectedItem> selected) {
+    for (final ComboSelectedItem s in selected) {
+      if (item.combsetproductid.isNotEmpty &&
+          s.combsetproductid == item.combsetproductid) {
+        return s;
+      }
+    }
+    final String specname = item.specid.isNotEmpty ? item.specname : '';
+    for (final ComboSelectedItem s in selected) {
+      if (s.productid == item.productid && s.specname == specname) {
+        return s;
+      }
+    }
+    return null;
   }
 
   /// 计算组内已选总数量（对齐 smdcapp SetMealPopup selectAllNum 逻辑）
@@ -260,14 +330,16 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
 
   // ==================== 价格计算（对齐 smdcapp ShoppingCartUtil.getSetMealPrice） ====================
 
-  /// 计算套餐SKU信息和加减价（对齐 smdcapp getSetMealPrice）
+  /// 计算套餐SKU信息、加减价和选中明细（对齐 smdcapp getSetMealPrice + getSetMealInfo）
   ///
-  /// 返回 [skuText, combAddAmt]
-  /// - skuText: "麻辣子鸡x1,辣椒炒肉x1," 格式
+  /// 返回 [skuText, combAddAmt, selectedItems]
+  /// - skuText: "麻辣子鸡x1,辣椒炒肉x1" 格式（仅展示用）
   /// - combAddAmt: 明细加价总和 - 减价总和
+  /// - selectedItems: 选中明细快照（下单时上传套餐子行，避免拼接进 spec 超长）
   List<dynamic> _calcSetMealPrice() {
     final StringBuffer sb = StringBuffer();
     double combAddAmt = 0;
+    final List<ComboSelectedItem> selectedItems = <ComboSelectedItem>[];
 
     for (final ComboGroup group in widget.comboData.prolist) {
       for (final ComboItem item in group.list) {
@@ -286,13 +358,35 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
             combAddAmt += addprice * qty;
           }
 
+          // 明细行数量/加减价（对齐 smdcapp getSetMealInfo 分支）
+          double detailQty;
+          double detailAddAmt;
+          final double baseAdd = (addprice > 0)
+              ? addprice * qty
+              : ((cutprice > 0) ? -cutprice * qty : 0);
           if (item.selecttype == 1) {
             sb.write(_formatQty(item.selectSetMealNum));
+            detailQty = item.selectSetMealNum;
+            detailAddAmt = baseAdd;
           } else {
             sb.write(_formatQty(item.selectSetMealNum * item.qty));
             qty = item.selectSetMealNum * item.qty;
+            detailQty = qty;
+            detailAddAmt = baseAdd;
           }
           sb.write(',');
+
+          selectedItems.add(ComboSelectedItem(
+            productid: item.productid,
+            productname: item.productname,
+            qty: detailQty,
+            combaddamt: detailAddAmt,
+            groupid: group.groupid,
+            combsetproductid: item.combsetproductid,
+            specname: item.specid.isNotEmpty ? item.specname : '',
+            sellprice: item.price,
+            unit: item.unit,
+          ));
         }
       }
     }
@@ -301,7 +395,7 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
     if (skuText.endsWith(',')) {
       skuText = skuText.substring(0, skuText.length - 1);
     }
-    return <dynamic>[skuText, combAddAmt];
+    return <dynamic>[skuText, combAddAmt, selectedItems];
   }
 
   /// 套餐总价 = (套餐销售价 + 单份加减价) × 数量
@@ -352,11 +446,30 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
       return;
     }
     final List<dynamic> priceInfo = _calcSetMealPrice();
-    widget.onAddToCart(SetMealResult(
+    widget.onAddToCart?.call(SetMealResult(
       quantity: _quantity,
       specText: priceInfo[0] as String,
       unitPrice: widget.comboData.sellprice,
       combAddAmt: priceInfo[1] as double,
+      selectedItems: priceInfo[2] as List<ComboSelectedItem>,
+    ));
+    Navigator.of(context).pop();
+  }
+
+  /// 确认修改（编辑模式，对齐 smdcapp CombPopup2 isChange → tvAddCart "确认修改"）
+  void _confirmEdit() {
+    final String error = _validateSelection();
+    if (error.isNotEmpty) {
+      Toast.show(error);
+      return;
+    }
+    final List<dynamic> priceInfo = _calcSetMealPrice();
+    widget.onConfirmEdit?.call(SetMealResult(
+      quantity: _quantity,
+      specText: priceInfo[0] as String,
+      unitPrice: widget.comboData.sellprice,
+      combAddAmt: priceInfo[1] as double,
+      selectedItems: priceInfo[2] as List<ComboSelectedItem>,
     ));
     Navigator.of(context).pop();
   }
@@ -374,6 +487,7 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
       specText: priceInfo[0] as String,
       unitPrice: widget.comboData.sellprice,
       combAddAmt: priceInfo[1] as double,
+      selectedItems: priceInfo[2] as List<ComboSelectedItem>,
     ));
     Navigator.of(context).pop();
   }
@@ -938,57 +1052,87 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
               ],
             ),
             const SizedBox(height: 12),
-            // 操作按钮（对齐 smdcapp：下单 + 加入购物车）
+            // 操作按钮（对齐 smdcapp：编辑模式仅"确认修改"，否则下单 + 加入购物车）
             Row(
               children: <Widget>[
-                if (widget.onBuyNow != null)
+                if (widget.isEditMode)
                   Expanded(
                     child: GestureDetector(
-                      onTap: _buyNow,
+                      onTap: _confirmEdit,
                       child: Container(
                         height: 44,
-                        margin: const EdgeInsets.only(right: 10),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF7F8FA),
+                          gradient: const LinearGradient(
+                            colors: <Color>[Color(0xFFF0503F), _kBrandRed],
+                          ),
                           borderRadius: BorderRadius.circular(22),
-                          border: Border.all(color: const Color(0xFFE5E6EB)),
+                          boxShadow: <BoxShadow>[
+                            BoxShadow(
+                              color: _kBrandRed.withValues(alpha: 0.3),
+                              blurRadius: 8,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
                         ),
                         child: const Center(
                           child: Text(
-                            '下单',
-                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF666666)),
+                            '确认修改',
+                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                else ...<Widget>[
+                  if (widget.onBuyNow != null)
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: _buyNow,
+                        child: Container(
+                          height: 44,
+                          margin: const EdgeInsets.only(right: 10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF7F8FA),
+                            borderRadius: BorderRadius.circular(22),
+                            border: Border.all(color: const Color(0xFFE5E6EB)),
+                          ),
+                          child: const Center(
+                            child: Text(
+                              '下单',
+                              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF666666)),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: _addCart,
+                      child: Container(
+                        height: 44,
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: <Color>[Color(0xFFF0503F), _kBrandRed],
+                          ),
+                          borderRadius: BorderRadius.circular(22),
+                          boxShadow: <BoxShadow>[
+                            BoxShadow(
+                              color: _kBrandRed.withValues(alpha: 0.3),
+                              blurRadius: 8,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: const Center(
+                          child: Text(
+                            '加入购物车',
+                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
                           ),
                         ),
                       ),
                     ),
                   ),
-                Expanded(
-                  child: GestureDetector(
-                    onTap: _addCart,
-                    child: Container(
-                      height: 44,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: <Color>[Color(0xFFF0503F), _kBrandRed],
-                        ),
-                        borderRadius: BorderRadius.circular(22),
-                        boxShadow: <BoxShadow>[
-                          BoxShadow(
-                            color: _kBrandRed.withValues(alpha: 0.3),
-                            blurRadius: 8,
-                            offset: const Offset(0, 3),
-                          ),
-                        ],
-                      ),
-                      child: const Center(
-                        child: Text(
-                          '加入购物车',
-                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+                ],
               ],
             ),
             SizedBox(height: MediaQuery.of(context).padding.bottom > 0 ? 8 : 14),

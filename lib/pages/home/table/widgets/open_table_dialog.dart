@@ -112,18 +112,17 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
   /// 点菜按钮：先调开台接口再跳转点菜页
   /// （对齐 smdcapp TableOpenBottomV2Dialog.openTableOrOrder(false)：点菜也先 beginTable）
   Future<void> _onOrderTap() async {
-    await _beginTableAndGoOrder();
+    await _beginTable(goOrder: true);
   }
 
-  /// 开台按钮：调用 beginTable 接口后跳转
-  /// （对齐 smdcapp TableOpenBottomV2Dialog.openTableOrOrder(true)）
+  /// 开台按钮：仅调用 beginTable 开台并关闭弹窗，不进入点菜页
   Future<void> _onOpenTableTap() async {
-    await _beginTableAndGoOrder();
+    await _beginTable(goOrder: false);
   }
 
-  /// 调用 beginTable 开台接口，成功后关闭弹窗并跳转点菜页
+  /// 调用 beginTable 开台接口，成功后关闭弹窗；[goOrder] 为 true 时再跳转点菜页
   /// （对齐 smdcapp openTableOrOrder：点菜/开台都先调 beginTable，成功后 dismiss）
-  Future<void> _beginTableAndGoOrder() async {
+  Future<void> _beginTable({required bool goOrder}) async {
     if (_submitting) return;
     setState(() => _submitting = true);
 
@@ -201,9 +200,12 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
 
       Toast.show('开台成功');
       TableEventBus.fireTableChanged();
-      // 关闭弹窗后跳转点菜页（对齐 smdcapp dismiss + DishesHomeAct2.startActivity）
+      // 关闭弹窗（对齐 smdcapp dismiss）
       Navigator.of(context).pop();
-      _goOrderPage(saleid: saleid, tableJson: updatedTableJson);
+      // 仅"点菜"按钮跳转点菜页；"开台"按钮开台后停留在桌台页
+      if (goOrder) {
+        _goOrderPage(saleid: saleid, tableJson: updatedTableJson);
+      }
     } catch (_) {
       // 错误已在 requestForm 中 Toast
     } finally {
@@ -216,6 +218,8 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
   @override
   Widget build(BuildContext context) {
     final double bottomPadding = MediaQuery.of(context).padding.bottom;
+    // 键盘弹起时把内容顶到键盘上方，避免输入框被遮挡
+    final double keyboardInset = MediaQuery.of(context).viewInsets.bottom;
 
     return Container(
       decoration: const BoxDecoration(
@@ -226,7 +230,7 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
         ),
       ),
       child: Padding(
-        padding: EdgeInsets.fromLTRB(20, 0, 20, bottomPadding + 16),
+        padding: EdgeInsets.fromLTRB(20, 0, 20, bottomPadding + keyboardInset + 16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
@@ -242,13 +246,36 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
                 ),
               ),
             ),
-            // 标题
-            const Text(
-              '开台',
-              style: TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF1D2129),
+            // 标题 + 右上角关闭按钮（与标题同行垂直居中）
+            SizedBox(
+              width: double.infinity,
+              child: Stack(
+                alignment: Alignment.center,
+                children: <Widget>[
+                  const Text(
+                    '开台',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF1D2129),
+                    ),
+                  ),
+                  Positioned(
+                    right: 0,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => Navigator.of(context).pop(),
+                      child: const Padding(
+                        padding: EdgeInsets.all(6),
+                        child: Icon(
+                          Icons.close,
+                          size: 22,
+                          color: Color(0xFF86909C),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 18),

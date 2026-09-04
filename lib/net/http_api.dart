@@ -121,11 +121,11 @@ class HttpApi {
   // ==================== 订单详情接口 ====================
 
   /// 云服务-获取单个桌台临时点菜明细/订单详情（对齐 smdcapp /YttSvr/app/sale/getSaleTmpDetail）
-  /// 参数：saleid；响应 data 为 PlacedOrderBean（含 detailList）
+  /// 参数：saleid；响应 data 为 PlacedOrder（含 detailList）
   static const String getSaleTmpDetail = '/sale/getSaleTmpDetail';
 
   /// 主设备-获取单个桌台临时点菜明细/订单详情（对齐 smdcapp /api/table/GetTableDetailList）
-  /// 参数：tablemaster(PCMasterBean JSON，含 tmp)；响应 Data 为 PlacedOrderBean
+  /// 参数：tablemaster(PCMasterBean JSON，含 tmp)；响应 Data 为 PlacedOrder
   static const String pcGetTableDetailList = '/api/table/GetTableDetailList';
 
   // ==================== 结账接口 ====================
@@ -155,21 +155,33 @@ class HttpApi {
   // ==================== 交接班接口 ====================
 
   /// 云服务-获取最后交班时间（对齐 smdcapp SetApi /YttSvr/cashrecon/getMaxLogoutTime）
-  static const String getMaxLogoutTime = '/cashrecon/getMaxLogoutTime';
+  /// 注意：交班接口固定走根路径（无 /app 前缀），对齐 YttPhone SetApi + NetHelpUtils.currentUrl(根域名)
+  static const String getMaxLogoutTime = '$baseUrlYttRoot/cashrecon/getMaxLogoutTime';
 
   /// 云服务-查询交班数据（对齐 smdcapp SetApi /YttSvr/cashrecon/reportOnShiftByMachno）
   /// 参数：cashid, logintime, logouttime, proflag, typeflag, retireflag
-  static const String reportOnShift = '/cashrecon/reportOnShiftByMachno';
+  static const String reportOnShift = '$baseUrlYttRoot/cashrecon/reportOnShiftByMachno';
 
   /// 云服务-提交交班（对齐 smdcapp SetApi /YttSvr/cashrecon/addShifthandover）
   /// 参数：master(JSON), details(JSON), printtype, totalprotype, totalpro, totalproret, totalpropre
-  static const String addShifthandover = '/cashrecon/addShifthandover';
+  static const String addShifthandover = '$baseUrlYttRoot/cashrecon/addShifthandover';
 
   /// 云服务-设置参数（对齐 smdcapp LoginApi /YttSvr/app/set/setParams）
   /// 表单字段 "9" → set9Params（如 ClockTableFlag）；字段 "10" → setDishesParams（如 WeightTwoConfirm）
   static const String setParams = '/set/setParams';
 
   // ==================== 菜品操作接口 ====================
+
+  /// 云服务-获取出品档口/厨打列表（对齐 smdcapp DishesApi /YttSvr/app/kitchen/getList）
+  /// 参数：opertype(1收银打印配置 2出品打印配置 3标签打印配置), field, type, page, pagesize
+  static const String kitchenGetList = '/kitchen/getList';
+
+  /// 云服务-生成菜品条码（对齐 smdcapp DishesApi /YttSvr/app/bi/product/getBarcode）
+  /// 参数：value(分类ID), type, spid, sid
+  static const String productGetBarcode = '/bi/product/getBarcode';
+
+  /// 云服务-添加菜品资料（对齐 smdcapp DishesApi /YttSvr/app/bi/product/add，临时菜保存资料）
+  static const String productAdd = '/bi/product/add';
 
   /// 云服务-获取系统备注/原因列表（对齐 smdcapp /YttSvr/app/reason/getReasonList）
   /// 参数：typeid（01=备注, 02=退菜原因, 03=打折原因）

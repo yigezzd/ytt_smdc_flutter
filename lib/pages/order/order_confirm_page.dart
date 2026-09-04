@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,8 +13,10 @@ import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/net/table_event_bus.dart';
 import 'package:flutter_deer/pages/order/order_models.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
+import 'package:flutter_deer/pages/order/widgets/set_meal_sheet.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
+import 'package:flutter_deer/util/file_log_writer.dart';
 import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:sp_util/sp_util.dart';
@@ -80,6 +83,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
   /// 已下单列表加载中
   bool _loadingOrdered = false;
 
+  /// 已下单明细的最大 seq（对齐 smdcapp：每次下单新加的菜 seq 在原基础上+1）
+  int _orderedMaxSeq = 0;
+
   @override
   void initState() {
     super.initState();
@@ -128,9 +134,15 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
       } else {
         final Map<String, dynamic>? tmp =
             widget.tableJson?['tmp'] as Map<String, dynamic>?;
-        final String saleid = tmp?['saleid']?.toString() ?? widget.saleid;
+        String saleid = tmp?['saleid']?.toString() ?? '';
+        if (saleid.isEmpty) {
+          saleid = widget.saleid;
+        }
         if (saleid.isEmpty) {
           // 无 saleid（新开台未下过单），无需加载
+          FileLogWriter.instance.writeToFile(
+              '已下单加载跳过: saleid为空（新开台未下过单）',
+              tag: '已下单加载');
           if (mounted) setState(() => _loadingOrdered = false);
           return;
         }
@@ -147,23 +159,150 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
       final dynamic data = resp['Data'] ?? resp['data'];
       if (data is Map<String, dynamic>) {
         final dynamic rawList = data['detailList'];
-        if (rawList is List) {
-          final List<CartItem> ordered = <CartItem>[];
+        if (rawList is List && rawList.isNotEmpty) {
+          // 对齐 smdcapp CartGoodsModel.initOrderInfo：明细接口可能不返回
+          // combflag 等商品参数，按 productid 从本地商品库回填（对齐 svn r132898）
+          final Map<String, int> localCombFlags =
+              await OrderRepository.fetchLocalCombFlags();
+          if (!mounted) return;
           for (final dynamic raw in rawList) {
             if (raw is! Map<String, dynamic>) continue;
-            // 对齐 smdcapp CartGoodsModel: id != 0 为已下单
-            final int id = _toInt(raw['id']);
-            if (id == 0) continue;
-            ordered.add(_detailToCartItem(raw));
+            final int? localFlag =
+                localCombFlags[raw['productid']?.toString() ?? ''];
+            if (localFlag != null) {
+              raw['combflag'] = localFlag;
+            }
           }
+
+          // 数据驱动识别套餐主行：被其它行 combid 引用的 onlyid 必为主行，
+          // 不依赖接口 combflag（对齐 smdcapp formatCombList 主子行关联关系）
+          final Set<String> referencedOnlyIds = <String>{};
+          for (final dynamic raw in rawList) {
+            if (raw is! Map<String, dynamic>) continue;
+            final String cId = raw['combid']?.toString() ?? '';
+            final String oId = raw['onlyid']?.toString() ?? '';
+            if (cId.isNotEmpty && cId != oId) {
+              referencedOnlyIds.add(cId);
+            }
+          }
+
+          final List<CartItem> ordered = <CartItem>[];
+          final Map<String, CartItem> onlyIdMap = <String, CartItem>{};
+          // 第一遍被当作子行、但找不到主行的行（降级平铺展示，避免整条丢失）
+          final List<Map<String, dynamic>> orphanChildren =
+              <Map<String, dynamic>>[];
+          int maxSeq = 0;
+          // 第一遍：主行转条目（套餐明细行第二遍归组，对齐 smdcapp
+          // AwaitOrderFragment2: combflag==1 主行 + itemList 子行展示）
+          //
+          // 注意：与 smdcapp CartGoodsModel.orderedDishes 的 id!=0 过滤不同——
+          // smdcapp 的 allDishesList 混有本地购物车未落单菜(id==0)需要过滤；
+          // 此处数据纯来自 getSaleTmpDetail（云端临时明细表），返回的均为
+          // 已下单明细，且云端可能不回传 id（为0），若过滤会导致整个列表
+          // 为空（已下单 tab 暂无商品），故不按 id 过滤。
+          for (final dynamic raw in rawList) {
+            if (raw is! Map<String, dynamic>) continue;
+            final int seq = _toInt(raw['seq']);
+            if (seq > maxSeq) {
+              maxSeq = seq;
+            }
+            final String combid = raw['combid']?.toString() ?? '';
+            final String onlyid = raw['onlyid']?.toString() ?? '';
+            // 套餐主行判定：combflag==1 / combid==自身onlyid（CombHelper
+            // 主商品关联不变式）/ onlyid 被子行引用，三者任一即为主行
+            final bool isMainRow = _toInt(raw['combflag']) == 1 ||
+                (combid.isNotEmpty && combid == onlyid) ||
+                (onlyid.isNotEmpty && referencedOnlyIds.contains(onlyid));
+            if (!isMainRow && combid.isNotEmpty) {
+              continue; // 套餐明细行，归组到主行
+            }
+            final CartItem item = _detailToCartItem(raw);
+            ordered.add(item);
+            if (onlyid.isNotEmpty) {
+              onlyIdMap[onlyid] = item;
+            }
+          }
+          // 第二遍：套餐明细行按 combid 归组到主行（对齐 smdcapp test3）
+          for (final dynamic raw in rawList) {
+            if (raw is! Map<String, dynamic>) continue;
+            final String combid = raw['combid']?.toString() ?? '';
+            final String onlyid = raw['onlyid']?.toString() ?? '';
+            // 主行/独立行不归组（combid==自身onlyid 为套餐主行关联不变式）
+            if (_toInt(raw['combflag']) == 1 ||
+                combid.isEmpty ||
+                combid == onlyid) {
+              continue;
+            }
+            final CartItem? parent = onlyIdMap[combid];
+            if (parent == null) {
+              // 主行缺失（如服务端未返回主行/onlyid 丢失）：降级平铺展示
+              orphanChildren.add(raw);
+              continue;
+            }
+            // combproductid 非空时校验与主行商品一致（对齐 smdcapp formatCombList 子行过滤）
+            final String combproductid =
+                raw['combproductid']?.toString() ?? '';
+            if (combproductid.isNotEmpty &&
+                combproductid != parent.product.id) {
+              continue;
+            }
+            final double mainQty =
+                parent.quantity > 0 ? parent.quantity.toDouble() : 1;
+            parent.combItems.add(ComboSelectedItem(
+              productid: raw['productid']?.toString() ?? '',
+              productname: raw['productname']?.toString() ?? '',
+              qty: _toDouble(raw['qty']) / mainQty,
+              combaddamt: _toDouble(raw['combaddamt']) / mainQty,
+              groupid: raw['combgroupid']?.toString() ?? '',
+              combsetproductid: raw['combsetproductid']?.toString() ?? '',
+              specname: _firstNonEmpty(raw['specname'], raw['spec']),
+              sellprice: _toDouble(raw['sellprice']),
+              unit: raw['unit']?.toString() ?? '',
+            ));
+            // 套餐主行不展示旧版拼接 spec 串（明细已逐行展开）
+            parent.specText = '';
+          }
+          // 归组失败的子行降级为普通行展示，避免数据静默丢失
+          for (final Map<String, dynamic> orphan in orphanChildren) {
+            ordered.add(_detailToCartItem(orphan));
+          }
+
+          FileLogWriter.instance.writeToFile(
+              '已下单加载成功: ${useMaster ? '主设备' : '云服务'} '
+              '明细${rawList.length}条 本地combflag库${localCombFlags.length}条 '
+              '最终展示${ordered.length}条(套餐${ordered.where((CartItem i) => i.combItems.isNotEmpty).length}条) '
+              '${ordered.map((CartItem i) => '${i.product.name}x${i.quantity}${i.combItems.isNotEmpty ? '(子${i.combItems.length})' : ''}').join(',')}',
+              tag: '已下单加载');
+          // 逐条记录接口原始行关键字段，便于核对服务端返回结构
+          for (final dynamic raw in rawList) {
+            if (raw is! Map<String, dynamic>) continue;
+            FileLogWriter.instance.writeToFile(
+                '已下单明细行: name=${raw['productname']} id=${raw['id']} '
+                'combflag=${raw['combflag']} combid=${raw['combid']} '
+                'onlyid=${raw['onlyid']} combproductid=${raw['combproductid']} '
+                'qty=${raw['qty']} rramt=${raw['rramt']}',
+                tag: '已下单加载');
+          }
+
           setState(() {
+            _orderedMaxSeq = maxSeq;
             _orderedItems.clear();
             _orderedItems.addAll(ordered);
           });
+        } else {
+          FileLogWriter.instance.writeToFile(
+              '已下单加载: ${useMaster ? '主设备' : '云服务'} '
+              'data.detailList为空 rawKeys=${data.keys.join(',')}',
+              tag: '已下单加载');
         }
+      } else {
+        FileLogWriter.instance.writeToFile(
+            '已下单加载: data结构异常 resp=${jsonEncode(resp)}',
+            tag: '已下单加载');
       }
-    } catch (_) {
-      // 加载失败静默处理，不影响待下单流程
+    } catch (e) {
+      // 加载失败记录日志（对齐 smdcapp JsonWriter），便于定位接口/解析问题
+      FileLogWriter.instance.writeToFile('已下单加载失败: $e', tag: '已下单加载');
     } finally {
       if (mounted) setState(() => _loadingOrdered = false);
     }
@@ -193,12 +332,18 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
       quantity: weighflag == 1 ? 1 : qty.toInt(),
       specText: _firstNonEmpty(d['spec'], d['cooktext']),
       weighNum: weighflag == 1 ? (weighnum > 0 ? weighnum : qty) : 0,
+      // 必传可变列表：默认值是 const 不可变列表，套餐子行归组 add 会抛
+      // "Cannot add to an unmodifiable list"导致已下单加载整体失败
+      combItems: <ComboSelectedItem>[],
     );
     item.remark = d['remark']?.toString() ?? '';
     item.orderedAmt = rramt;
     item.subqty = _toDouble(d['subqty']);
     item.isRefunded = presentflag == 2;
     item.isGift = presentflag == 1;
+    // 必点菜标识还原（对齐 smdcapp DetailListBean mustflag/mustType）
+    item.mustflag = _toInt(d['mustflag']);
+    item.mustType = _toInt(d['mustType'] ?? d['musttype']);
     // 使用服务端现单价 rrprice 展示（对齐 smdcapp tvOPrice = bean.rramt）
     item.customPrice = rrprice;
     return item;
@@ -225,6 +370,26 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
     return b?.toString() ?? '';
   }
 
+  /// 生成明细唯一标识 onlyid（对齐 smdcapp OrderModel.getonlyId：
+  /// 机号 + 'a' + yyMMddHHmmss + 随机字符串，总长20位）
+  String _genOnlyId() {
+    final String machNo = SpUtil.getString(Constant.machNo) ?? '';
+    final DateTime now = DateTime.now();
+    String two(int n) => n.toString().padLeft(2, '0');
+    final String timePart = '${(now.year % 100).toString().padLeft(2, '0')}'
+        '${two(now.month)}${two(now.day)}'
+        '${two(now.hour)}${two(now.minute)}${two(now.second)}';
+    const String base =
+        'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    final int randomLen = 20 - machNo.length - 1 - timePart.length;
+    final math.Random rnd = math.Random.secure();
+    final StringBuffer sb = StringBuffer();
+    for (int i = 0; i < (randomLen > 0 ? randomLen : 4); i++) {
+      sb.write(base[rnd.nextInt(base.length)]);
+    }
+    return '${machNo}a$timePart${sb.toString()}';
+  }
+
   // ═══════════════════ 数据计算 ═══════════════════
 
   double _totalPrice(List<CartItem> items) =>
@@ -240,6 +405,11 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
       _totalCount(_pendingItems) + _totalCount(_orderedItems);
 
   void _changeQuantity(CartItem item, int delta) {
+    // 对齐 smdcapp checkQtyValid：必点菜不能操作
+    if (item.mustflag == 1) {
+      Toast.show('必点菜不能操作');
+      return;
+    }
     setState(() {
       item.quantity += delta;
       if (item.quantity <= 0) {
@@ -425,6 +595,16 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
     return jsonEncode(master);
   }
 
+  /// 套餐主行上传单价（对齐 smdcapp: rrprice 不含明细加减价，
+  /// 加减价通过 combaddamt 单独上传，避免服务端/PC 二次计算时重复计入）
+  double _combMainRrPrice(CartItem item) {
+    if (item.customPrice != null) {
+      return item.customPrice! - item.extraPrice;
+    }
+    final double base = item.memberUnitPrice ?? item.product.price;
+    return item.discount < 100 ? base * item.discount / 100 : base;
+  }
+
   String _buildDetailJson() {
     String sid = '';
     String spid = '';
@@ -459,7 +639,13 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
 
     final List<Map<String, dynamic>> details = <Map<String, dynamic>>[];
 
+    // 对齐 smdcapp: 新下单明细 seq = 已下单最大 seq + 1（首单为1），
+    // onlyid 为明细唯一标识（退菜/催菜/挂起等操作均按 onlyid 定位）
+    final int newSeq = _orderedMaxSeq + 1;
+
     for (final CartItem item in _pendingItems) {
+      final String onlyid = _genOnlyId();
+      final bool isComb = item.isCombo;
       details.add(<String, dynamic>{
         'id': 0,
         'spid': spid,
@@ -468,16 +654,18 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
         'productname': item.displayName,
         'qty': item.isWeigh ? item.weighNum : item.quantity.toDouble(),
         'sellprice': item.product.price,
-        'rrprice': item.discountedUnitPrice,
+        'rrprice': isComb ? _combMainRrPrice(item) : item.discountedUnitPrice,
         'rramt': item.totalPrice,
         'discount': item.discount,
         'remark': item.remark,
-        'spec': item.specText,
+        // 套餐主行 spec 置空（对齐 smdcapp OrderModel: spec=getSpecName 对套餐返回空）；
+        // 套餐明细以独立子行上传，避免拼接串超出服务端 spec 60字符限制
+        'spec': isComb ? '' : item.specText,
         'presentflag': item.isGift ? 1 : 0,
         'hangflag': item.isSuspended ? 1 : 0,
         'weighflag': item.isWeigh ? 1 : 0,
         'weighnum': item.weighNum,
-        'cookaddamt': item.extraPrice,
+        'cookaddamt': isComb ? 0 : item.extraPrice,
         'bagamt': item.bagPrice,
         'salesname':
             item.waiterName.isNotEmpty ? item.waiterName : widget.serverName,
@@ -491,10 +679,149 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
         'tableid': widget.tableId,
         'serverid': serverId,
         'servername': widget.serverName,
+        // ── 以下为对齐 smdcapp DetailListBean 补齐的字段 ──
+        // onlyid/seq 缺失会导致云服务端明细无法正常落库/定位，
+        // 进而 getSaleTmpDetail 返回空 detailList（订单明细为空）
+        'onlyid': onlyid,
+        'seq': newSeq,
+        'combflag': isComb ? 1 : 0,
+        // 套餐主行：combid=自身onlyid，combaddamt=明细加减价×数量
+        // （对齐 smdcapp OrderModel productToDetailBean 套餐分支）
+        if (isComb) 'combid': onlyid,
+        if (isComb) 'combaddamt': item.extraPrice * item.quantity,
+        'dscflag': item.product.dscflag,
+        // 临时菜字段（对齐 smdcapp DetailListBean tpdish*，非临时菜为 0/空不影响后端）
+        'tpdishflag': item.tpdishflag,
+        'tpdscflag': item.tpdscflag,
+        'tpdishid': item.tpdishid,
+        'tpdishidzd': item.tpdishidzd,
+        // 团券核销字段（对齐 smdcapp DetailListBean douyinflag/querytoken）
+        'douyinflag': item.douyinflag,
+        'querytoken': item.querytoken,
+        // 必点菜字段（对齐 smdcapp DetailListBean mustflag/mustType）
+        'mustflag': item.mustflag,
+        'mustType': item.mustType,
+        'subqty': 0,
+        'urgeflag': 0,
+        'callflag': 0,
+        'opertype': 0,
+        'bagstatus': item.isBag ? 1 : 0,
+        'propresentflag': item.isGift ? 1 : 0,
+        'unit': item.unit,
+        'typeid': item.typeid,
+        'typename': item.typename,
+        'specid': '',
+        'cooktext': '',
+        'eattext': '',
+        'createid': userId,
+        'createname': userName,
+        'presentid': '',
+        'mprice1': item.product.mprice1,
+        'mprice2': item.product.mprice2,
+        'mprice3': item.product.mprice3,
       });
+      // 套餐明细子行（对齐 smdcapp getSetMealInfo：每个选中项一条 combflag=0 明细）
+      if (isComb) {
+        details.addAll(_buildCombChildDetails(
+          item: item,
+          mainOnlyId: onlyid,
+          seq: newSeq,
+          sid: sid,
+          spid: spid,
+          userId: userId,
+          userName: userName,
+          saleid: saleid,
+          billno: billno,
+          serverId: serverId,
+        ));
+      }
     }
 
     return jsonEncode(details);
+  }
+
+  /// 构建套餐明细子行（对齐 smdcapp ShoppingCartUtil.getSetMealInfo +
+  /// OrderModel productToDetailBean 套餐分支）
+  ///
+  /// 子行字段规则：combflag=0、combid=主行onlyid、combproductid=套餐商品id、
+  /// combgroupid=分组id、qty=套餐数量×明细数量、combaddamt=套餐数量×单份加减价、
+  /// spec=子项规格名、seq与主行一致
+  List<Map<String, dynamic>> _buildCombChildDetails({
+    required CartItem item,
+    required String mainOnlyId,
+    required int seq,
+    required String sid,
+    required String spid,
+    required String userId,
+    required String userName,
+    required String saleid,
+    required String billno,
+    required String serverId,
+  }) {
+    final List<Map<String, dynamic>> children = <Map<String, dynamic>>[];
+    final String now = _formatDateTime(DateTime.now());
+    final String salesname =
+        item.waiterName.isNotEmpty ? item.waiterName : widget.serverName;
+    for (final ComboSelectedItem c in item.combItems) {
+      children.add(<String, dynamic>{
+        'id': 0,
+        'spid': spid,
+        'sid': sid,
+        'productid': c.productid,
+        'productname': c.productname,
+        'qty': c.qty * item.quantity,
+        'combsetqty': c.qty,
+        'sellprice': c.sellprice,
+        'rrprice': c.sellprice,
+        'rramt': 0,
+        'discount': item.discount,
+        'spec': c.specname,
+        'specname': c.specname,
+        'specflag': c.specname.isNotEmpty ? 1 : 0,
+        'specid': '',
+        'combflag': 0,
+        'combid': mainOnlyId,
+        'combproductid': item.product.id,
+        'combgroupid': c.groupid,
+        'combsetproductid': c.combsetproductid,
+        'combaddamt': c.combaddamt * item.quantity,
+        'unit': c.unit,
+        'remark': '',
+        'presentflag': item.isGift ? 1 : 0,
+        'hangflag': item.isSuspended ? 1 : 0,
+        'weighflag': 0,
+        'weighnum': 0,
+        'cookaddamt': 0,
+        'bagamt': 0,
+        'salesname': salesname,
+        'salesid': serverId,
+        'operid': userId,
+        'opername': userName,
+        'createtime': now,
+        'updateflag': 1,
+        'saleid': saleid,
+        'billno': billno,
+        'tableid': widget.tableId,
+        'serverid': serverId,
+        'servername': widget.serverName,
+        'onlyid': _genOnlyId(),
+        'seq': seq,
+        'subqty': 0,
+        'urgeflag': 0,
+        'callflag': 0,
+        'opertype': 0,
+        'bagstatus': 0,
+        'propresentflag': item.isGift ? 1 : 0,
+        'typeid': '',
+        'typename': '',
+        'cooktext': '',
+        'eattext': '',
+        'createid': userId,
+        'createname': userName,
+        'presentid': '',
+      });
+    }
+    return children;
   }
 
   // ═══════════════════ PC模式下单数据构建 ═══════════════════
@@ -679,6 +1006,45 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
         tableMaster['servername'] = widget.serverName;
       }
       tableMaster['billdate'] = now;
+      // 快餐/无桌台模式：合成 tmp（必须含 tablestatus），
+      // 否则服务端上传临时桌台数据报"tablestatus属性不存在"
+      final String billno = _generateBillNo();
+      final String saleidUse = widget.saleid.isNotEmpty ? widget.saleid : billno;
+      final Map<String, dynamic> fastTmp = <String, dynamic>{
+        'tablestatus': 1,
+        'personnum': widget.persons,
+        'serverid': widget.serverId,
+        'servername': widget.serverName,
+        'tablename': widget.tableName,
+        'billtype': 7,
+        'saleid': saleidUse,
+        'localbillno': billno,
+        'billno': billno,
+        'billdate': now,
+        'remark': _orderRemark,
+        'amt': totalRR,
+        'serviceamt': 0,
+        'retailamt': totalOriginal,
+        'addamt': addamt,
+        'lowamt': 0,
+        'dscamt': disAmt > 0 ? disAmt : 0,
+        'roundamt': 0,
+        'lastbilltype': 7,
+        'updatetime': now,
+        'opermachno': machNo,
+      };
+      if (!forSave) {
+        fastTmp['printkdflag'] = _printKd ? 1 : 0;
+        fastTmp['printcpdflag'] = _printCpd ? 1 : 0;
+        fastTmp['sendprintflag'] = printType != '-1' ? '1' : '-1';
+      }
+      tableMaster['tmp'] = fastTmp;
+      tableMaster['tablestatus'] = '1';
+      tableMaster['saleid'] = saleidUse;
+      tableMaster['localbillno'] = billno;
+      tableMaster['billno'] = billno;
+      tableMaster['billtype'] = 7;
+      tableMaster['lastbilltype'] = 7;
     }
 
     // ── 组装 PCMasterBean（对齐 smdcapp PCMasterBean: tableMaster + detailList + isUnionFlag） ──
@@ -711,7 +1077,11 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
     final String serverId = tmp?['serverid']?.toString() ?? widget.serverId;
 
     final List<Map<String, dynamic>> detailList = <Map<String, dynamic>>[];
+    // 对齐 smdcapp: 新明细 seq = 已下单最大 seq + 1（套餐主行/子行共用）
+    final int newSeq = _orderedMaxSeq + 1;
     for (final CartItem item in _pendingItems) {
+      final String onlyid = _genOnlyId();
+      final bool isComb = item.isCombo;
       detailList.add(<String, dynamic>{
         'id': 0,
         'spid': spid,
@@ -720,16 +1090,17 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
         'productname': item.displayName,
         'qty': item.isWeigh ? item.weighNum : item.quantity.toDouble(),
         'sellprice': item.product.price,
-        'rrprice': item.discountedUnitPrice,
+        'rrprice': isComb ? _combMainRrPrice(item) : item.discountedUnitPrice,
         'rramt': item.totalPrice,
         'discount': item.discount,
         'remark': item.remark,
-        'spec': item.specText,
+        // 套餐主行 spec 置空，明细以独立子行上传（对齐 smdcapp，避免 spec 超长）
+        'spec': isComb ? '' : item.specText,
         'presentflag': item.isGift ? 1 : 0,
         'hangflag': item.isSuspended ? 1 : 0,
         'weighflag': item.isWeigh ? 1 : 0,
         'weighnum': item.weighNum,
-        'cookaddamt': item.extraPrice,
+        'cookaddamt': isComb ? 0 : item.extraPrice,
         'bagamt': item.bagPrice,
         'salesname':
             item.waiterName.isNotEmpty ? item.waiterName : widget.serverName,
@@ -743,7 +1114,31 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
         'tableid': widget.tableId,
         'serverid': serverId,
         'servername': widget.serverName,
+        // 必点菜字段（对齐 smdcapp DetailListBean mustflag/mustType）
+        'mustflag': item.mustflag,
+        'mustType': item.mustType,
+        // 对齐 smdcapp DetailListBean: onlyid/seq/combflag 必传
+        'onlyid': onlyid,
+        'seq': newSeq,
+        'combflag': isComb ? 1 : 0,
+        if (isComb) 'combid': onlyid,
+        if (isComb) 'combaddamt': item.extraPrice * item.quantity,
       });
+      // 套餐明细子行（与云模式同结构，对齐 smdcapp getSetMealInfo）
+      if (isComb) {
+        detailList.addAll(_buildCombChildDetails(
+          item: item,
+          mainOnlyId: onlyid,
+          seq: newSeq,
+          sid: sid,
+          spid: spid,
+          userId: userId,
+          userName: userName,
+          saleid: saleid,
+          billno: billno,
+          serverId: serverId,
+        ));
+      }
     }
     return detailList;
   }
@@ -753,6 +1148,15 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
     String two(int n) => n.toString().padLeft(2, '0');
     return '${dt.year}-${two(dt.month)}-${two(dt.day)} '
         '${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
+  }
+
+  /// 生成唯一本地单号（对齐 smdcapp OrderModel.getBillno：yyyyMMddHHmmssSSS）
+  String _generateBillNo() {
+    final DateTime now = DateTime.now();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${now.year}${two(now.month)}${two(now.day)}'
+        '${two(now.hour)}${two(now.minute)}${two(now.second)}'
+        '${now.millisecond.toString().padLeft(3, '0')}';
   }
 
   /// 保存菜品（对齐 smdcapp tv_save_dishes → OrderModel.saveProduct）
@@ -1144,10 +1548,27 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
   }
 
   /// 单个商品行（对齐 smdcapp dishes_item_await_one2：名称+价格+数量控制+三点菜单）
+  ///
+  /// 套餐商品在主行下方逐行展开明细（对齐 smdcapp AwaitOrderFragment2
+  /// rvInfo + dishes_item_set_meal：名称+(规格) + x数量）
   Widget _buildItemRow(CartItem item, {required bool editable}) {
     // 对齐 smdcapp: 退菜记录灰色背景 (presentflag==2 → bg_gray_EAEEF6)
     final bool refunded = item.isRefunded;
-    return Container(
+    // 套餐主行不展示拼接sku串（明细已逐行展开，对齐 smdcapp 主行仅做法/备注）
+    final String skuDesc = item.isCombo ? '' : item.specText;
+
+    // 状态标签（对齐 smdcapp DishesTagHelper：赠/折/挂），下单前即可见
+    final List<Widget> tags = <Widget>[
+      if (item.isGift) _tag('赠', const Color(0xFFFF8547)),
+      if (item.isDiscounted)
+        _tag('${(item.discount / 10.0).toStringAsFixed(1)}折', const Color(0xFF5672FF)),
+      if (item.isSuspended) _tag('挂', const Color(0xFF999999)),
+    ];
+    // 赠送/打折时展示划线原价（原单价×计价数量）
+    final bool showOrigin = !refunded && (item.isGift || item.isDiscounted);
+    final double originTotal = item.unitPrice * item.priceQty;
+
+    final Widget mainRow = Container(
       color: refunded ? const Color(0xFFEAEEF6) : null,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Row(
@@ -1159,6 +1580,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
               children: <Widget>[
                 Row(
                   children: <Widget>[
+                    ...tags.map((Widget t) => Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: t,
+                        )),
                     Flexible(
                       child: Text(
                         item.displayName,
@@ -1178,10 +1603,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
                       ),
                   ],
                 ),
-                if (item.specText.isNotEmpty || item.remark.isNotEmpty) ...<Widget>[
+                if (skuDesc.isNotEmpty || item.remark.isNotEmpty) ...<Widget>[
                   const SizedBox(height: 2),
                   Text(
-                    [if (item.specText.isNotEmpty) item.specText, if (item.remark.isNotEmpty) '备注:${item.remark}'].join(' | '),
+                    [if (skuDesc.isNotEmpty) skuDesc, if (item.remark.isNotEmpty) '备注:${item.remark}'].join(' | '),
                     style: const TextStyle(fontSize: 11, color: Color(0xFFC9CDD4)),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -1190,16 +1615,30 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
               ],
             ),
           ),
-          // 价格（对齐 smdcapp: 退菜显示负数金额）
-          Text(
-            refunded
-                ? '¥${item.totalPrice < 0 ? '-' : ''}${_formatPrice(item.totalPrice.abs())}'
-                : '¥${_formatPrice(item.totalPrice)}',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: refunded ? const Color(0xFF86909C) : const Color(0xFF1D2129),
-            ),
+          // 价格（对齐 smdcapp: 退菜显示负数金额；赠/折显示划线原价）
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: <Widget>[
+              if (showOrigin)
+                Text(
+                  '¥${_formatPrice(originTotal)}',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF9C9C9C),
+                    decoration: TextDecoration.lineThrough,
+                  ),
+                ),
+              Text(
+                refunded
+                    ? '¥${item.totalPrice < 0 ? '-' : ''}${_formatPrice(item.totalPrice.abs())}'
+                    : '¥${_formatPrice(item.totalPrice)}',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: refunded ? const Color(0xFF86909C) : const Color(0xFF1D2129),
+                ),
+              ),
+            ],
           ),
           const SizedBox(width: 12),
           // 数量控制
@@ -1290,6 +1729,45 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
         ],
       ),
     );
+    if (!item.isCombo) {
+      return mainRow;
+    }
+    // 套餐：明细逐行展开（对齐 smdcapp rvInfo 嵌套列表）
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        mainRow,
+        for (final ComboSelectedItem c in item.combItems)
+          _buildCombChildRow(c, item),
+        const SizedBox(height: 8),
+      ],
+    );
+  }
+
+  /// 套餐明细行（对齐 smdcapp dishes_item_set_meal：名称+(规格名) + x数量）
+  Widget _buildCombChildRow(ComboSelectedItem c, CartItem item) {
+    final String name = c.specname.isNotEmpty
+        ? '${c.productname}(${c.specname})'
+        : c.productname;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(26, 0, 14, 4),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(
+              name,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF86909C)),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Text(
+            'x${_formatPrice(c.qty * item.quantity)}',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF86909C)),
+          ),
+        ],
+      ),
+    );
   }
 
   /// 显示菜品操作弹窗（与点菜页购物车保持一致，对齐 smdcapp OperationPopup）
@@ -1297,8 +1775,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
     final String? operation = await DishOperationPopup.show(
       context,
       dishName: item.displayName,
-      isCookProduct: true,
-      isComboProduct: false,
+      // 对齐 smdcapp: isShowCook(combflag!=1) / isShowComb(combflag==1)
+      isCookProduct: !item.isCombo,
+      isComboProduct: item.isCombo,
       isSuspended: item.isSuspended,
     );
     if (operation == null || !mounted) return;
@@ -1393,6 +1872,11 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
         }
 
       case DishOperationType.delete:
+        // 对齐 smdcapp handleRemoveProduct：固定必点菜不能删除
+        if (item.mustflag == 1 && item.mustType == 0) {
+          Toast.show('必点菜不能删除');
+          return;
+        }
         setState(() => _pendingItems.remove(item));
 
       case DishOperationType.waiter:
@@ -1407,6 +1891,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
 
       case DishOperationType.cook:
         await _handleCookModify(item);
+
+      case DishOperationType.combo:
+        // 套餐修改（对齐 smdcapp NAME_COMB → handleChangeComb）
+        await _handleComboModify(item);
 
       case DishOperationType.rename:
         final RenameResult? renameResult = await DishRenameSheet.show(
@@ -1483,6 +1971,55 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
     });
   }
 
+  /// 套餐修改（对齐 smdcapp OperationPopup.NAME_COMB → handleChangeComb：
+  /// 拉取套餐配置，编辑模式打开套餐弹窗，确认后替换明细与加减价）
+  Future<void> _handleComboModify(CartItem item) async {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(
+        child: SizedBox(
+          width: 36,
+          height: 36,
+          child: CircularProgressIndicator(strokeWidth: 3),
+        ),
+      ),
+    );
+    ComboMealData? comboData;
+    try {
+      comboData = await OrderRepository.fetchProductComb(item.product.id);
+    } catch (_) {
+      comboData = null;
+    }
+    if (!mounted) return;
+    Navigator.of(context).pop();
+
+    if (comboData == null || comboData.prolist.isEmpty) {
+      Toast.show('暂无套餐数据');
+      return;
+    }
+
+    await SetMealSheet.show(
+      context,
+      product: DishProduct(
+        productid: item.product.id,
+        name: item.product.name,
+        sellprice: item.product.price,
+        combflag: 1,
+      ),
+      comboData: comboData,
+      isEditMode: true,
+      initialSelection: item.combItems,
+      onConfirmEdit: (SetMealResult result) {
+        setState(() {
+          item.combItems = result.selectedItems;
+          item.extraPrice = result.combAddAmt;
+          item.specText = result.specText;
+        });
+      },
+    );
+  }
+
   /// 从当前 specText 中推导规格名前缀（多规格商品保留规格名）
   String _deriveSpecPrefix(CartItem item, DishSpecData specData) {
     if (specData.specdata.isEmpty || item.specText.isEmpty) return '';
@@ -1521,20 +2058,15 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: <Widget>[
                         const Text('出品单',
-                            style: TextStyle(fontSize: 12, color: Color(0xFF4E5969))),
+                            style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
                         const SizedBox(width: 2),
-                        SizedBox(
-                          height: 22,
-                          child: FittedBox(
-                            child: Switch(
-                              value: _printCpd,
-                              activeThumbColor: Colors.white,
-                              activeTrackColor: const Color(0xFF00BFA5),
-                              inactiveThumbColor: Colors.white,
-                              inactiveTrackColor: const Color(0xFFE5E6EB),
-                              onChanged: (bool v) => setState(() => _printCpd = v),
-                            ),
-                          ),
+                        Switch(
+                          value: _printCpd,
+                          activeThumbColor: Colors.white,
+                          activeTrackColor: const Color(0xFF00BFA5),
+                          inactiveThumbColor: Colors.white,
+                          inactiveTrackColor: const Color(0xFFE5E6EB),
+                          onChanged: (bool v) => setState(() => _printCpd = v),
                         ),
                       ],
                     ),
@@ -1545,20 +2077,15 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: <Widget>[
                         const Text('客单',
-                            style: TextStyle(fontSize: 12, color: Color(0xFF4E5969))),
+                            style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
                         const SizedBox(width: 2),
-                        SizedBox(
-                          height: 22,
-                          child: FittedBox(
-                            child: Switch(
-                              value: _printKd,
-                              activeThumbColor: Colors.white,
-                              activeTrackColor: const Color(0xFF00BFA5),
-                              inactiveThumbColor: Colors.white,
-                              inactiveTrackColor: const Color(0xFFE5E6EB),
-                              onChanged: (bool v) => setState(() => _printKd = v),
-                            ),
-                          ),
+                        Switch(
+                          value: _printKd,
+                          activeThumbColor: Colors.white,
+                          activeTrackColor: const Color(0xFF00BFA5),
+                          inactiveThumbColor: Colors.white,
+                          inactiveTrackColor: const Color(0xFFE5E6EB),
+                          onChanged: (bool v) => setState(() => _printKd = v),
                         ),
                       ],
                     ),
@@ -1695,6 +2222,21 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
       return price.toInt().toString();
     }
     return price.toStringAsFixed(1);
+  }
+
+  /// 小标签（赠/折/挂，对齐 smdcapp DishesTagHelper 徽章样式）
+  Widget _tag(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1.5),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold),
+      ),
+    );
   }
 }
 

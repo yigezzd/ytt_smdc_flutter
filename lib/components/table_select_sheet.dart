@@ -94,7 +94,7 @@ class TableSelectSheet extends StatelessWidget {
                       border: Border.all(color: const Color(0xFFE5E6EB)),
                     ),
                     child: Text(
-                      code.isNotEmpty ? code : name,
+                      name.isNotEmpty ? name : code,
                       style: const TextStyle(fontSize: 13, color: Color(0xFF333333), fontWeight: FontWeight.w500),
                       textAlign: TextAlign.center,
                     ),

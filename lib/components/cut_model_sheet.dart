@@ -3,7 +3,7 @@ import 'package:flutter_deer/util/store_mode_utils.dart';
 
 /// 模式切换底部弹窗（对齐 smdcapp CutModelPopup）
 ///
-/// 选项：正餐模式 / 快餐模式 / 配送模式
+/// 选项：正餐模式 / 快餐模式（配送模式暂不开放，隐藏入口）
 /// 点击选项后通过 [onSelected] 回调所选模式码，并自动关闭弹窗。
 class CutModelSheet extends StatefulWidget {
   const CutModelSheet({super.key, required this.onSelected});
@@ -82,14 +82,14 @@ class _CutModelSheetState extends State<CutModelSheet> {
             selected: _selected == StoreModeUtils.storeModelFast,
             onTap: () => _select(StoreModeUtils.storeModelFast),
           ),
-          const SizedBox(height: 10),
-          // 配送模式
-          _ModeCard(
-            title: '配送模式',
-            subtitle: '外卖配送·配送场景',
-            selected: _selected == 3,
-            onTap: () => _select(3),
-          ),
+          // 配送模式（暂不开放，隐藏入口）
+          // const SizedBox(height: 10),
+          // _ModeCard(
+          //   title: '配送模式',
+          //   subtitle: '外卖配送·配送场景',
+          //   selected: _selected == 3,
+          //   onTap: () => _select(3),
+          // ),
         ],
       ),
     );

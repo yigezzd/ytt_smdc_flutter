@@ -1,15 +1,20 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_deer/components/confirm_dialog.dart';
 import 'package:flutter_deer/components/member_coupon_sheet.dart';
+import 'package:flutter_deer/components/member_search_sheet.dart';
 import 'package:flutter_deer/components/verify_coupon_sheet.dart';
+import 'package:flutter_deer/db/sale_dao.dart';
+import 'package:flutter_deer/db/vip_dao.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/net/pay_gateway.dart';
 import 'package:flutter_deer/net/table_event_bus.dart';
+import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/pages/order/pay_scan_page.dart';
 import 'package:flutter_deer/pages/order/scan_pay_dialog.dart';
 import 'package:flutter_deer/res/constant.dart';
@@ -17,6 +22,7 @@ import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
 import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
+import 'package:flutter_deer/util/store_mode_utils.dart';
 import 'package:flutter_deer/util/promotion_helper.dart';
 import 'package:flutter_deer/util/amount_calc_utils.dart';
 import 'package:flutter_deer/util/params_sp_utils.dart';
@@ -137,10 +143,30 @@ class _SettlePageState extends State<SettlePage> {
   /// 正数=减免（顾客少付），负数=加收（顾客多付）
   double _roundAmt = 0;
 
+  /// 当前录入的会员（对齐 smdcapp SettleActivity.memberBean）
+  VipMember? _member;
+
+  /// 会员同步中（防重复点击）
+  bool _memberSyncing = false;
+
   @override
   void initState() {
     super.initState();
-    _dsMoney = widget.payAmt;
+    // 初始化订单详情页传入的会员信息（对齐 smdcapp intent Member_DetailsBean）
+    if (widget.memberVipid.isNotEmpty) {
+      _member = VipMember(
+        vipid: widget.memberVipid,
+        vipname: widget.memberVipname,
+        vipno: widget.memberVipno,
+        mobile: widget.memberMobile,
+        prefetype: widget.memberPrefetype,
+        nowmoney: widget.memberNowmoney,
+        overflag: widget.memberOverflag,
+        overmoney: widget.memberOvermoney,
+        arrearages: widget.memberArrearages,
+      );
+    }
+    _dsMoney = _rd2(widget.payAmt);
     _applyRounding();
     _loadPayTypes();
     _loadPromotions();
@@ -168,8 +194,8 @@ class _SettlePageState extends State<SettlePage> {
       'changeamt': 0.0,
     });
     // 抹零抵扣后，顾客实际需付金额减少（对齐 smdcapp hasMoney += bzmlPrice）
-    _hasMoney += roundAmt;
-    _dsMoney -= roundAmt;
+    _hasMoney = AmountCalcUtils.add(_hasMoney, roundAmt);
+    _dsMoney = AmountCalcUtils.sub(_dsMoney, roundAmt);
     if (_dsMoney < 0) _dsMoney = 0;
   }
 
@@ -177,9 +203,9 @@ class _SettlePageState extends State<SettlePage> {
   Future<void> _loadPromotions() async {
     final List<PromotionInfo> list = await PromotionHelper.fetchPromotions(
       details: widget.detailList,
-      vipid: widget.memberVipid,
+      vipid: _member?.vipid ?? '',
     );
-    if (mounted && list.isNotEmpty) {
+    if (mounted) {
       setState(() => _promotions = list);
     }
   }
@@ -189,7 +215,7 @@ class _SettlePageState extends State<SettlePage> {
     final double disAmt = await PromotionHelper.calcDiscountAmt(
       details: widget.detailList,
       billid: promo.billid,
-      vipid: widget.memberVipid,
+      vipid: _member?.vipid ?? '',
     );
     if (!mounted) return;
     if (disAmt <= 0) {
@@ -198,28 +224,138 @@ class _SettlePageState extends State<SettlePage> {
     }
     setState(() {
       _promoDisAmt = disAmt;
-      _dsMoney = widget.payAmt - _hasMoney - disAmt;
+      _dsMoney = AmountCalcUtils.sub(
+          AmountCalcUtils.sub(widget.payAmt, _hasMoney), disAmt);
       if (_dsMoney < 0) _dsMoney = 0;
     });
     Toast.show('已应用促销：${promo.billname}，优惠¥$disAmt');
   }
 
+  // ═══════════════════ 会员录入（对齐 smdcapp SettleActivity: tvManageTwo + onActivityResult + upMember） ═══════════════════
+
+  /// 标题栏“会员”按钮点击（对齐 smdcapp tvManageTwo.onClick → MemberActivity）
+  Future<void> _onMemberTap() async {
+    if (_memberSyncing) return;
+    // 已使用会员卡支付时禁止切换会员（对齐 smdcapp isVipPay("02") 校验）
+    if (_salePayWayList.any((Map<String, dynamic> e) => e['payid'] == '02')) {
+      Toast.show('请先撤销当前会员相关的支付方式');
+      return;
+    }
+    if (_member != null) {
+      // 已录入会员：询问是否退出（对齐 smdcapp MemberLayout.loginListener → “是否退出会员？”）
+      final bool logout = await ConfirmDialog.show(
+        context,
+        content: '是否退出会员？',
+      );
+      if (logout && mounted) {
+        _logoutMember();
+      }
+      return;
+    }
+    // 未录入会员：提示后打开搜索弹窗（对齐 smdcapp TipDialog“切换会员将清除之前选择的促销”）
+    final bool cont = await ConfirmDialog.show(
+      context,
+      content: '录入会员后，之前选择的促销活动可能失效，是否继续？',
+    );
+    if (!cont || !mounted) return;
+    final VipMember? member = await MemberSearchSheet.show(context);
+    if (member == null || !mounted) return;
+    _loginMember(member);
+  }
+
+  /// 录入会员（对齐 smdcapp onActivityResult → memberBean = bean + upMember）
+  Future<void> _loginMember(VipMember member) async {
+    await _syncMemberToServer(member: member);
+    if (!mounted) return;
+    setState(() {
+      _member = member;
+      // 切换会员后清除已选促销/优惠券（对齐 smdcapp isUpdataMember 重算逻辑）
+      _promoDisAmt = 0;
+      _selectedCoupon = null;
+    });
+    _loadPromotions();
+  }
+
+  /// 退出会员（对齐 smdcapp loginListener.onLogout → memberBean = null + upMember）
+  Future<void> _logoutMember() async {
+    await _syncMemberToServer(member: null);
+    if (!mounted) return;
+    setState(() {
+      _member = null;
+      _promoDisAmt = 0;
+      _selectedCoupon = null;
+    });
+    _loadPromotions();
+  }
+
+  /// 同步会员信息到后端桌台（对齐 smdcapp SettleActivity.upMember → OrderModel.updateMasterTmp）
+  Future<void> _syncMemberToServer({required VipMember? member}) async {
+    final Map<String, dynamic>? tmp =
+        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final String saleid = widget.saleid.isNotEmpty
+        ? widget.saleid
+        : (tmp?['saleid']?.toString() ?? '');
+    if (saleid.isEmpty) {
+      Toast.show('订单信息错误，无法同步会员');
+      return;
+    }
+    setState(() => _memberSyncing = true);
+    try {
+      await OrderRepository.updateMasterTmpVip(
+        saleid: saleid,
+        tableid: widget.tableId.isNotEmpty
+            ? widget.tableId
+            : (tmp?['tableid']?.toString() ?? ''),
+        tablecode: widget.tableCode.isNotEmpty
+            ? widget.tableCode
+            : (tmp?['tablecode']?.toString() ?? ''),
+        remark: widget.remark.isNotEmpty
+            ? widget.remark
+            : (tmp?['remark']?.toString() ?? ''),
+        personnum: widget.persons > 0
+            ? widget.persons.toString()
+            : (tmp?['personnum']?.toString() ?? ''),
+        serverid: widget.serverId.isNotEmpty
+            ? widget.serverId
+            : (tmp?['serverid']?.toString() ?? ''),
+        servername: widget.serverName.isNotEmpty
+            ? widget.serverName
+            : (tmp?['servername']?.toString() ?? ''),
+        vipid: member?.vipid ?? '',
+        vipno: member?.vipno ?? '',
+        vipname: member?.vipname ?? '',
+        vipmobile: member?.mobile ?? '',
+        masterDevice: ConnectionManager.pcAlive,
+        tableJson: widget.tableJson,
+      );
+    } catch (_) {
+      Toast.show('同步会员信息失败');
+    } finally {
+      if (mounted) {
+        setState(() => _memberSyncing = false);
+      }
+    }
+  }
+
   /// 选择会员优惠券（对齐 smdcapp CouponListActivity）
   Future<void> _selectCoupon() async {
-    if (widget.memberVipid.isEmpty) {
+    if (_member == null) {
       Toast.show('请先录入会员');
       return;
     }
     final MemberCoupon? coupon = await MemberCouponSheet.show(
       context,
-      vipid: widget.memberVipid,
+      vipid: _member!.vipid,
     );
     if (coupon == null || !mounted) return;
     setState(() {
       _selectedCoupon = coupon;
       // 代金券直接抵扣金额
       if (coupon.favtype == 1 && coupon.favamt > 0) {
-        _dsMoney = widget.payAmt - _hasMoney - _promoDisAmt - coupon.favamt;
+        _dsMoney = AmountCalcUtils.sub(
+            AmountCalcUtils.sub(
+                AmountCalcUtils.sub(widget.payAmt, _hasMoney), _promoDisAmt),
+            coupon.favamt);
         if (_dsMoney < 0) _dsMoney = 0;
       }
     });
@@ -268,11 +404,28 @@ class _SettlePageState extends State<SettlePage> {
 
   /// 点击“去支付”（对齐 smdcapp tvTopay.onClick → toPay）
   Future<void> _onPay() async {
+    // 待收金额为0：直接完成0元结账（对齐 smdcapp clickWxAliPay dsMoney==0 分支：
+    // 补一条"01"现金 0元 收款记录后走 getSaleFlowData 结账流程；
+    // 现金路径 PricePopup 输入0元全付同样 add payway(0) → getSaleFlowData）
     if (_dsMoney <= 0) {
-      Toast.show('待收金额为零，无需支付');
+      if (_submitting) return;
+      final bool hasZeroCash = _salePayWayList.any((Map<String, dynamic> e) =>
+          e['payid'] == '01' && _toDouble(e['payamt']) == 0);
+      if (!hasZeroCash) {
+        _salePayWayList.add(<String, dynamic>{
+          'saleid': widget.saleid,
+          'payid': '01',
+          'payname': '现金',
+          'payamt': 0.0,
+          'rate': 1.0,
+          'rramt': 0.0,
+          'changeamt': 0.0,
+        });
+      }
+      await _submitSaleFlow();
       return;
     }
-    if (_payId == '02' && widget.memberVipid.isEmpty) {
+    if (_payId == '02' && _member == null) {
       Toast.show('请先录入会员');
       return;
     }
@@ -292,8 +445,9 @@ class _SettlePageState extends State<SettlePage> {
 
     // 会员卡支付(02)：余额校验（对齐 smdcapp MemberDateilsActivity.menberPay: price > nowmoney 余额不足）
     if (_payId == '02') {
-      if (widget.memberNowmoney > 0 && _dsMoney > widget.memberNowmoney) {
-        Toast.show('会员余额不足（余额¥${_formatAmt(widget.memberNowmoney)}），请使用其他支付方式');
+      final double memberNowmoney = _member?.nowmoney ?? 0;
+      if (memberNowmoney > 0 && _dsMoney > memberNowmoney) {
+        Toast.show('会员余额不足（余额¥${_formatAmt(memberNowmoney)}），请使用其他支付方式');
         return;
       }
     }
@@ -317,7 +471,7 @@ class _SettlePageState extends State<SettlePage> {
     final double? inputAmt = await _showPriceInput();
     if (inputAmt == null || inputAmt <= 0 || !mounted) return;
   
-    final double payAmt = inputAmt > _dsMoney ? _dsMoney : inputAmt;
+    final double payAmt = _rd2(inputAmt > _dsMoney ? _dsMoney : inputAmt);
   
     // 记录支付方式
     _salePayWayList.add(<String, dynamic>{
@@ -327,11 +481,12 @@ class _SettlePageState extends State<SettlePage> {
       'payamt': payAmt,
       'rate': 1.0,
       'rramt': payAmt,
-      'changeamt': inputAmt > _dsMoney ? (inputAmt - _dsMoney) : 0.0,
+      'changeamt':
+          inputAmt > _dsMoney ? AmountCalcUtils.sub(inputAmt, _dsMoney) : 0.0,
     });
   
-    _hasMoney += payAmt;
-    _dsMoney -= payAmt;
+    _hasMoney = AmountCalcUtils.add(_hasMoney, payAmt);
+    _dsMoney = AmountCalcUtils.sub(_dsMoney, payAmt);
   
     if (_dsMoney <= 0.005) {
       // 全部支付完成 → 上传流水
@@ -345,17 +500,17 @@ class _SettlePageState extends State<SettlePage> {
   
   /// 会员挂账支付（对齐 smdcapp OverHangmemberPay + selectPay case "04"）
   Future<void> _onMemberOverPay() async {
-    if (widget.memberVipid.isEmpty) {
+    if (_member == null) {
       Toast.show('请先录入会员');
       return;
     }
     // 校验是否支持挂账（对齐 smdcapp overflag == 0 不支持）
-    if (widget.memberOverflag == 0) {
+    if ((_member?.overflag ?? 0) == 0) {
       Toast.show('当前会员未启用【欠款消费】功能');
       return;
     }
     // 校验挂账额度（对齐 smdcapp dsMoney > overmoney - arrearages）
-    final double available = widget.memberOvermoney - widget.memberArrearages;
+    final double available = (_member?.overmoney ?? 0) - (_member?.arrearages ?? 0);
     if (_dsMoney > available) {
       Toast.show('剩余额度不足本次挂账，请使用其他支付方式！');
       return;
@@ -366,12 +521,12 @@ class _SettlePageState extends State<SettlePage> {
     );
     if (!confirmed || !mounted) return;
     try {
-      final double payAmt = _dsMoney;
+      final double payAmt = _rd2(_dsMoney);
       await requestForm(HttpApi.vipOverPay, <String, dynamic>{
         'billno': _generateBillNo(),
         'billid': '',
-        'vipid': widget.memberVipid,
-        'vipno': widget.memberVipno,
+        'vipid': _member?.vipid ?? '',
+        'vipno': _member?.vipno ?? '',
         'payid': '04',
         'payname': '会员挂账',
         'saleid': widget.saleid,
@@ -388,8 +543,8 @@ class _SettlePageState extends State<SettlePage> {
         'rramt': payAmt,
         'changeamt': 0.0,
       });
-      _hasMoney += payAmt;
-      _dsMoney -= payAmt;
+      _hasMoney = AmountCalcUtils.add(_hasMoney, payAmt);
+      _dsMoney = AmountCalcUtils.sub(_dsMoney, payAmt);
       if (_dsMoney <= 0.005) {
         _dsMoney = 0;
         setState(() {});
@@ -411,9 +566,14 @@ class _SettlePageState extends State<SettlePage> {
       title: '减免金额',
       hintText: '输入减免金额',
       maxLines: 1,
+      // 金额输入默认数字键盘（对齐 smdcapp ReducePopup 数字键盘）
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      inputFormatters: <TextInputFormatter>[
+        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+      ],
     );
     if (result == null || result.isEmpty || !mounted) return;
-    final double reduceAmt = double.tryParse(result) ?? 0;
+    final double reduceAmt = _rd2(double.tryParse(result) ?? 0);
     if (reduceAmt <= 0) {
       Toast.show('减免金额必须大于0');
       return;
@@ -431,8 +591,8 @@ class _SettlePageState extends State<SettlePage> {
       'rramt': reduceAmt,
       'changeamt': 0.0,
     });
-    _hasMoney += reduceAmt;
-    _dsMoney -= reduceAmt;
+    _hasMoney = AmountCalcUtils.add(_hasMoney, reduceAmt);
+    _dsMoney = AmountCalcUtils.sub(_dsMoney, reduceAmt);
     if (_dsMoney <= 0.005) {
       _dsMoney = 0;
       setState(() {});
@@ -449,8 +609,8 @@ class _SettlePageState extends State<SettlePage> {
     final double payAmt = _toDouble(item['payamt']);
     setState(() {
       _salePayWayList.remove(item);
-      _hasMoney -= payAmt;
-      _dsMoney += payAmt;
+      _hasMoney = AmountCalcUtils.sub(_hasMoney, payAmt);
+      _dsMoney = AmountCalcUtils.add(_dsMoney, payAmt);
       if (_hasMoney < 0) _hasMoney = 0;
     });
   }
@@ -477,7 +637,7 @@ class _SettlePageState extends State<SettlePage> {
         double.tryParse(payType['virtualamt']?.toString() ?? '') ?? 0;
     // 面额抵扣金额：优先用 faceamt，其次待收金额
     final double deductAmt = faceamt > 0 ? faceamt : _dsMoney;
-    final double payAmt = deductAmt > _dsMoney ? _dsMoney : deductAmt;
+    final double payAmt = _rd2(deductAmt > _dsMoney ? _dsMoney : deductAmt);
     _salePayWayList.add(<String, dynamic>{
       'saleid': widget.saleid,
       'payid': _payId,
@@ -490,8 +650,8 @@ class _SettlePageState extends State<SettlePage> {
       'actulamt': actulamt,
       'virtualamt': virtualamt,
     });
-    _hasMoney += payAmt;
-    _dsMoney -= payAmt;
+    _hasMoney = AmountCalcUtils.add(_hasMoney, payAmt);
+    _dsMoney = AmountCalcUtils.sub(_dsMoney, payAmt);
     if (_dsMoney <= 0.005) {
       _dsMoney = 0;
       setState(() {});
@@ -529,8 +689,9 @@ class _SettlePageState extends State<SettlePage> {
     final String payBillNo = _generateBillNo() + _getPaySuffix();
 
     // 4. 弹出支付弹窗，提交付款码并轮询结果
-    // （对齐 smdcapp BoYouPayDialog/ReceiveMoneyPayDialog）
-    final double payAmt = _dsMoney;
+    // （对齐 smdcapp BoYouPayDialog/ReceiveMoneyPayDialog:
+    //   金额传 CalcUtils.add2(dsMoney, 0.0)，即2位小数精度）
+    final double payAmt = _rd2(_dsMoney);
     final ScanPayResult? result = await ScanPayDialog.show(
       context,
       payid: _payId,
@@ -570,8 +731,8 @@ class _SettlePageState extends State<SettlePage> {
         'terminalsn': payConfig['terminalsn'],
       });
 
-      _hasMoney += payAmt;
-      _dsMoney -= payAmt;
+      _hasMoney = AmountCalcUtils.add(_hasMoney, payAmt);
+      _dsMoney = AmountCalcUtils.sub(_dsMoney, payAmt);
 
       if (_dsMoney <= 0.005) {
         // 全部支付完成 → 上传流水（对齐 smdcapp getSaleFlowData）
@@ -645,6 +806,11 @@ class _SettlePageState extends State<SettlePage> {
       hintText: '输入金额',
       initialValue: fullPayment ? _dsMoney.toStringAsFixed(2) : '',
       maxLines: 1,
+      // 金额输入默认数字键盘（对齐 smdcapp PricePopup 内置数字键盘）
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      inputFormatters: <TextInputFormatter>[
+        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+      ],
     );
     if (result == null || result.isEmpty) return null;
     return double.tryParse(result);
@@ -672,31 +838,54 @@ class _SettlePageState extends State<SettlePage> {
       }
 
       // 会员支付处理（对齐 smdcapp saveFlowInDb → vipInfoPay）
-      if (_payId == '02' && widget.memberVipid.isNotEmpty) {
-        await requestForm(HttpApi.vipPay, <String, dynamic>{
+      if (_payId == '02' && (_member?.vipid.isNotEmpty ?? false)) {
+        final Map<String, dynamic> payParams = <String, dynamic>{
           'billno': _generateBillNo(),
-          'vipid': widget.memberVipid,
-          'vipno': widget.memberVipno,
+          'vipid': _member?.vipid ?? '',
+          'vipno': _member?.vipno ?? '',
           'payid': '02',
           'payname': '会员卡',
           'saleid': widget.saleid,
           'salename': '',
-          'amt': widget.payAmt.toString(),
-        });
+          'amt': _rd2(widget.payAmt).toString(),
+        };
+        await requestForm(HttpApi.vipPay, payParams);
+        // 双写本地会员流水（非 Web；失败静默，不阻断结账流程）
+        if (!kIsWeb) {
+          try {
+            await VipDao.instance.saveVipFlow(payParams);
+          } catch (e) {
+            debugPrint('本地会员流水写入失败: $e');
+          }
+        }
       }
 
       // 构建 SaleBean 数据（对齐 smdcapp SaleBean 结构）
       final Map<String, dynamic> saleMaster = _buildSaleMaster(billdate);
       final List<Map<String, dynamic>> saleDetail = _buildSaleDetail(billdate);
-      final List<Map<String, dynamic>> salePayway = _salePayWayList;
+      final List<Map<String, dynamic>> salePayway = _buildSalePayway();
 
       final Map<String, dynamic> saleBean = <String, dynamic>{
+        // 顶层 id 为服务端必需字段（对齐 smdcapp bean.id = payFlowBean.id.toString()）：
+        // 服务端 SaleflowService 用 JsonUtils.getJsonStr(js, "id") 强制提取，
+        // 缺失会抛"id不存在"并返回"数据转成json失败"。
+        // 本项目无本地流水表，用秒级时间戳生成唯一 id。
+        'id': (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString(),
         't_sale_master': <Map<String, dynamic>>[saleMaster],
         't_sale_detail': saleDetail,
         't_sale_payway': salePayway,
-        't_sale_cook': <Map<String, dynamic>>[],
+        't_sale_cook': _buildSaleCook(),
         'billno': saleMaster['billno'],
       };
+
+      // 打印类型（对齐 smdcapp saveFlowInDb：printtype 2=结账单；
+      // 扫码点菜单 billtype==3 时 newprinttype=2）
+      final String printtype = _isPrint ? '2' : '-1';
+      String newprinttype = printtype;
+      if (newprinttype != '-1' &&
+          saleMaster['billtype']?.toString() == '3') {
+        newprinttype = '2';
+      }
 
       // 上传流水（对齐 smdcapp SettleHttpUtil.api.saleflow）
       final List<Map<String, dynamic>> saleList = <Map<String, dynamic>>[saleBean];
@@ -704,30 +893,41 @@ class _SettlePageState extends State<SettlePage> {
         HttpApi.saleflow,
         <String, dynamic>{
           'data': jsonEncode(saleList),
-          'printtype': _isPrint ? '2' : '-1',
+          'printtype': printtype,
           'printalltype': _isPrint ? '1' : '-1',
-          'newprinttype': '-1',
+          'newprinttype': newprinttype,
           'seq': '1',
         },
       );
 
       if (!mounted) return;
 
-      // 解析响应
+      // 解析响应（对齐 smdcapp：以 data[0].retcode 为逐条上传结果）
+      // 注意：requestForm 已保证顶层 retcode==0 才会返回到这里，但顶层只是
+      // BaseData 外壳，真正的落库结果在 data 数组每条记录的 retcode 中。
+      // 绝不能以顶层 retcode 兜底判成功，否则服务端落库失败时仍会清台进完成页，
+      // 导致后台报表查不到数据（对齐 smdcapp it.size>0 && it[0].retcode==0）。
       final dynamic data = resp['data'] ?? resp['Data'];
       bool success = false;
+      String recordRetmsg = '';
       if (data is List && data.isNotEmpty) {
         final dynamic first = data[0];
         if (first is Map<String, dynamic>) {
           success = (first['retcode'] == 0);
+          recordRetmsg = first['retmsg']?.toString() ?? '';
         }
-      }
-      // 也兼容 retcode 在顶层
-      if (!success && resp['retcode'] == 0) {
-        success = true;
       }
 
       if (success) {
+        // 双写本地结账流水（非 Web：t_sale_master/t_sale_payway/t_sale_detail/
+        // t_sale_cook，失败静默不阻断，对齐计划：本地写失败不影响结账流程）
+        if (!kIsWeb) {
+          try {
+            await SaleDao.instance.saveSaleFlow(saleBean);
+          } catch (e) {
+            debugPrint('本地结账流水写入失败: $e');
+          }
+        }
         // 清台（对齐 smdcapp cancelOrder → clearTable）
         await _clearTable();
         if (!mounted) return;
@@ -751,7 +951,9 @@ class _SettlePageState extends State<SettlePage> {
           },
         );
       } else {
-        Toast.show('结账失败，请重试');
+        // 失败时透出服务端逐条 retmsg，便于定位落库失败原因
+        Toast.show(
+            recordRetmsg.isNotEmpty ? '结账失败：$recordRetmsg' : '结账失败，请重试');
       }
     } catch (e) {
       if (mounted) {
@@ -770,8 +972,28 @@ class _SettlePageState extends State<SettlePage> {
     final String userId = _getUserId();
     final String sid = _getStoreField('id');
     final String spid = _getStoreField('spid');
+    final String machNo = SpUtil.getString(Constant.machNo) ?? '';
     final Map<String, dynamic>? tmp =
         widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final String serverId = widget.serverId.isNotEmpty
+        ? widget.serverId
+        : (tmp?['serverid']?.toString() ?? '');
+    final String serverName = widget.serverName.isNotEmpty
+        ? widget.serverName
+        : (tmp?['servername']?.toString() ?? '');
+
+    // 减免金额合计（payid=06，对齐 smdcapp reductionamt=operamt）
+    double reductionamt = 0;
+    for (final Map<String, dynamic> pw in _salePayWayList) {
+      if (pw['payid'] == '06') {
+        reductionamt = AmountCalcUtils.add(reductionamt, _toDouble(pw['payamt']));
+      }
+    }
+    // 订单商品总数量（对齐 smdcapp qty=allqty）
+    double qty = 0;
+    for (final Map<String, dynamic> d in widget.detailList) {
+      qty += _toDouble(d['qty']);
+    }
 
     return <String, dynamic>{
       'saleid': widget.saleid,
@@ -779,41 +1001,65 @@ class _SettlePageState extends State<SettlePage> {
       'billdate': billdate,
       'sid': sid,
       'spid': spid,
+      'machno': machNo,
       'tableid': widget.tableId.isNotEmpty
           ? widget.tableId
           : (tmp?['tableid']?.toString() ?? ''),
       'tablename': widget.tableName,
-      'amt': widget.payAmt,
-      'retailamt': widget.dishAmt + widget.serviceAmt + widget.lowAmt,
-      'dscamt': widget.disAmt,
-      'roundamt': _roundAmt,
-      'payment': _hasMoney,
-      'changeamt': _hasMoney > widget.payAmt ? (_hasMoney - widget.payAmt) : 0.0,
-      'serviceamt': widget.serviceAmt,
-      'lowamt': widget.lowAmt,
+      'tableno': widget.tableCode,
+      'areaid': tmp?['areaid']?.toString() ?? '',
+      'amt': _rd2(widget.payAmt),
+      'retailamt': AmountCalcUtils.add(
+          AmountCalcUtils.add(widget.dishAmt, widget.serviceAmt), widget.lowAmt),
+      'dscamt': _rd2(widget.disAmt),
+      'roundamt': _rd2(_roundAmt),
+      // 实收金额不含抹零（对齐 smdcapp CalcUtils.sub2(payment, roundAmt)）
+      'payment': AmountCalcUtils.sub(_hasMoney, _roundAmt),
+      'changeamt': _hasMoney > widget.payAmt
+          ? AmountCalcUtils.sub(_hasMoney, widget.payAmt)
+          : 0.0,
+      'serviceamt': _rd2(widget.serviceAmt),
+      'lowamt': _rd2(widget.lowAmt),
+      'reductionamt': _rd2(reductionamt),
+      'qty': qty,
       'cashid': userId,
       'cashname': userName,
-      'serverid': widget.serverId.isNotEmpty
-          ? widget.serverId
-          : (tmp?['serverid']?.toString() ?? ''),
-      'servername': widget.serverName.isNotEmpty
-          ? widget.serverName
-          : (tmp?['servername']?.toString() ?? ''),
-      'vipid': widget.memberVipid,
-      'vipno': widget.memberVipno,
-      'vipname': widget.memberVipname,
+      'serverid': serverId,
+      'servername': serverName,
+      'vipid': _member?.vipid ?? '',
+      'vipno': _member?.vipno ?? '',
+      'vipname': _member?.vipname ?? '',
+      'vipmobile': _member?.mobile ?? '',
       'billtype': tmp?['billtype']?.toString() ?? '7',
-      'personnum': widget.persons,
+      'mealtype': '1',
+      'personnum': widget.persons.toString(),
       'memo': widget.remark,
+      'remark': widget.remark,
       'opertype': '1',
+      'saletype': 3,
+      'status': 1,
+      'makedataflag': 0,
+      'upflag': 0,
+      'createtime': tmp?['createtime']?.toString() ?? _nowStr(),
+      'updatetime': _nowStr(),
     };
   }
 
-  /// 构建销售明细表（对齐 smdcapp detailListBean）
+  /// 构建销售明细表（对齐 smdcapp detailListBean + getSaleFlowData 逐条补齐）
   List<Map<String, dynamic>> _buildSaleDetail(String billdate) {
     final String sid = _getStoreField('id');
     final String spid = _getStoreField('spid');
     final String billno = _generateBillNo();
+    final Map<String, dynamic>? tmp =
+        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final String serverId = widget.serverId.isNotEmpty
+        ? widget.serverId
+        : (tmp?['serverid']?.toString() ?? '');
+    final String serverName = widget.serverName.isNotEmpty
+        ? widget.serverName
+        : (tmp?['servername']?.toString() ?? '');
+    // 明细开单时间：有桌台取开台时间，否则取当前（对齐 smdcapp bean.createtime）
+    final String createtime = tmp?['billdate']?.toString() ?? _nowStr();
 
     return widget.detailList.map((Map<String, dynamic> item) {
       final Map<String, dynamic> detail = Map<String, dynamic>.from(item);
@@ -822,8 +1068,95 @@ class _SettlePageState extends State<SettlePage> {
       detail['sid'] = sid;
       detail['spid'] = spid;
       detail['billdate'] = billdate;
+      detail['createtime'] = createtime;
+      detail['servername'] = serverName;
+      detail['serverid'] = serverId;
+      // 点菜员为空时取服务员（对齐 smdcapp salesid isNullOrEmpty 分支）
+      if ((detail['salesid']?.toString() ?? '').isEmpty) {
+        detail['salesid'] = serverId;
+        detail['salesname'] = serverName;
+      }
       return detail;
     }).toList();
+  }
+
+  /// 构建支付方式表（对齐 smdcapp DealSaleBeanUtil.getPayWayBean 公共字段）
+  List<Map<String, dynamic>> _buildSalePayway() {
+    final String sid = _getStoreField('id');
+    final String spid = _getStoreField('spid');
+    final String machNo = SpUtil.getString(Constant.machNo) ?? '';
+    final String createtime = _nowStr();
+
+    return _salePayWayList.map((Map<String, dynamic> item) {
+      final Map<String, dynamic> pw = Map<String, dynamic>.from(item);
+      // 金额字段统一保留2位小数（对齐 smdcapp CalcUtils.add2/sub2，
+      // 防止 payamt 等因 double 精度尾差超出服务端16字符长度限制）
+      for (final String key in <String>[
+        'payamt', 'rramt', 'changeamt', 'faceamt',
+        'actulamt', 'virtualamt', 'vipnowmoney',
+      ]) {
+        if (pw[key] != null) pw[key] = _rd2(_toDouble(pw[key]));
+      }
+      final double payamt = _toDouble(pw['payamt']);
+      final double changeamt = _toDouble(pw['changeamt']);
+      pw['spid'] = spid;
+      pw['sid'] = sid;
+      pw['machno'] = machNo;
+      pw['clienttype'] = '2';
+      pw['createtime'] = createtime;
+      pw['rate'] = pw['rate'] ?? 1.0;
+      pw.putIfAbsent('faceamt', () => payamt);
+      // 实付/虚付划分（对齐 smdcapp：payid=06 均为0；
+      // handoverflag==1 交班支付方式计实付，否则计虚付）
+      if (pw['payid'] == '06') {
+        pw['actulamt'] = 0.0;
+        pw['virtualamt'] = 0.0;
+      } else if (!pw.containsKey('actulamt') && !pw.containsKey('virtualamt')) {
+        int handoverflag = 1;
+        for (final Map<String, dynamic> pt in _payTypeList) {
+          final String code =
+              pt['payid']?.toString() ?? pt['code']?.toString() ?? '';
+          if (code == pw['payid']) {
+            handoverflag =
+                int.tryParse(pt['handoverflag']?.toString() ?? '') ?? 1;
+            break;
+          }
+        }
+        final double total = AmountCalcUtils.add(payamt, changeamt);
+        if (handoverflag == 1) {
+          pw['actulamt'] = total;
+          pw['virtualamt'] = 0.0;
+        } else {
+          pw['actulamt'] = 0.0;
+          pw['virtualamt'] = total;
+        }
+      }
+      // 会员支付补充会员标识（对齐 smdcapp memberBean != null 分支）
+      if (pw['payid'] == '02' && _member != null) {
+        pw['vipid'] = _member!.vipid;
+        pw['vipno'] = _member!.vipno;
+        pw['vipname'] = _member!.vipname;
+        pw['vipnowmoney'] = _member!.nowmoney;
+      }
+      return pw;
+    }).toList();
+  }
+
+  /// 构建做法表（对齐 smdcapp getSaleFlowData detailcookListBean）
+  List<Map<String, dynamic>> _buildSaleCook() {
+    final List<Map<String, dynamic>> cooks = <Map<String, dynamic>>[];
+    for (final Map<String, dynamic> d in widget.detailList) {
+      final dynamic raw = d['cooklist'] ?? d['cookList'];
+      if (raw is! List) continue;
+      for (final dynamic c in raw) {
+        if (c is! Map<String, dynamic>) continue;
+        final Map<String, dynamic> cook = Map<String, dynamic>.from(c);
+        cook['saleid'] = widget.saleid;
+        cook['onlyid'] = d['onlyid'] ?? '';
+        cooks.add(cook);
+      }
+    }
+    return cooks;
   }
 
   /// 清台（对齐 smdcapp cancelOrder → clearTable / PcClearTable）
@@ -856,8 +1189,8 @@ class _SettlePageState extends State<SettlePage> {
   /// 返回取餐号（对齐 smdcapp TakeSnackcode），无叫号时返回空字符串
   Future<String> _triggerPickupCallIfNeeded(Map<String, dynamic> saleMaster) async {
     try {
-      final String storeMode = SpUtil.getString(Constant.storeMode) ?? '2';
-      if (storeMode != '1') return ''; // 仅快餐模式
+      // storeMode 由 putInt 写入，getString 读取会类型强转异常，统一走 StoreModeUtils
+      if (!StoreModeUtils.isFastMode()) return ''; // 仅快餐模式
       if (!ParamsSpUtils.getPickupCallSwitch()) return ''; // 叫号开关未开启
       final Map<String, dynamic> resp = await requestForm(
         HttpApi.getTakeSnackCodeBySet,
@@ -865,9 +1198,9 @@ class _SettlePageState extends State<SettlePage> {
           'saleid': widget.saleid,
           'billno': saleMaster['billno']?.toString() ?? '',
           'billdate': saleMaster['billdate']?.toString() ?? '',
-          'amt': widget.payAmt,
+          'amt': _rd2(widget.payAmt),
           'retailamt': saleMaster['retailamt'] ?? 0,
-          'dscamt': widget.disAmt,
+          'dscamt': _rd2(widget.disAmt),
         },
         showError: false,
       );
@@ -964,15 +1297,30 @@ class _SettlePageState extends State<SettlePage> {
 
   String _billNoCache = '';
 
-  /// 生成单号（对齐 smdcapp BillUtils.createNewBillNo）
+  /// 生成单号（对齐 smdcapp BillUtils.createNewBillNo：门店编号+机号+yyMMdd+4位流水）
+  ///
+  /// 本项目无本地流水库无法按上一单递增，末4位由秒级时间戳派生，保证同店同机当天不重复。
   String _generateBillNo() {
     if (_billNoCache.isNotEmpty) return _billNoCache;
+    final String storeCode = SpUtil.getString(Constant.storeCode) ?? '';
+    final String machNo = SpUtil.getString(Constant.machNo) ?? '';
     final DateTime now = DateTime.now();
-    final String ts =
-        '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}';
-    final String rand = (now.millisecond % 1000).toString().padLeft(3, '0');
-    _billNoCache = 'APP$ts$rand';
+    final String yyMMdd = '${(now.year % 100).toString().padLeft(2, '0')}'
+        '${now.month.toString().padLeft(2, '0')}'
+        '${now.day.toString().padLeft(2, '0')}';
+    final String seq = ((now.millisecondsSinceEpoch ~/ 1000) % 10000)
+        .toString()
+        .padLeft(4, '0');
+    _billNoCache = '$storeCode$machNo$yyMMdd$seq';
     return _billNoCache;
+  }
+
+  /// 当前时间 yyyy-MM-dd HH:mm:ss（对齐 smdcapp DateUtils.getTimeStamp）
+  String _nowStr() {
+    final DateTime now = DateTime.now();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${now.year}-${two(now.month)}-${two(now.day)} '
+        '${two(now.hour)}:${two(now.minute)}:${two(now.second)}';
   }
 
   String _getUserName() {
@@ -1015,6 +1363,10 @@ class _SettlePageState extends State<SettlePage> {
     if (amt == amt.roundToDouble()) return amt.toInt().toString();
     return amt.toStringAsFixed(2);
   }
+
+  /// 金额四舍五入保留2位小数（对齐 smdcapp CalcUtils.add2/sub2 HALF_UP 保留2位，
+  /// 防止 double 精度尾差（如 26.200000000000003）导致 payamt 超出服务端16字符限制）
+  double _rd2(double v) => double.parse(v.toStringAsFixed(2));
 
   // ═══════════════════ UI构建 ═══════════════════
 
@@ -1086,16 +1438,42 @@ class _SettlePageState extends State<SettlePage> {
                 style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
               ),
             ),
-            // 会员按钮（对齐 smdcapp tvManageTwo）
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: Text(
-                widget.memberVipname.isNotEmpty ? widget.memberVipname : '会员',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: widget.memberVipname.isNotEmpty
-                      ? _kBrandRed
-                      : const Color(0xFF86909C),
+            // 会员录入入口（对齐 smdcapp tvManageTwo：未录入显示“会员”，录入后显示会员名）
+            GestureDetector(
+              onTap: _onMemberTap,
+              behavior: HitTestBehavior.opaque,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 8, right: 12),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Icon(
+                      _member != null
+                          ? Icons.badge
+                          : Icons.person_search_outlined,
+                      size: 18,
+                      color: _member != null
+                          ? _kBrandRed
+                          : (isDark ? Colors.white70 : const Color(0xFF4E5969)),
+                    ),
+                    const SizedBox(width: 3),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 90),
+                      child: Text(
+                        _member != null ? _member!.vipname : '会员',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight:
+                              _member != null ? FontWeight.w500 : FontWeight.normal,
+                          color: _member != null
+                              ? _kBrandRed
+                              : (isDark ? Colors.white70 : const Color(0xFF4E5969)),
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1318,7 +1696,7 @@ class _SettlePageState extends State<SettlePage> {
 
   /// 会员优惠券卡片（对齐 smdcapp CouponListActivity 入口）
   Widget _buildCouponCard(bool isDark) {
-    if (widget.memberVipid.isEmpty) return const SizedBox.shrink();
+    if (_member == null) return const SizedBox.shrink();
     return GestureDetector(
       onTap: _selectCoupon,
       child: Container(
@@ -1457,21 +1835,22 @@ class _SettlePageState extends State<SettlePage> {
     );
     if (amt > 0 && mounted) {
       // 核销成功，抵扣金额
+      final double verifyAmt = _rd2(amt);
       setState(() {
-        _hasMoney += amt;
-        _dsMoney -= amt;
+        _hasMoney = AmountCalcUtils.add(_hasMoney, verifyAmt);
+        _dsMoney = AmountCalcUtils.sub(_dsMoney, verifyAmt);
         if (_dsMoney < 0) _dsMoney = 0;
       });
       _salePayWayList.add(<String, dynamic>{
         'saleid': widget.saleid,
         'payid': '99',
         'payname': '团购核销',
-        'payamt': amt,
+        'payamt': verifyAmt,
         'rate': 1.0,
-        'rramt': amt,
+        'rramt': verifyAmt,
         'changeamt': 0.0,
       });
-      Toast.show('团购核销抵扣 ¥$amt');
+      Toast.show('团购核销抵扣 ¥$verifyAmt');
     }
   }
 

@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +11,7 @@ import 'package:flutter_deer/pages/login/login_router.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/res/resources.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
+import 'package:flutter_deer/service/cash_recon_service.dart';
 import 'package:flutter_deer/util/params_sp_utils.dart';
 import 'package:flutter_deer/util/file_log_writer.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
@@ -294,6 +296,13 @@ class _LoginPageState extends State<LoginPage> {
             Map<String, dynamic>.from(data['store'] as Map);
         SpUtil.putString(Constant.storeCode, store['code']?.toString() ?? '');
         SpUtil.putString(Constant.businessNumber, store['account']?.toString() ?? '');
+        final int savedSpid = int.tryParse(store['spid']?.toString() ?? '') ?? 0;
+        // sid 取 store.id（对齐 http_helper/_currentSidSpid 约定；store 无 sid 字段）
+        final int savedSid = int.tryParse(
+                store['id']?.toString() ?? store['sid']?.toString() ?? '') ??
+            0;
+        SpUtil.putInt('spid', savedSpid);
+        SpUtil.putInt('sid', savedSid);
       }
 
       // 保存 pstore（总店）功能标志（对齐 smdcapp LoginBean.pstore）
@@ -325,6 +334,11 @@ class _LoginPageState extends State<LoginPage> {
         _saveOrClearCredentials();
         // 登录成功后记录设备基础信息（对齐 smdcapp LoginActivity: JsonWriter.initLogInfo）
         FileLogWriter.instance.logDeviceInfo();
+        // 非 Web：异步同步本地基础表（t_bi_payway/t_bi_payway_store/t_bi_type/
+        // t_bi_parameter；失败静默，交班页查询基础表为空时自动重试一次）
+        if (!kIsWeb) {
+          CashReconService.instance.syncBaseData();
+        }
         //Toast.show('登录成功');
         // 登录成功后进入数据交换页，一次性下载全部基础表数据（对齐 smdcapp: 登录 → checkPC → downTable → ChangeDataPopup）
         NavigatorUtils.push(context, LoginRouter.dataExchangePage, clearStack: true);

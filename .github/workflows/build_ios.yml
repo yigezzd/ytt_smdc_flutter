@@ -11,7 +11,7 @@ name: Build iOS IPA
 on:
   workflow_dispatch:
   push:
-    tags: ['v*']
+    tags: ["v*"]
 
 jobs:
   build-ios:
@@ -23,7 +23,7 @@ jobs:
       - name: 安装 Flutter（与本地版本一致）
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.44.0'
+          flutter-version: "3.44.0"
           cache: true
 
       - name: 安装依赖

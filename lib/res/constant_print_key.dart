@@ -105,6 +105,17 @@ class ConstantPrintKey {
   /// 打印指令类型（ESC/TSC）
   static const String printCmdType = 'PRINTTYPE';
 
+  // ──────────── 交班设置 ─────────────────────────────────────────
+
+  /// 统计菜品标志（对齐 smdcapp ConstantSetKey.SALEPROSUMMARYFLAG）：0统计 -1不统计
+  static const String saleProSummaryFlag = 'SALEPROSUMMARYFLAG';
+
+  /// 统计分类标志（对齐 smdcapp ConstantSetKey.SALECLASSSUMMARYFLAG）：0统计 -1不统计
+  static const String saleClassSummaryFlag = 'SALECLASSSUMMARYFLAG';
+
+  /// 交班打印开关（对齐 smdcapp ConstantSetKey.HAND_PRINT_FLAG）：1打印 0不打印
+  static const String handPrintFlag = 'HAND_PRINT_FLAG';
+
   // ──────────── 打印类型枚举值 ─────────────────────────────────────────
 
   /// 打印类型选项列表（对齐 smdcapp PrintSetActivity.clickPrintType）

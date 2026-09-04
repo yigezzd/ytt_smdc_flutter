@@ -2,14 +2,17 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_deer/components/confirm_dialog.dart';
+import 'package:flutter_deer/db/app_database.dart';
 import 'package:flutter_deer/main.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/dio_utils.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/pages/login/page/login_page.dart';
 import 'package:flutter_deer/res/constant.dart';
+import 'package:flutter_deer/util/device_utils.dart';
 import 'package:flutter_deer/util/file_log_writer.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -283,6 +286,12 @@ void _clearCachePreservingRemember() {
 /// 主动退出登录：清除缓存（保留记住密码）并跳转登录页
 void logoutAndRedirect(BuildContext context) {
   _clearCachePreservingRemember();
+  // 非 Web：退出登录清空本地数据库全部业务表（失败静默，不影响退出流程）
+  if (!kIsWeb) {
+    AppDatabase.instance.clearAll().then((_) {}, onError: (Object e) {
+      debugPrint('本地数据库清库失败: $e');
+    });
+  }
   Navigator.pushAndRemoveUntil(
     context,
     MaterialPageRoute<void>(builder: (_) => const LoginPage()),
@@ -353,12 +362,14 @@ Future<Map<String, dynamic>> _buildSignedParams(
     }
   } catch (_) {}
   String operid = '0';
+  String opername = '';
   try {
     final String userStr = SpUtil.getString(Constant.user) ?? '';
     if (userStr.isNotEmpty) {
       final Map<String, dynamic> userMap =
           jsonDecode(userStr) as Map<String, dynamic>;
       operid = userMap['userid']?.toString() ?? '0';
+      opername = userMap['username']?.toString() ?? '';
     }
   } catch (_) {}
 
@@ -368,9 +379,17 @@ Future<Map<String, dynamic>> _buildSignedParams(
     appVerName = info.version;
   } catch (_) {}
 
-  all['machserial'] = '0000';
-  all['machno'] = '0';
-  all['opername'] = '';
+  // 对齐 smdcapp EncryptKey.StrEncrypt：machserial 取设备标识（缺省"0000"），
+  // machno 取登录分配的机号（缺省"0"），opername 取当前登录用户名。
+  // 此前写死 0000/0/'' 与 smdcapp 不一致，影响云服务端按机号关联数据的行为。
+  String machserial = '';
+  try {
+    machserial = Device.getDeviceSerial();
+  } catch (_) {}
+  all['machserial'] = machserial.isNotEmpty ? machserial : '0000';
+  final String machno = SpUtil.getString(Constant.machNo) ?? '';
+  all['machno'] = machno.isNotEmpty ? machno : '0';
+  all['opername'] = opername;
   all['client'] = 'APP';
   all['token'] = SpUtil.getString(Constant.token) ?? '';
   all['sid'] = sid;
@@ -479,6 +498,11 @@ Future<Map<String, dynamic>> requestForm(
   } catch (e) {
     String errorMsg = '网络请求异常';
     if (e is DioException) {
+      // 主设备请求发生网络层失败（无响应体：连接拒绝/超时等，对齐 smdcapp
+      // GlobalEventListener.callFailed → 广播 NetModeEvent），标记主设备丢失
+      if (masterDevice && e.response == null) {
+        ConnectionManager.notifyMasterDeviceLost();
+      }
       if (e.response?.data != null) {
         try {
           final dynamic respData = e.response!.data;

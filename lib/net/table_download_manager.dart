@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_deer/db/app_database.dart';
+import 'package:flutter_deer/db/entity/db_table_name.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/res/constant.dart';
@@ -38,53 +40,61 @@ class ChangeDataEvent {
 class TableDownloadManager {
   TableDownloadManager._();
 
+  /// 临时开关：true=写入 SQLite 数据库，false=写入 JSON 文件（默认）
+  static bool useDatabase = true;
+
   /// 注册表：表名 → 备注（对齐 smdcapp TableRegistry.tableRemarkMap，顺序一致）
+  ///
+  /// key 统一引用 [DbTableName] 常量，保证与 [DbTableName.backendTables] 同步。
   static const Map<String, String> tableRemarkMap = <String, String>{
-    't_bi_product': '商品信息',
-    't_bi_unit': '单位信息',
-    't_bi_type': '商品分类信息',
-    't_must_master': '必点菜信息',
-    't_must_product': '必点菜信息',
-    't_must_tablearea': '必点菜信息',
-    'sys_store': '门店信息',
-    't_bi_product_date': '商品售卖日期',
-    't_bi_product_store': '商品门店',
-    't_bi_spec': '规格信息',
-    't_bi_product_spec': '规格信息',
-    't_product_cook': '做法信息',
-    't_cook_info': '做法信息',
-    't_cook_group': '做法信息',
-    't_bi_comb_set': '套餐信息',
-    'sys_machine': '系统信息',
-    't_mp_pt_master': '商品促销信息',
-    't_mp_pt_nodate': '商品促销信息',
-    't_mp_pt_product_or_type': '商品促销信息',
-    't_mp_pt_rule': '商品促销信息',
-    't_mp_pt_time': '商品促销信息',
-    'sys_auth': '权限信息',
-    't_mp_store_type': '商品促销信息',
-    't_mp_store': '商品促销信息',
-    't_mp_pt_vip_type': '商品促销信息',
-    't_bi_reason_info': '备注信息',
-    't_bi_payway': '支付信息',
-    't_bi_parameter': '预定信息',
-    't_reserve_master': '预定信息',
-    't_vip_flow': '会员信息',
-    'sys_user': '系统信息',
-    't_table_type': '桌台信息',
-    't_vip_info': '会员信息',
-    't_vip_type': '会员信息',
-    't_table_pricingmode_time': '桌台信息',
-    't_table_area_type': '桌台信息',
-    't_table_area': '桌台信息',
-    't_product_eat': '一菜多吃',
-    't_eat_group': '一菜多吃',
-    't_eat_info': '一菜多吃',
+    DbTableName.tBiProduct: '商品信息',
+    DbTableName.tBiUnit: '单位信息',
+    DbTableName.tBiType: '商品分类信息',
+    DbTableName.tMustMaster: '必点菜信息',
+    DbTableName.tMustProduct: '必点菜信息',
+    DbTableName.tMustTablearea: '必点菜信息',
+    DbTableName.sysStore: '门店信息',
+    DbTableName.tBiProductDate: '商品售卖日期',
+    DbTableName.tBiProductStore: '商品门店',
+    DbTableName.tBiSpec: '规格信息',
+    DbTableName.tBiProductSpec: '规格信息',
+    DbTableName.tProductCook: '做法信息',
+    DbTableName.tCookInfo: '做法信息',
+    DbTableName.tCookGroup: '做法信息',
+    DbTableName.tBiCombSet: '套餐信息',
+    DbTableName.sysMachine: '系统信息',
+    DbTableName.tMpPtMaster: '商品促销信息',
+    DbTableName.tMpPtNodate: '商品促销信息',
+    DbTableName.tMpPtProductOrType: '商品促销信息',
+    DbTableName.tMpPtRule: '商品促销信息',
+    DbTableName.tMpPtTime: '商品促销信息',
+    DbTableName.sysAuth: '权限信息',
+    DbTableName.tMpStoreType: '商品促销信息',
+    DbTableName.tMpStore: '商品促销信息',
+    DbTableName.tMpPtVipType: '商品促销信息',
+    DbTableName.tBiReasonInfo: '备注信息',
+    DbTableName.tBiPayway: '支付信息',
+    DbTableName.tBiParameter: '预定信息',
+    DbTableName.tReserveMaster: '预定信息',
+    DbTableName.tVipFlow: '会员信息',
+    DbTableName.sysUser: '系统信息',
+    DbTableName.tTableType: '桌台信息',
+    DbTableName.tVipInfo: '会员信息',
+    DbTableName.tVipType: '会员信息',
+    DbTableName.tTablePricingmodeTime: '桌台信息',
+    DbTableName.tTableAreaType: '桌台信息',
+    DbTableName.tTableArea: '桌台信息',
+    DbTableName.tProductEat: '一菜多吃',
+    DbTableName.tEatGroup: '一菜多吃',
+    DbTableName.tEatInfo: '一菜多吃',
   };
 
   /// 系统相关表：后台不校验更新时间和 pagesize，一次性全量返回，只有 1 页
   /// （对齐 smdcapp TableRegistry.sysNameList）
-  static const List<String> sysNameList = <String>['sys_auth', 'sys_machine'];
+  static const List<String> sysNameList = <String>[
+    DbTableName.sysAuth,
+    DbTableName.sysMachine,
+  ];
 
   /// 并发下载数（对齐 smdcapp getChunkSize，移动端取标准值 3）
   static const int _concurrency = 3;
@@ -137,8 +147,7 @@ class TableDownloadManager {
     try {
       final String storeStr = SpUtil.getString(Constant.store) ?? '';
       if (storeStr.isNotEmpty) {
-        final Map<String, dynamic> storeMap =
-            json.decode(storeStr) as Map<String, dynamic>;
+        final Map<String, dynamic> storeMap = json.decode(storeStr) as Map<String, dynamic>;
         sid = storeMap['id']?.toString() ?? '0';
         spid = storeMap['spid']?.toString() ?? '0';
       }
@@ -157,8 +166,7 @@ class TableDownloadManager {
 
   /// 全部下载成功后保存当前门店标识（对齐 smdcapp SpUtils.putLastDownTableSpid）
   static void putLastDownTableSpid() {
-    SpUtil.putString(
-        'loca_last_login_time', DateTime.now().millisecondsSinceEpoch.toString());
+    SpUtil.putString('loca_last_login_time', DateTime.now().millisecondsSinceEpoch.toString());
     SpUtil.putString('loca_last_updatetime_spid', _currentSpidKey());
   }
 
@@ -184,11 +192,9 @@ class TableDownloadManager {
   }) async {
     try {
       _resetCount();
-      final List<String> tables =
-          targetTables ?? getAllTableNames();
+      final List<String> tables = targetTables ?? getAllTableNames();
       final int totalCount = tables.length;
-      final int pageSize =
-          isFullUpdate ? _fullPageSize : _incrementalPageSize;
+      final int pageSize = isFullUpdate ? _fullPageSize : _incrementalPageSize;
 
       // 并发下载（对齐 smdcapp flatMapMerge(concurrency = chunkSize)）
       final List<String> queue = List<String>.of(tables);
@@ -206,8 +212,7 @@ class TableDownloadManager {
               ..num = _startedCount
               ..code = ChangeDataEvent.code100);
 
-            final bool success =
-                await downloadTableData(isFullUpdate, table, pageSize);
+            final bool success = await downloadTableData(isFullUpdate, table, pageSize);
             _completedCount++;
             if (!success) {
               _failedTables.add(table);
@@ -262,8 +267,7 @@ class TableDownloadManager {
   /// [isFull] true=全量更新（不传 updatetime，首页清空本地数据）
   /// [tableName] 表名
   /// [pageSize] 每页数量
-  static Future<bool> downloadTableData(
-      bool isFull, String tableName, int pageSize) async {
+  static Future<bool> downloadTableData(bool isFull, String tableName, int pageSize) async {
     int currentPage = 1;
     bool isSuccess = true;
     final String updateTableTime = _formatNow();
@@ -355,13 +359,46 @@ class TableDownloadManager {
   ///
   /// [needClear] true=全量下载首页，先清空旧数据再写入；
   /// false=增量更新，按 id 主键合并（新数据覆盖旧数据，对齐 Room upsert）。
-  static Future<void> _saveToDb(
-      String tableName, List<dynamic> rows, bool needClear) async {
-    // Web 平台：使用内存缓存（浏览器无 getApplicationDocumentsDirectory）
+  ///
+  /// 当 [useDatabase] = true 时写入 SQLite 数据库，否则写入 JSON 文件。
+  static Future<void> _saveToDb(String tableName, List<dynamic> rows, bool needClear) async {
+    final List<Map<String, dynamic>> mapRows = rows
+        .whereType<Map<dynamic, dynamic>>()
+        .map((Map<dynamic, dynamic> e) => e.cast<String, dynamic>())
+        .toList();
+
+    // ── 写入 SQLite 数据库 ──
+    if (useDatabase && !kIsWeb) {
+      try {
+        if (AppDatabase.tables.contains(tableName)) {
+          if (needClear) {
+            await AppDatabase.instance.clearTable(tableName);
+          }
+          if (mapRows.isNotEmpty) {
+            await AppDatabase.instance.batchInsert(tableName, mapRows);
+          }
+        } else {
+          // 该表尚未在 AppDatabase 中建表，降级写 JSON 文件
+          debugPrint('表 $tableName 未在 AppDatabase 中注册，降级写入 JSON 文件');
+          await _saveToJsonFile(tableName, mapRows, needClear);
+        }
+      } catch (e) {
+        debugPrint('写入数据库失败($tableName): $e');
+      }
+      return;
+    }
+
+    // ── 写入 JSON 文件（默认 / Web 平台） ──
     if (kIsWeb) {
       _saveToWebCache(tableName, rows, needClear);
       return;
     }
+    await _saveToJsonFile(tableName, mapRows, needClear);
+  }
+
+  /// JSON 文件写入（原逻辑）
+  static Future<void> _saveToJsonFile(
+      String tableName, List<Map<String, dynamic>> rows, bool needClear) async {
     final Directory dir = await _getDataDir();
     final File file = _tableFile(dir, tableName);
 
@@ -385,8 +422,7 @@ class TableDownloadManager {
   }
 
   /// Web 内存缓存写入（逻辑与文件版一致：全量覆盖 / 增量 upsert）
-  static void _saveToWebCache(
-      String tableName, List<dynamic> rows, bool needClear) {
+  static void _saveToWebCache(String tableName, List<dynamic> rows, bool needClear) {
     if (needClear || !_webCache.containsKey(tableName)) {
       _webCache[tableName] = List<dynamic>.of(rows);
     } else {
@@ -395,8 +431,7 @@ class TableDownloadManager {
   }
 
   /// 按 id 主键合并（upsert）：新数据覆盖旧数据，无 id 的行直接追加
-  static List<dynamic> _mergeRows(
-      List<dynamic> oldRows, List<dynamic> newRows) {
+  static List<dynamic> _mergeRows(List<dynamic> oldRows, List<dynamic> newRows) {
     final Map<String, int> idIndex = <String, int>{};
     for (int i = 0; i < oldRows.length; i++) {
       final dynamic row = oldRows[i];
@@ -423,9 +458,22 @@ class TableDownloadManager {
 
   /// 读取本地缓存的表数据（供业务使用）
   ///
+  /// 当 [useDatabase] = true 时从 SQLite 读取，否则从 JSON 文件读取。
   /// 返回指定表的行列表；本地无缓存或解析失败时返回空列表。
-  static Future<List<Map<String, dynamic>>> readTableData(
-      String tableName) async {
+  static Future<List<Map<String, dynamic>>> readTableData(String tableName) async {
+    // ── 从 SQLite 数据库读取 ──
+    if (useDatabase && !kIsWeb) {
+      try {
+        if (AppDatabase.tables.contains(tableName)) {
+          return AppDatabase.instance.queryList(
+            'SELECT * FROM $tableName',
+          );
+        }
+      } catch (_) {}
+      return <Map<String, dynamic>>[];
+    }
+
+    // ── 从 JSON 文件 / Web 缓存读取 ──
     // Web 平台：从内存缓存读取
     if (kIsWeb) {
       final List<dynamic>? rows = _webCache[tableName];

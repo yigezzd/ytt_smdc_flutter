@@ -89,6 +89,9 @@ class _TablePageState extends State<TablePage>
   /// 本地事件总线订阅（对齐 smdcapp EventBus 操作后立即刷新）
   StreamSubscription<void>? _eventSubscription;
 
+  /// 主设备连接丢失事件订阅（对齐 smdcapp onNetModeEvent → showTipDialog）
+  StreamSubscription<void>? _masterLostSubscription;
+
   @override
   void initState() {
     super.initState();
@@ -106,6 +109,17 @@ class _TablePageState extends State<TablePage>
     // 订阅本地事件总线（对齐 smdcapp EventBus: 开台/锁台/消台等操作后立即刷新）
     _eventSubscription = TableEventBus.onTableChanged.listen((_) {
       _silentRefresh();
+    });
+
+    // 订阅主设备连接丢失事件（对齐 smdcapp GlobalEventListener → NetModeEvent → showTipDialog）：
+    // 运行期间主设备接口请求网络层失败时（如主设备被关机），弹出连接失败提示弹窗
+    _masterLostSubscription =
+        ConnectionManager.onMasterDeviceLost.listen((_) {
+      if (!mounted || _pcCheckDialogShowing) {
+        return;
+      }
+      setState(() => _pcAlive = false);
+      _showMasterDeviceCheckDialog();
     });
 
     // 对齐 smdcapp：先探活确定连接模式，再按该模式加载数据（避免两套接口都调用）
@@ -156,19 +170,28 @@ class _TablePageState extends State<TablePage>
     MqService.instance.connect();
 
     // 主设备不可达时弹出提示弹窗（对齐 smdcapp NetWorkChangeDialog）
-    if (hasLocalhost && !_pcAlive && !_pcCheckDialogShowing) {
-      _pcCheckDialogShowing = true;
-      await showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => const MasterDeviceCheckDialog(),
-      );
-      _pcCheckDialogShowing = false;
-      // 弹窗关闭后刷新连接状态（可能已切换云服务或重连成功）并按最新模式重载数据
-      if (mounted) {
-        setState(() => _pcAlive = ConnectionManager.pcAlive);
-        _loadData();
-      }
+    if (hasLocalhost && !_pcAlive) {
+      await _showMasterDeviceCheckDialog();
+    }
+  }
+
+  /// 弹出主设备连接失败提示弹窗（对齐 smdcapp showTipDialog/NetWorkChangeDialog）
+  ///
+  /// 弹窗关闭后刷新连接状态（可能已切换云服务或重连成功）并按最新模式重载数据
+  Future<void> _showMasterDeviceCheckDialog() async {
+    if (!mounted || _pcCheckDialogShowing) {
+      return;
+    }
+    _pcCheckDialogShowing = true;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const MasterDeviceCheckDialog(),
+    );
+    _pcCheckDialogShowing = false;
+    if (mounted) {
+      setState(() => _pcAlive = ConnectionManager.pcAlive);
+      _loadData();
     }
   }
 
@@ -177,6 +200,7 @@ class _TablePageState extends State<TablePage>
     _stopPolling();
     _mqSubscription?.cancel();
     _eventSubscription?.cancel();
+    _masterLostSubscription?.cancel();
     _searchController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _pcCheckDialogShowing = false;
@@ -225,7 +249,9 @@ class _TablePageState extends State<TablePage>
 
       try {
         tables = await TableRepository.fetchTableInfoList(
-          masterDevice: useMaster,
+          // 重新读取最新连接状态：若上一次请求已将 pcAlive 翻转为 false，
+          // 则本次回退云服务，避免以主设备路径请求云端地址
+          masterDevice: ConnectionManager.pcAlive,
           areaid: _currentAreaid,
           tablestatus: _currentStatusCode,
         );
@@ -284,7 +310,9 @@ class _TablePageState extends State<TablePage>
 
     try {
       tables = await TableRepository.fetchTableInfoList(
-        masterDevice: useMaster,
+        // 重新读取最新连接状态：若区域请求已将 pcAlive 翻转为 false，
+        // 则本次回退云服务，避免以主设备路径请求云端地址
+        masterDevice: ConnectionManager.pcAlive,
         areaid: _currentAreaid,
         tablestatus: _currentStatusCode,
       );
@@ -376,17 +404,15 @@ class _TablePageState extends State<TablePage>
   }
 
   /// 当前网络状态图标资源（对齐 smdcapp updateStatus：根据 netMode + pcAlive 切换图标）
+  ///
+  /// 主设备可达 → PC 成功图标；主设备连不上、实际走云服务 → 云服务图标
   String get _connectionIconAsset {
     if (_pcAlive) {
       // 主设备模式且已连接
       return 'assets/images/ic_pc_success.png';
-    } else if (ConnectionManager.getLocalhost().isNotEmpty) {
-      // 有主设备地址但未连通
-      return 'assets/images/ic_pc_error.png';
-    } else {
-      // 云服务模式
-      return 'assets/images/ic_yun_success.png';
     }
+    // 主设备未连通，netMode 回退为云服务（对齐 smdcapp：netMode==2 → ic_yun_success）
+    return 'assets/images/ic_yun_success.png';
   }
 
   /// 弹出连接状态弹窗（对齐 smdcapp ibConnection.onClick → ConnectionTypeDialog）
@@ -428,8 +454,6 @@ class _TablePageState extends State<TablePage>
                 'saleid': StoreModeUtils.generateSaleId(),
               },
             );
-          } else {
-            Toast.show('配送模式开发中');
           }
         },
       ),

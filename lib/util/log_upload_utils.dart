@@ -1,12 +1,15 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_deer/db/app_database.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/util/file_log_writer.dart';
 import 'package:intl/intl.dart';
+import 'package:path/path.dart' as p;
 import 'package:sp_util/sp_util.dart';
+import 'package:sqflite/sqflite.dart';
 
 /// 日志压缩上传工具（对齐 smdcapp FTPUtils + JsonWriter.uploadLog）
 ///
@@ -59,11 +62,24 @@ class LogUploadUtils {
       final zipFileName = '${date}_${_client}_${acc}_${storeCode}_${machNo}_logs.zip';
       final zipFilePath = '$logRootPath/$zipFileName';
 
-      // 1. 收集待压缩的日志目录（最近 N 天）
+      // 1. 收集待压缩的目录（日志 + 数据库，对齐 smdcapp JsonWriter.uploadLog）
       final filesToZip = <FileSystemEntity>[];
       final logDir = Directory(logRootPath);
       if (!logDir.existsSync()) return '日志目录不存在';
 
+      // 1a. 添加数据库目录（对齐 smdcapp: dbFolder 加入 filesToZip）
+      if (!kIsWeb) {
+        try {
+          await AppDatabase.instance.checkpoint();
+          final String dbDirPath = p.join(await getDatabasesPath());
+          final Directory dbDir = Directory(dbDirPath);
+          if (dbDir.existsSync()) {
+            filesToZip.add(dbDir);
+          }
+        } catch (_) {}
+      }
+
+      // 1b. 筛选最近 N 天的日志目录
       final now = DateTime.now();
       final dateFormat = DateFormat('yyyy-MM-dd');
       final targetDates = <String>{};

@@ -159,9 +159,12 @@ class SettleFinishPage extends StatelessWidget {
     );
   }
 
-  /// 完成：刷新桌台并返回首页（对齐 smdcapp SettleFinishActivity finish → TableInfoActivity）
+  /// 完成：刷新桌台并关闭所有结账流程页面返回首页
+  /// （对齐 smdcapp SettleFinishActivity → post FinishSettlemEvent，
+  /// 结算页/订单详情页/确认页等监听后 finish，最终回到 TableInfoActivity）
   void _finish(BuildContext context) {
     TableEventBus.fireTableChanged();
-    NavigatorUtils.goBack(context);
+    NavigatorUtils.unfocus();
+    Navigator.of(context).popUntil((Route<dynamic> route) => route.isFirst);
   }
 }

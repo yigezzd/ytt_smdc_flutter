@@ -16,8 +16,11 @@ import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
+import 'package:flutter_deer/util/print_service.dart';
+import 'package:flutter_deer/util/table_data_utils.dart';
 import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
+import 'package:flutter_deer/util/user_helper.dart';
 import 'package:sp_util/sp_util.dart';
 
 /// 品牌红（对齐 smdcapp red_e13426）
@@ -61,6 +64,13 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
 
   /// 订单明细列表（DetailListBean JSON 数组）
   List<Map<String, dynamic>> _detailList = <Map<String, dynamic>>[];
+
+  /// 展示列表（对齐 smdcapp CombHelper.formatCombList：套餐子行挂在主行下，不平级展示）
+  List<Map<String, dynamic>> _displayList = <Map<String, dynamic>>[];
+
+  /// 套餐主行 onlyid → 明细子行映射（仅用于展示，不修改 _detailList 原始数据，避免上传时污染 payload）
+  Map<String, List<Map<String, dynamic>>> _combChildrenMap =
+      <String, List<Map<String, dynamic>>>{};
 
   /// 明细展开/收起（对齐 smdcapp tvListNum isOpen）
   bool _expanded = false;
@@ -108,6 +118,10 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     final Map<String, dynamic>? tmp =
         widget.tableJson?['tmp'] as Map<String, dynamic>?;
     _openTime = tmp?['billdate']?.toString() ?? '';
+    // 服务员兜底取桌台 tmp.servername（对齐 smdcapp initTabInfo: tvTableWaiter = tmp.servername）
+    if (_serverName.isEmpty) {
+      _serverName = tmp?['servername']?.toString() ?? '';
+    }
     // 初始化桌台已有的会员信息（对齐 smdcapp: tableInfo.tmp.vipid/vipname）
     final String existVipid = tmp?['vipid']?.toString() ?? '';
     if (existVipid.isNotEmpty) {
@@ -117,6 +131,9 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         vipno: tmp?['vipno']?.toString() ?? '',
         mobile: tmp?['vipmobile']?.toString() ?? '',
       );
+      // 对齐 smdcapp CartGoodsModel.getVipData：桌台仅存 vipid/vipname 基础信息，
+      // 需按 vipid 调 vip/getList 取完整会员信息（含 prefetype/discount），否则无法计算会员价
+      _loadFullMemberInfo(existVipid);
     }
     _loadOrderDetail();
   }
@@ -147,9 +164,18 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
           masterDevice: true,
         );
       } else {
+        // 对齐 smdcapp OrderDetailActivity: saleid 优先取桌台 tmp.saleid
+        final Map<String, dynamic>? tmpJson =
+            widget.tableJson?['tmp'] as Map<String, dynamic>?;
+        final String saleid = tmpJson?['saleid']?.toString() ?? _saleid;
+        if (saleid.isEmpty) {
+          Toast.show('订单信息错误，请返回桌台重新进入');
+          return;
+        }
+        _saleid = saleid;
         resp = await requestForm(
           HttpApi.getSaleTmpDetail,
-          <String, dynamic>{'saleid': _saleid},
+          <String, dynamic>{'saleid': saleid},
         );
       }
 
@@ -160,6 +186,26 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       // 解析 data（主设备: Data, 云: data）
       final dynamic data = resp['Data'] ?? resp['data'];
       if (data is Map<String, dynamic>) {
+        // 对齐 smdcapp CartGoodsModel.initOrderInfo：明细接口（尤其主设备模式）
+        // 可能不返回 combflag/dscflag/mprice1~3 等商品参数，按 productid 从本地商品库回填，
+        // 避免套餐主/子行误判导致不展示（对齐 svn r132898），并为会员价/折扣计算提供数据
+        final Map<String, Map<String, dynamic>> localFields =
+            await OrderRepository.fetchLocalProductPriceFields();
+        final dynamic combRawList = data['detailList'];
+        if (combRawList is List) {
+          for (final dynamic raw in combRawList) {
+            if (raw is! Map<String, dynamic>) continue;
+            final Map<String, dynamic>? lf =
+                localFields[raw['productid']?.toString() ?? ''];
+            if (lf != null) {
+              raw['combflag'] = lf['combflag'];
+              raw['dscflag'] = lf['dscflag'];
+              raw['mprice1'] = lf['mprice1'];
+              raw['mprice2'] = lf['mprice2'];
+              raw['mprice3'] = lf['mprice3'];
+            }
+          }
+        }
         _parseOrderData(data);
       } else {
         Toast.show('获取订单详情失败');
@@ -184,6 +230,8 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
           .whereType<Map<String, dynamic>>()
           .toList();
     }
+    // 套餐归组展示：明细子行挂到主行下（对齐 smdcapp CombHelper.formatCombList）
+    _buildDisplayList();
 
     // 更新 saleid
     if (data['saleid'] != null && data['saleid'].toString().isNotEmpty) {
@@ -212,18 +260,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       _lastOrderTime = maxTime;
     }
 
-    // ═══ 价格计算（对齐 smdcapp Arith.showAllPriceInfo 简化版） ═══
-    // 菜品费：非退菜商品的 rramt 合计（rramt = 现单价 × 数量 - 已退金额）
-    double dishTotal = 0;
-    for (final Map<String, dynamic> item in _detailList) {
-      final int presentflag = _toInt(item['presentflag']);
-      if (presentflag == 2) {
-        continue; // 退菜不计入
-      }
-      dishTotal += _toDouble(item['rramt']);
-    }
-    _dishAmt = dishTotal;
-
+    // ═══ 价格计算（对齐 smdcapp Arith.showAllPriceInfo） ═══
     // 服务费/低消：优先取接口返回值（PC模式返回 serviceamt/lowamt）
     _serviceAmt = _toDouble(data['serviceamt'] != null && data['serviceamt'] != 0
         ? data['serviceamt']
@@ -232,12 +269,260 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         ? data['lowamt']
         : data['minSalemoney']);
 
-    // 优惠合计：dscamt（主单折扣金额）
-    _disAmt = _toDouble(data['dscamt']);
+    // 单品重算（含会员价）+ 金额汇总（对齐 smdcapp ShoppingCartUtil.getDownPrice）
+    _applyMemberPricing();
+  }
 
-    // 待支付：优先取 amt（主单实收），否则计算
-    final double amt = _toDouble(data['amt']);
-    _payAmt = amt > 0 ? amt : (_dishAmt + _serviceAmt + _lowAmt - _disAmt);
+  /// 按 vipid 获取完整会员信息（对齐 smdcapp CartGoodsModel.getVipData → OrderRepository.getVipInfo）
+  ///
+  /// 桌台 tmp 中的 vipid/vipname 只是基础信息，缺少 prefetype/discount 等定价字段，
+  /// 需调 vip/getList 接口按 vipid 查询完整会员信息，否则录入会员后无法计算会员价。
+  Future<void> _loadFullMemberInfo(String vipid) async {
+    try {
+      final List<VipMember> list = await OrderRepository.fetchVipList(vipid);
+      if (!mounted) return;
+      VipMember? full;
+      for (final VipMember m in list) {
+        if (m.vipid == vipid) {
+          full = m;
+          break;
+        }
+      }
+      if (full == null) return;
+      setState(() {
+        _member = full;
+        // 订单明细已加载时立即重算会员价
+        if (_detailList.isNotEmpty) {
+          _applyMemberPricing();
+        }
+      });
+    } catch (_) {}
+  }
+
+  /// 单品重算 + 订单金额汇总（对齐 smdcapp ShoppingCartUtil.getDownPrice + Arith.showAllPriceInfo）
+  ///
+  /// 服务端明细的 rramt 不含录入会员后的会员价，需本地重算：
+  /// - 单品 getMemberPrice：prefetype=1 零售价折扣、2/3/4 取 mprice1/2/3，仅当低于现价且 dscflag=1 时生效；
+  /// - 单品 getDownMemberPrice：rramt = 现单价 × 数量 + 做法/套餐加减价，退菜/赠送特殊处理；
+  /// - 汇总：菜品费 = 总原价，优惠合计 = 总原价 - 总现价，待支付 = 总现价 + 服务费 + 低消。
+  void _applyMemberPricing() {
+    final VipMember? member = _member;
+    double tempOPrice = 0;
+    double tempRRPrice = 0;
+    double tempAllDisPrice = 0;
+
+    for (final Map<String, dynamic> b in _detailList) {
+      // 暂结商品不重算（对齐 smdcapp getDownPrice）
+      if ((b['fornowid']?.toString() ?? '').isNotEmpty) continue;
+      // 已落单团购商品不重算
+      if (_toInt(b['douyinflag']) == 1 &&
+          _toInt(b['id']) != 0 &&
+          (b['saleid']?.toString() ?? '').isNotEmpty) {
+        continue;
+      }
+
+      _calcDownMemberPrice(b, member);
+
+      // 套餐明细行不统计汇总（做法金额已归入主套餐行）
+      if ((b['combproductid']?.toString() ?? '').isNotEmpty &&
+          (b['combid']?.toString() ?? '').isNotEmpty) {
+        continue;
+      }
+      final double itemO = _toDouble(b['oldrramt']);
+      final double itemR = _toDouble(b['rramt']);
+      tempOPrice = _round2(tempOPrice + itemO);
+      tempRRPrice = _round2(tempRRPrice + itemR);
+      tempAllDisPrice = _round2(tempAllDisPrice + (itemO - itemR));
+    }
+
+    // 对齐 smdcapp showAllPriceInfo：菜品费=总原价；优惠合计=tempAllDisPrice；待支付=总现价+服务费+低消
+    _dishAmt = tempOPrice;
+    _disAmt = tempAllDisPrice;
+    _payAmt = _round2(tempRRPrice + _serviceAmt + _lowAmt);
+  }
+
+  /// 单品价格重算（移植 smdcapp ShoppingCartUtil.getMemberPrice + getDownMemberPrice）
+  void _calcDownMemberPrice(Map<String, dynamic> b, VipMember? member) {
+    final double qty = _toDouble(b['qty']);
+    final double sellPrice = _toDouble(b['sellprice']);
+    final double cookaddamt = _toDouble(b['cookaddamt']);
+    final double combaddamt = _toDouble(b['combaddamt']);
+    final int presentflag = _toInt(b['presentflag']);
+    final int dscflag = _toInt(b['dscflag']);
+    double discount = _toDouble(b['discount']);
+    if (discount == 0) discount = 100;
+    final int origSpec = _toInt(b['specpriceflag']);
+
+    // specpriceflag → disType 映射（对齐 smdcapp getMemberPrice）
+    int disType;
+    if (origSpec == 0) {
+      disType = 0;
+    } else if (origSpec < 4 || origSpec == 7) {
+      disType = 3;
+    } else if (origSpec == 5) {
+      disType = 5;
+    } else if (origSpec == 4) {
+      disType = 1;
+    } else {
+      disType = 0;
+    }
+    final int startDisType = disType;
+
+    // 不可打折但存在手工折扣 → 恢复原价（对齐 smdcapp getMemberPrice）
+    if (dscflag != 1 && discount > 0 && discount < 100) {
+      b['disType'] = 0;
+      b['discount'] = 100;
+      b['rrprice'] = sellPrice;
+    } else {
+      // 基础现价：原价与服务器现单价取低，手工折扣优先
+      double tempPrice = sellPrice;
+      final double serverRr = _toDouble(b['rrprice']);
+      if (serverRr == 0 && origSpec != 0) tempPrice = serverRr;
+      if (serverRr > 0 && serverRr < tempPrice) tempPrice = serverRr;
+      if (dscflag == 1 && discount > 0 && discount < 100) {
+        tempPrice = _round2(sellPrice * discount / 100);
+      }
+      // 会员价计算（对齐 smdcapp：仅当会员价低于当前价时生效）
+      if (member != null) {
+        switch (member.prefetype) {
+          case 1:
+            final double md = member.discount.toDouble();
+            if (dscflag == 1 && md > 0 && md < 100) {
+              final double p = _round2(sellPrice * md / 100);
+              if (p < tempPrice) {
+                tempPrice = p;
+                b['discount'] = md;
+                b['specpriceflag'] = 5;
+                disType = 5;
+              }
+            }
+            break;
+          case 2:
+          case 3:
+          case 4:
+            final double mp = _toDouble(b['mprice${member.prefetype - 1}']);
+            if (mp != 0 && mp < tempPrice) {
+              tempPrice = mp;
+              b['specpriceflag'] = 5;
+              disType = 5;
+            }
+            // 手工折扣更优时恢复原优惠类型
+            if (discount > 0 && discount < 100) {
+              final double p = _round2(sellPrice * discount / 100);
+              if (p < tempPrice) {
+                tempPrice = p;
+                b['specpriceflag'] = origSpec;
+                disType = startDisType;
+              }
+            }
+            break;
+        }
+      }
+      // 赠送商品现价为0（对齐 smdcapp）
+      if (presentflag == 1) {
+        disType = 2;
+        b['rrprice'] = 0;
+        tempPrice = 0;
+      } else {
+        b['rrprice'] = tempPrice;
+      }
+      b['disType'] = disType;
+    }
+
+    // ═══ 金额汇总（对齐 smdcapp getDownMemberPrice） ═══
+    final double memberPrice = _toDouble(b['rrprice']);
+    double tO = _round2(sellPrice * qty + combaddamt);
+    double tR = _round2(memberPrice * qty + combaddamt);
+    final int bxxpxxflag = _toInt(b['bxxpxxflag']);
+    if (presentflag == 2) {
+      // 退菜：赠送后退菜先归零，再退做法加价
+      if (_toDouble(b['presentprice']) > 0) {
+        tO = 0;
+        tR = 0;
+      }
+      if (cookaddamt < 0) {
+        tO = _round2(tO + cookaddamt);
+        tR = _round2(tR + cookaddamt);
+      } else {
+        tO = _round2(tO - cookaddamt);
+        tR = _round2(tR - cookaddamt);
+      }
+    } else if (presentflag == 1 ||
+        bxxpxxflag == 1 ||
+        bxxpxxflag == 2 ||
+        bxxpxxflag == 6) {
+      // 赠送：优惠金额为原价，现价仅含做法费
+      tO = _round2(tO + cookaddamt);
+      tR = cookaddamt;
+      b['disType'] = 2;
+    } else {
+      tO = _round2(tO + cookaddamt);
+      tR = _round2(tR + cookaddamt);
+    }
+    b['oldrramt'] = tO;
+    b['rramt'] = tR;
+  }
+
+  /// 金额保留两位小数（避免浮点累计误差）
+  double _round2(double v) => (v * 100).roundToDouble() / 100;
+
+  /// 当前时间格式化为 yyyy-MM-dd HH:mm:ss（对齐 smdcapp DateUtils.getTimeStamp）
+  String _formatNow() {
+    final DateTime dt = DateTime.now();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${dt.year}-${two(dt.month)}-${two(dt.day)} '
+        '${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
+  }
+
+  /// 构建展示列表（对齐 smdcapp CombHelper.formatCombList）：
+  ///
+  /// - 情况 A：套餐主行（combflag==1），其明细子行（combflag==0 且 combid==主行 onlyid
+  ///   且 combproductid==主行 productid）挂到 [_combChildrenMap]，子行不平级展示；
+  /// - 情况 B：独立单品（combid 为空且 combflag!=1），正常展示；
+  /// - 情况 C：套餐子行，跳过（已挂到主行下）。
+  void _buildDisplayList() {
+    // 1. 预处理：子商品按 combid 分组（套餐主行 combid==自身onlyid 不算子行，
+    // 对齐 CombHelper：主商品 combid == onlyid）
+    final Map<String, List<Map<String, dynamic>>> childrenByParent =
+        <String, List<Map<String, dynamic>>>{};
+    for (final Map<String, dynamic> e in _detailList) {
+      final String combid = e['combid']?.toString() ?? '';
+      final String onlyid = e['onlyid']?.toString() ?? '';
+      if (_toInt(e['combflag']) != 1 && combid.isNotEmpty && combid != onlyid) {
+        childrenByParent
+            .putIfAbsent(combid, () => <Map<String, dynamic>>[])
+            .add(e);
+      }
+    }
+    // 2. 遍历挑选套餐主体与独立单品
+    _combChildrenMap = <String, List<Map<String, dynamic>>>{};
+    final List<Map<String, dynamic>> newList = <Map<String, dynamic>>[];
+    for (final Map<String, dynamic> item in _detailList) {
+      final String combid = item['combid']?.toString() ?? '';
+      final String onlyid = item['onlyid']?.toString() ?? '';
+      if (_toInt(item['combflag']) == 1 ||
+          (combid.isNotEmpty && combid == onlyid)) {
+        final String productid = item['productid']?.toString() ?? '';
+        final List<Map<String, dynamic>> children =
+            (childrenByParent[onlyid] ?? const <Map<String, dynamic>>[])
+                .where((Map<String, dynamic> c) {
+                  final String cpid = c['combproductid']?.toString() ?? '';
+                  return cpid.isEmpty || cpid == productid;
+                }).toList()
+              ..sort((Map<String, dynamic> a, Map<String, dynamic> b) =>
+                  (a['createtime']?.toString() ?? '')
+                      .compareTo(b['createtime']?.toString() ?? ''));
+        if (children.isNotEmpty) {
+          _combChildrenMap[onlyid] = children;
+        }
+        // 与 smdcapp 差异：无子行的套餐主行仍保留展示（避免整行丢失）
+        newList.add(item);
+      } else if (combid.isEmpty) {
+        newList.add(item);
+      }
+      // 情况 C：套餐子行跳过
+    }
+    _displayList = newList;
   }
 
   // ═══════════════════ 按钮逻辑 ═══════════════════
@@ -478,6 +763,17 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
 
   /// 消台（对齐 smdcapp DetailOperationPopup.xt → TableCancelBottomDialog）
   Future<void> _cancelTable() async {
+    // 对齐 smdcapp DetailOperationPopup.xt：仅 tablestatus==1（待下单）可消台，
+    // 否则 Toast "不能消台"。订单详情页桌台为待结算/已预结，云/主设备消台接口
+    // 不处理该状态（返回成功但不生效），因此前端需拦截不发请求
+    final dynamic tmpRaw = widget.tableJson?['tmp'];
+    final int tablestatus = tmpRaw is Map
+        ? _toInt(tmpRaw['tablestatus'])
+        : 0;
+    if (tablestatus != 1) {
+      Toast.show('不能消台');
+      return;
+    }
     final bool confirmed = await ConfirmDialog.show(
       context,
       content: '确定要消台吗？消台后订单数据将被清除',
@@ -489,12 +785,19 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       final bool useMaster = ConnectionManager.pcAlive;
       if (useMaster) {
         // 对齐 smdcapp TableDao.cancelTable: PCTableHttpUtil.cancelTable(JSON.toJSONString(tableInfoBean))
-        // 主设备消台直接传桌台 JSON，不包裹 tableMasterTmpDto
+        // tablemaster 传完整桌台 Bean（deepMerge 默认结构 + 字段白名单过滤，
+        // 与 table_operation_dialog 入口一致），直传原始 JSON 会被服务端静默忽略
+        final Map<String, dynamic> tableBean = TableDataUtils.buildFullTableBean(
+          rawJson: widget.tableJson,
+          fallback: <String, dynamic>{
+            'tableid': widget.tableId,
+            'name': widget.tableName,
+            'code': widget.tableCode,
+          },
+        );
         await requestForm(
           HttpApi.pcCancelTable,
-          <String, dynamic>{
-            'tablemaster': jsonEncode(widget.tableJson ?? <String, dynamic>{}),
-          },
+          <String, dynamic>{'tablemaster': jsonEncode(tableBean)},
           masterDevice: true,
         );
       } else {
@@ -521,8 +824,15 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     try {
       final bool useMaster = ConnectionManager.pcAlive;
       if (useMaster) {
-        final Map<String, dynamic> tableBean =
-            Map<String, dynamic>.from(widget.tableJson ?? <String, dynamic>{});
+        // 完整桌台 Bean 构造方式与消台/桌台操作弹窗入口保持一致
+        final Map<String, dynamic> tableBean = TableDataUtils.buildFullTableBean(
+          rawJson: widget.tableJson,
+          fallback: <String, dynamic>{
+            'tableid': widget.tableId,
+            'name': widget.tableName,
+            'code': widget.tableCode,
+          },
+        );
         tableBean['newtableid'] = widget.tableId;
         if (tableBean['tmp'] is Map) {
           (tableBean['tmp'] as Map<String, dynamic>)['lockflag'] = 1;
@@ -562,61 +872,24 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
   /// 上传修改后的订单数据（对齐 smdcapp postInfo）
   ///
   /// [printtype] 打印类型：-1不打印, 4退菜单, 5催菜单, 6挂起单, 7起菜单, 8预打单
-  Future<void> _postOrderUpdate({String printtype = '-1'}) async {
+  /// 返回是否上传成功
+  Future<bool> _postOrderUpdate({String printtype = '-1'}) async {
     if (_detailList.isEmpty) {
       Toast.show('订单明细为空');
-      return;
+      return false;
     }
     try {
       final bool useMaster = ConnectionManager.pcAlive;
-      final Map<String, dynamic>? tmp =
-          widget.tableJson?['tmp'] as Map<String, dynamic>?;
 
-      // 对齐 smdcapp: 计算 hangflag、addamt
-      int hangflag = 0;
-      double addamt = 0;
-      for (final Map<String, dynamic> item in _detailList) {
-        if (_toInt(item['hangflag']) == 1) hangflag = 1;
-        if ((item['combproductid']?.toString() ?? '').isEmpty) {
-          addamt += _toDouble(item['cookaddamt']);
-        }
-      }
+      // 重新计算价格（对齐 smdcapp Arith.showAllPriceInfo：含会员价重算）
+      _applyMemberPricing();
 
-      // 重新计算价格（对齐 smdcapp Arith.showAllPriceInfo）
-      double dishTotal = 0;
-      for (final Map<String, dynamic> item in _detailList) {
-        if (_toInt(item['presentflag']) == 2) continue;
-        dishTotal += _toDouble(item['rramt']);
-      }
-
-      final String sid = SpUtil.getString('sid') ?? '';
-      final String spid = SpUtil.getString('spid') ?? '';
-
-      final Map<String, dynamic> master = <String, dynamic>{
-        'saleid': _saleid,
-        'tableid': widget.tableId.isNotEmpty ? widget.tableId : (tmp?['tableid']?.toString() ?? ''),
-        'tablename': widget.tableName,
-        'tablecode': widget.tableCode.isNotEmpty ? widget.tableCode : (tmp?['tablecode']?.toString() ?? ''),
-        'amt': dishTotal + _serviceAmt + _lowAmt - _disAmt,
-        'retailamt': dishTotal,
-        'dscamt': _disAmt,
-        'serviceamt': _serviceAmt,
-        'lowamt': _lowAmt,
-        'addamt': addamt,
-        'hangflag': hangflag,
-        'sid': sid,
-        'spid': spid,
-        'remark': tmp?['remark']?.toString() ?? widget.remark,
-        'personnum': tmp?['personnum']?.toString() ?? widget.persons.toString(),
-        'serverid': widget.serverId.isNotEmpty ? widget.serverId : (tmp?['serverid']?.toString() ?? ''),
-        'servername': _serverName,
-        'vipid': _member?.vipid ?? (tmp?['vipid']?.toString() ?? ''),
-        'vipno': _member?.vipno ?? (tmp?['vipno']?.toString() ?? ''),
-        'vipname': _member?.vipname ?? (tmp?['vipname']?.toString() ?? ''),
-        'localbillno': tmp?['localbillno']?.toString() ?? '',
-      };
+      // 对齐 smdcapp getMasterBean/getMasterBeanPC：组装主单
+      final Map<String, dynamic> master = _buildOrderMaster();
 
       if (useMaster) {
+        // 对齐 smdcapp getMasterBeanPC：PC 模式 master 内嵌 tmp 并同步金额字段
+        _attachPcTmp(master);
         // 主设备模式（对齐 smdcapp PCMasterBean）
         final Map<String, dynamic> pcMaster = <String, dynamic>{
           'tableMaster': master,
@@ -640,13 +913,112 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         );
       }
 
-      if (!mounted) return;
+      if (!mounted) return true;
       // 刷新订单数据
       _loadOrderDetail();
       TableEventBus.fireTableChanged();
+      return true;
     } catch (e) {
       if (mounted) Toast.show('操作失败：$e');
+      return false;
     }
+  }
+
+  /// 组装主单 MasterBean（对齐 smdcapp getMasterBean/getMasterBeanPC 公共字段）
+  ///
+  /// 金额取当前页面汇总（_payAmt/_dishAmt/_disAmt/_serviceAmt/_lowAmt），
+  /// 调用前应先执行 [_applyMemberPricing]。
+  /// 覆写项用于对齐 smdcapp 撤单/转菜等场景 getMasterBeanPC(…, 0.0, 0.0, 0.0, "") 的传参。
+  Map<String, dynamic> _buildOrderMaster({
+    double? amtOverride,
+    double? serviceamtOverride,
+    double? addamtOverride,
+    String? remarkOverride,
+  }) {
+    final Map<String, dynamic>? tmp =
+        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+
+    // 对齐 smdcapp: 计算 hangflag、addamt
+    int hangflag = 0;
+    double addamt = 0;
+    for (final Map<String, dynamic> item in _detailList) {
+      if (_toInt(item['hangflag']) == 1) hangflag = 1;
+      if ((item['combproductid']?.toString() ?? '').isEmpty) {
+        addamt += _toDouble(item['cookaddamt']);
+      }
+    }
+    if (addamtOverride != null) addamt = addamtOverride;
+
+    // sid/spid 从 store JSON 解析（SP 独立键为 putInt 写入，getString 会类型强转异常）
+    final String sid = UserHelper.getSidStr();
+    final String spid = UserHelper.getSpidStr();
+
+    // 对齐 smdcapp getMasterBean/getMasterBeanPC：tablestatus 等为主单必备字段，
+    // 缺失时服务端报“tablestatus属性不存在”
+    final String nowStr = _formatNow();
+    final String localbillno = tmp?['localbillno']?.toString() ?? '';
+    final int tmpBilltype = _toInt(tmp?['billtype']);
+    final String remark =
+        remarkOverride ?? tmp?['remark']?.toString() ?? widget.remark;
+    return <String, dynamic>{
+      'saleid': _saleid,
+      'tableid': widget.tableId.isNotEmpty ? widget.tableId : (tmp?['tableid']?.toString() ?? ''),
+      'tablename': widget.tableName,
+      'tablecode': widget.tableCode.isNotEmpty ? widget.tableCode : (tmp?['tablecode']?.toString() ?? ''),
+      'tablestatus': (tmp?['tablestatus'] ?? 2).toString(),
+      'billdate': tmp?['billdate']?.toString() ?? _openTime,
+      'id': _toInt(tmp?['id']),
+      'billtype': tmpBilltype == 0 ? 7 : tmpBilltype,
+      'lastbilltype': 7,
+      'billno': localbillno,
+      'amt': amtOverride ?? _payAmt,
+      'retailamt': _dishAmt,
+      'dscamt': _disAmt,
+      'serviceamt': serviceamtOverride ?? _serviceAmt,
+      'lowamt': _lowAmt,
+      'addamt': addamt,
+      'roundamt': 0,
+      'payment': amtOverride ?? _payAmt,
+      'hangflag': hangflag,
+      'status': 1,
+      'version': 180,
+      'androidoperflag': 1,
+      'cashid': UserHelper.getUserid(),
+      'updatetime': nowStr,
+      'tabletypeid': tmp?['tabletypeid']?.toString() ?? '',
+      'servicediscount': tmp?['servicediscount']?.toString() ?? '',
+      'sid': sid,
+      'spid': spid,
+      'remark': remark,
+      'personnum': tmp?['personnum']?.toString() ?? widget.persons.toString(),
+      'serverid': widget.serverId.isNotEmpty ? widget.serverId : (tmp?['serverid']?.toString() ?? ''),
+      'servername': _serverName,
+      'vipid': _member?.vipid ?? (tmp?['vipid']?.toString() ?? ''),
+      'vipno': _member?.vipno ?? (tmp?['vipno']?.toString() ?? ''),
+      'vipname': _member?.vipname ?? (tmp?['vipname']?.toString() ?? ''),
+      'localbillno': localbillno,
+    };
+  }
+
+  /// 主设备模式：master 内嵌 tmp 并同步金额字段（对齐 smdcapp getMasterBeanPC 的 tmp 处理）
+  void _attachPcTmp(Map<String, dynamic> master) {
+    final Map<String, dynamic>? tmp =
+        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final String localbillno = master['localbillno']?.toString() ?? '';
+    final Map<String, dynamic> tmpCopy =
+        Map<String, dynamic>.from(tmp ?? <String, dynamic>{});
+    tmpCopy['amt'] = master['amt'];
+    tmpCopy['serviceamt'] = master['serviceamt'];
+    tmpCopy['retailamt'] = master['retailamt'];
+    tmpCopy['addamt'] = master['addamt'];
+    tmpCopy['lowamt'] = master['lowamt'];
+    tmpCopy['dscamt'] = master['dscamt'];
+    tmpCopy['remark'] = master['remark'];
+    tmpCopy['lastbilltype'] = 7;
+    tmpCopy['updatetime'] = master['updatetime'];
+    tmpCopy['billno'] = localbillno;
+    tmpCopy['localbillno'] = localbillno;
+    master['tmp'] = tmpCopy;
   }
 
   /// 单品操作分发（对齐 smdcapp showSingleOperation when(type)）
@@ -666,6 +1038,9 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         break;
       case '赠送':
         _giveSingleDish(item);
+        break;
+      case '取消赠送':
+        _cancelGiveSingleDish(item);
         break;
       case '备注':
         _remarkSingleDish(item);
@@ -832,6 +1207,8 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     if (idx < 0) return;
     final double qty = _toDouble(item['qty']);
     _detailList[idx]['rrprice'] = newPrice;
+    // 对齐 smdcapp showChangePricePop：改价同步更新 sellprice，避免重算时被原价覆盖
+    _detailList[idx]['sellprice'] = newPrice;
     _detailList[idx]['rramt'] = newPrice * qty + _toDouble(item['cookaddamt']);
     _detailList[idx]['updateflag'] = 1;
     Toast.show('改价成功');
@@ -857,6 +1234,28 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     _detailList[idx]['rramt'] = 0;
     _detailList[idx]['updateflag'] = 1;
     Toast.show('赠送成功');
+    _postOrderUpdate();
+  }
+
+  // ─────── 单品取消赠送（已赠送菜品的逆向操作） ───────
+
+  Future<void> _cancelGiveSingleDish(Map<String, dynamic> item) async {
+    if (_toInt(item['presentflag']) != 1) {
+      Toast.show('该商品未赠送');
+      return;
+    }
+    final bool confirmed = await ConfirmDialog.show(
+      context,
+      content: '确定取消「${item['productname']}」的赠送吗？',
+    );
+    if (!confirmed || !mounted) return;
+    final int idx = _detailList.indexOf(item);
+    if (idx < 0) return;
+    _detailList[idx]['presentflag'] = 0;
+    _detailList[idx]['rrprice'] = _toDouble(item['sellprice']);
+    _calcDownMemberPrice(_detailList[idx], _member);
+    _detailList[idx]['updateflag'] = 1;
+    Toast.show('取消赠送成功');
     _postOrderUpdate();
   }
 
@@ -1041,18 +1440,16 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       Toast.show('请输入有效折扣');
       return;
     }
-    // 对齐 smdcapp: 每个可打折商品 rramt = rrprice * qty * discount/100
+    // 对齐 smdcapp: 每个可打折商品按折扣重算现价与金额。
+    // 先把现价重置为原价再重算，保证"不打折"(discount=100) 能取消已有折扣恢复原价。
     for (final Map<String, dynamic> item in _detailList) {
       if (_toInt(item['presentflag']) == 2) continue;
       if (_toInt(item['presentflag']) == 1) continue; // 赠送不打折
       if (_toInt(item['dscflag']) == 0) continue; // 不允许打折
-      final double rrprice = _toDouble(item['rrprice']);
-      final double qty = _toDouble(item['qty']);
-      final double cookaddamt = _toDouble(item['cookaddamt']);
-      _detailList[_detailList.indexOf(item)]['rramt'] =
-          rrprice * qty * discount / 100 + cookaddamt;
-      _detailList[_detailList.indexOf(item)]['discount'] = discount;
-      _detailList[_detailList.indexOf(item)]['updateflag'] = 1;
+      item['discount'] = discount;
+      item['rrprice'] = _toDouble(item['sellprice']);
+      _calcDownMemberPrice(item, _member);
+      item['updateflag'] = 1;
     }
     Toast.show('整单折扣成功');
     _postOrderUpdate();
@@ -1090,12 +1487,27 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       final Map<String, dynamic>? tmp =
           widget.tableJson?['tmp'] as Map<String, dynamic>?;
       if (useMaster) {
-        final Map<String, dynamic> pcMaster = <String, dynamic>{
-          'tableMasterTmpDto': widget.tableJson ?? <String, dynamic>{},
-        };
+        // 对齐 smdcapp TableDao.withdrawTable(pcAlive分支):
+        // masterBean = getMasterBeanPC(tableInfo, downPrice, 0.0, 0.0, 0.0, "")
+        //   → amt=已落单现价合计(不含服务费/低消), serviceamt/addamt=0
+        // tmp.cdflag=1、tmp.printcpdflag=0(printflag="-1"不打印)、tmp.remark=撤单备注，
+        // POST /api/table/TableWithdraw @Field("tablemaster") = MasterBean JSON（内嵌 tmp）
+        _applyMemberPricing();
+        final Map<String, dynamic> master = _buildOrderMaster(
+          amtOverride: _round2(_payAmt - _serviceAmt - _lowAmt),
+          serviceamtOverride: 0,
+          addamtOverride: 0,
+          remarkOverride: '',
+        );
+        _attachPcTmp(master);
+        final Map<String, dynamic> masterTmp =
+            master['tmp'] as Map<String, dynamic>;
+        masterTmp['cdflag'] = 1;
+        masterTmp['printcpdflag'] = 0;
+        masterTmp['withdrawmemo'] = '';
         await requestForm(
           HttpApi.pcWithdrawTable,
-          <String, dynamic>{'tablemaster': jsonEncode(pcMaster)},
+          <String, dynamic>{'tablemaster': jsonEncode(master)},
           masterDevice: true,
         );
       } else {
@@ -1175,11 +1587,253 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     }
   }
 
-  // ─────── 转菜（对齐 smdcapp TableChangeProduct） ───────
+  // ─────── 转菜（对齐 smdcapp OrderDetailActivity.changeDishes 整桌转菜） ───────
 
+  /// 获取转菜目标桌台（对齐 smdcapp ChangeDishesPopup：tablestatus="1,2" 已开台桌台，排除当前桌）
+  Future<List<Map<String, dynamic>>> _fetchZcTargetTables() async {
+    final bool useMaster = ConnectionManager.pcAlive;
+    final Map<String, dynamic> resp = useMaster
+        ? await requestForm(
+            HttpApi.pcTableInfoList,
+            <String, dynamic>{
+              'is_page': 0,
+              'page': 1,
+              'pagesize': 100,
+              'tablestatus': '1,2',
+              'stopflag': '0',
+            },
+            masterDevice: true,
+            showError: false,
+          )
+        : await requestForm(
+            HttpApi.tableInfoList,
+            <String, dynamic>{
+              'is_page': '0',
+              'page': '1',
+              'pagesize': '100',
+              'tablestatus': '1,2',
+              'stopflag': '0',
+            },
+            showError: false,
+          );
+    final dynamic data = resp['Data'] ?? resp['data'];
+    List<Map<String, dynamic>> list = <Map<String, dynamic>>[];
+    if (data is Map<String, dynamic>) {
+      final dynamic rows =
+          data['tableMasterTmpList'] ?? data['list'] ?? data['tableList'];
+      if (rows is List) {
+        list = rows.whereType<Map<String, dynamic>>().toList();
+      }
+    } else if (data is List) {
+      list = data.whereType<Map<String, dynamic>>().toList();
+    }
+    // 排除当前桌台与无有效 saleid 的桌台（转菜目标必须为已开台桌台）
+    return list.where((Map<String, dynamic> t) {
+      final Map<String, dynamic>? tmp = t['tmp'] as Map<String, dynamic>?;
+      final String tableid =
+          tmp?['tableid']?.toString() ?? t['tableid']?.toString() ?? '';
+      final String saleid = tmp?['saleid']?.toString() ?? '';
+      return tableid != widget.tableId &&
+          saleid.isNotEmpty &&
+          saleid != _saleid;
+    }).toList();
+  }
+
+  /// 解析明细行列表（深拷贝，避免污染源数据）
+  List<Map<String, dynamic>> _parseZcDetailRows(dynamic raw) {
+    if (raw is List) {
+      return raw
+          .whereType<Map<String, dynamic>>()
+          .map((Map<String, dynamic> e) => Map<String, dynamic>.from(e))
+          .toList();
+    }
+    return <Map<String, dynamic>>[];
+  }
+
+  /// 组装转入桌台主单 MasterBean（对齐 smdcapp getMasterBeanPC(newTable, downPrice,
+  /// minSalemoney, servermoney, addamt, "转入菜品")）
+  Map<String, dynamic> _buildZcTargetMaster({
+    required Map<String, dynamic> target,
+    required Map<String, dynamic> newTmp,
+    required List<Map<String, dynamic>> fastFoodBean,
+    required double servermoney,
+    required double minSalemoney,
+  }) {
+    // 汇总转入桌台合并后的明细金额（对齐 smdcapp ShoppingCartUtil.getDownPrice，
+    // 套餐明细行不统计汇总）
+    double rrAmt = 0;
+    double oAmt = 0;
+    double disAmt = 0;
+    double addamt = 0;
+    int hangflag = 0;
+    for (final Map<String, dynamic> b in fastFoodBean) {
+      final String combproductid = b['combproductid']?.toString() ?? '';
+      if (combproductid.isEmpty) {
+        addamt = _round2(addamt + _toDouble(b['cookaddamt']));
+      }
+      if (_toInt(b['hangflag']) == 1) hangflag = 1;
+      if (combproductid.isNotEmpty && (b['combid']?.toString() ?? '').isNotEmpty) {
+        continue;
+      }
+      final double itemO = b['oldrramt'] != null
+          ? _toDouble(b['oldrramt'])
+          : _round2(_toDouble(b['sellprice']) * _toDouble(b['qty']) +
+              _toDouble(b['combaddamt']));
+      final double itemR = _toDouble(b['rramt']);
+      oAmt = _round2(oAmt + itemO);
+      rrAmt = _round2(rrAmt + itemR);
+      disAmt = _round2(disAmt + (itemO - itemR));
+    }
+    // 对齐 smdcapp getMasterBeanPC：minSalemoney==0 时 amt=现价合计+服务费
+    final double amt = minSalemoney == 0
+        ? _round2(rrAmt + servermoney)
+        : _round2(minSalemoney + servermoney);
+
+    final String nowStr = _formatNow();
+    final String localbillno = newTmp['localbillno']?.toString() ?? '';
+    final int tmpBilltype = _toInt(newTmp['billtype']);
+    return <String, dynamic>{
+      'saleid': newTmp['saleid']?.toString() ?? '',
+      'tableid':
+          newTmp['tableid']?.toString() ?? target['tableid']?.toString() ?? '',
+      'tablename':
+          newTmp['tablename']?.toString() ?? target['name']?.toString() ?? '',
+      'tablecode':
+          newTmp['tablecode']?.toString() ?? target['code']?.toString() ?? '',
+      'tablestatus': (newTmp['tablestatus'] ?? 2).toString(),
+      'billdate': newTmp['billdate']?.toString() ?? '',
+      'id': _toInt(newTmp['id']),
+      'billtype': tmpBilltype == 0 ? 7 : tmpBilltype,
+      'lastbilltype': 7,
+      'billno': localbillno,
+      'amt': amt,
+      'retailamt': oAmt,
+      'dscamt': disAmt,
+      'serviceamt': servermoney,
+      'lowamt': minSalemoney,
+      'addamt': addamt,
+      'roundamt': 0,
+      'payment': amt,
+      'hangflag': hangflag,
+      'status': 1,
+      'version': 180,
+      'androidoperflag': 1,
+      'cashid': UserHelper.getUserid(),
+      'updatetime': nowStr,
+      'tabletypeid': newTmp['tabletypeid']?.toString() ?? '',
+      'sid': UserHelper.getSidStr(),
+      'spid': UserHelper.getSpidStr(),
+      'remark': '转入菜品',
+      'personnum': newTmp['personnum']?.toString() ?? '',
+      'serverid': newTmp['serverid']?.toString() ?? '',
+      'servername': newTmp['servername']?.toString() ?? '',
+      'vipid': newTmp['vipid']?.toString() ?? '',
+      'vipno': newTmp['vipno']?.toString() ?? '',
+      'vipname': newTmp['vipname']?.toString() ?? '',
+      'localbillno': localbillno,
+    };
+  }
+
+  /// 记录转菜数据（对齐 smdcapp OrderModel.transProMaster → /YttSvr/app/sale/transProMaster）
+  ///
+  /// [inMaster] 转入桌台主单，[newTmp] 转入桌台 tmp，[transList] 转出明细
+  Future<void> _postTransProMaster({
+    required Map<String, dynamic> inMaster,
+    required Map<String, dynamic> newTmp,
+    required List<Map<String, dynamic>> transList,
+  }) async {
+    final Map<String, dynamic>? oldTmp =
+        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final Map<String, dynamic> transMaster = <String, dynamic>{
+      'spid': inMaster['spid'],
+      'sid': inMaster['sid'],
+      'saleid': inMaster['saleid'],
+      'billdate': inMaster['billdate'],
+      'personnum': oldTmp?['personnum'],
+      'tableid': oldTmp?['tableid'],
+      'tablecode': oldTmp?['tablecode'],
+      'tablename': oldTmp?['tablename'],
+      'vipid': oldTmp?['vipid'],
+      'vipno': oldTmp?['vipno'],
+      'vipname': oldTmp?['vipname'],
+      'vipmobile': oldTmp?['vipmobile'],
+      'amt': oldTmp?['amt'],
+      'dscamt': inMaster['dscamt'],
+      'addamt': inMaster['addamt'],
+      'payment': inMaster['payment'],
+      'billtype': inMaster['billtype'],
+      'cashid': inMaster['cashid'],
+      'cashname': inMaster['cashid'],
+      'serverid': inMaster['serverid'],
+      'servername': inMaster['servername'],
+      'createtime': newTmp['createtime'],
+      'updatetime': newTmp['updatetime'],
+      'status': inMaster['status'],
+      'localbillno': inMaster['localbillno'],
+      'remark': inMaster['remark'],
+      'operid': UserHelper.getUserid(),
+      'opername': _operatorName,
+      'operamt': inMaster['payment'],
+      'opertime': inMaster['updatetime'],
+      'retailamt': inMaster['retailamt'],
+      'changeamt': 0.0,
+      'paytime': _formatNow(),
+      'qty': transList.length.toDouble(),
+      'newtableid': newTmp['tableid'],
+      'newtablename': newTmp['tablename'],
+      'newtablecode': newTmp['tablecode'],
+    };
+    // 对齐 smdcapp SaleTransDetail 字段（同名直传，combflag/opertype 转字符串）
+    const List<String> detailKeys = <String>[
+      'spid', 'sid', 'saleid', 'onlyid', 'productid', 'productcode',
+      'productno', 'productname', 'typeid', 'typename', 'unit', 'specid',
+      'spec', 'qty', 'subqty', 'sellprice', 'discount', 'rrprice', 'rramt',
+      'presentflag', 'presentprice', 'remark', 'combid', 'combgroupid',
+      'combproductid', 'operamt', 'saleductamt', 'hangflag', 'callflag',
+      'urgeflag', 'cooktext', 'cookaddamt', 'specpriceflag', 'bxxpxxflag',
+      'cxmbillid', 'salesid', 'salesname', 'operid', 'opername', 'createtime',
+      'seq', 'fornowid', 'operremark', 'costprice', 'opertime', 'jcmbillid',
+      'tpdishid', 'tpdishflag', 'tableid', 'mustflag', 'tpdishidzd',
+      'tpdscflag',
+    ];
+    final List<Map<String, dynamic>> transDetails =
+        transList.map((Map<String, dynamic> tt) {
+      final Map<String, dynamic> d = <String, dynamic>{
+        for (final String k in detailKeys) k: tt[k],
+      };
+      d['combflag'] = _toInt(tt['combflag']).toString();
+      d['opertype'] = (tt['opertype'] ?? 0).toString();
+      d['saleductamt'] = _toDouble(tt['saleductamt']);
+      return d;
+    }).toList();
+    await requestForm(
+      HttpApi.transProMaster,
+      <String, dynamic>{
+        'transmaster': jsonEncode(transMaster),
+        'transdetail': jsonEncode(transDetails),
+        'newtableid': newTmp['tableid']?.toString() ?? '',
+        'newtablecode': newTmp['tablecode']?.toString() ?? '',
+        'newtablename': newTmp['tablename']?.toString() ?? '',
+      },
+      showError: false,
+    );
+  }
+
+  /// 转菜（整桌转出，对齐 smdcapp changeDishes allDishes 分支）
+  ///
+  /// 主设备：组装 TableChangeProductRequestDto{inMasterTmpParmDto(新桌PCMasterBean),
+  ///   outMasterTmpParmDto(老桌PCMasterBean), changelist(转出明细 dishzcflag=1/lssubqty=qty),
+  ///   printFlag} → POST /api/table/TableChangeProduct（对齐 OrderModel.pcBatchPostTableInfo）
+  /// 云服务：拉取新桌明细合并转出菜（对齐 yunAddDish）→ transProMaster 记录 →
+  ///   upSaleMasterTmp 上传新桌（对齐 OrderModel.postInfo 云分支）→
+  ///   老桌上传转出菜 deleteflag=1（对齐 zcPostInfo）
   Future<void> _changeDishToTable() async {
     try {
-      final List<Map<String, dynamic>> tables = await TableOpsHelper.fetchFreeTables();
+      if (_detailList.isEmpty) {
+        Toast.show('无可转菜品');
+        return;
+      }
+      final List<Map<String, dynamic>> tables = await _fetchZcTargetTables();
       if (!mounted) return;
       if (tables.isEmpty) {
         Toast.show('没有可用的目标桌台');
@@ -1188,19 +1842,203 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       final Map<String, dynamic>? selected =
           await TableSelectSheet.show(context, tables: tables, title: '选择转入桌台');
       if (selected == null || !mounted) return;
-      final String newTableId = selected['tableid']?.toString() ?? selected['id']?.toString() ?? '';
-      if (newTableId.isEmpty) return;
-      // 对齐 smdcapp: 主设备调用 TableChangeProduct 转菜
-      final Map<String, dynamic> changeData = <String, dynamic>{
-        'saleid': _saleid,
-        'tableid': widget.tableId,
-        'newtableid': newTableId,
-      };
-      await requestForm(
-        HttpApi.pcTableChangeProduct,
-        <String, dynamic>{'data': jsonEncode(changeData)},
-        masterDevice: true,
+      final Map<String, dynamic>? newTmp =
+          selected['tmp'] as Map<String, dynamic>?;
+      final String newSaleid = newTmp?['saleid']?.toString() ?? '';
+      final String newTableId = newTmp?['tableid']?.toString() ??
+          selected['tableid']?.toString() ??
+          '';
+      if (newSaleid.isEmpty || newTableId.isEmpty || newSaleid == _saleid) {
+        Toast.show('目标桌台信息错误');
+        return;
+      }
+
+      // 对齐 smdcapp changeDishes：转出明细 saleid=新桌、updateflag=1、remark=转菜，
+      // prnretflag 取转菜打印开关（MMKV Constant.DISHES_ZC）
+      final bool zcPrint = SpUtil.getBool('DISHES_ZC') ?? false;
+      final int prnretflag = zcPrint ? 1 : 0;
+      final List<Map<String, dynamic>> returnList = <Map<String, dynamic>>[];
+      for (final Map<String, dynamic> item in _detailList) {
+        final Map<String, dynamic> b = Map<String, dynamic>.from(item);
+        b['prnretflag'] = prnretflag;
+        b['updateflag'] = 1;
+        b['saleid'] = newSaleid;
+        b['remark'] = '转菜';
+        b['operremark'] = '转菜';
+        for (final String key in <String>['cookList', 'eatlist']) {
+          final dynamic subs = b[key];
+          if (subs is List) {
+            for (final dynamic sub in subs) {
+              if (sub is Map) sub['saleid'] = newSaleid;
+            }
+          }
+        }
+        returnList.add(b);
+      }
+
+      final bool useMaster = ConnectionManager.pcAlive;
+      // 拉取新桌台已落单明细并合并转入菜品（对齐 getPcAddDish / yunAddDish）
+      List<Map<String, dynamic>> newDetails = <Map<String, dynamic>>[];
+      double servermoney = 0;
+      double minSalemoney = 0;
+      if (useMaster) {
+        final Map<String, dynamic> resp = await requestForm(
+          HttpApi.pcGetTableDetailList,
+          <String, dynamic>{
+            'tablemaster': jsonEncode(<String, dynamic>{'tmp': newTmp}),
+          },
+          masterDevice: true,
+        );
+        final dynamic data = resp['Data'] ?? resp['data'];
+        if (data is Map<String, dynamic>) {
+          newDetails = _parseZcDetailRows(data['detailList']);
+          servermoney = _toDouble(data['serviceMoney'] ?? data['serviceamt']);
+          minSalemoney = _toDouble(data['minSalemoney'] ?? data['lowamt']);
+        }
+      } else {
+        final Map<String, dynamic> resp = await requestForm(
+          HttpApi.getSaleTmpDetail,
+          <String, dynamic>{'saleid': newSaleid},
+        );
+        final dynamic data = resp['data'] ?? resp['Data'];
+        if (data is Map<String, dynamic>) {
+          newDetails = _parseZcDetailRows(data['detailList']);
+          servermoney = _toDouble(data['serviceMoney'] ?? data['serviceamt']);
+          minSalemoney = _toDouble(data['minSalemoney'] ?? data['lowamt']);
+        }
+        // 对齐 smdcapp yunAddDish：转入菜 seq=新桌最大seq+1
+        int maxSeq = 0;
+        for (final Map<String, dynamic> d in newDetails) {
+          if (_toInt(d['seq']) > maxSeq) maxSeq = _toInt(d['seq']);
+        }
+        for (final Map<String, dynamic> b in returnList) {
+          b['seq'] = maxSeq + 1;
+          b['updateflag'] = 1;
+        }
+      }
+      if (!mounted) return;
+      final List<Map<String, dynamic>> fastFoodBean = <Map<String, dynamic>>[
+        ...newDetails,
+        ...returnList,
+      ];
+      if (fastFoodBean.isEmpty) {
+        Toast.show('获取明细数据失败，请返回桌台重新进入');
+        return;
+      }
+
+      final Map<String, dynamic> inMaster = _buildZcTargetMaster(
+        target: selected,
+        newTmp: newTmp ?? <String, dynamic>{},
+        fastFoodBean: fastFoodBean,
+        servermoney: servermoney,
+        minSalemoney: minSalemoney,
       );
+
+      if (useMaster) {
+        // 对齐 smdcapp pcBatchPostTableInfo：changelist 明细 dishzcflag=1、lssubqty=qty
+        // （returnList 与 fastFoodBean 共享对象，序列化后两处同时携带，与 smdcapp 一致）
+        for (final Map<String, dynamic> b in returnList) {
+          b['dishzcflag'] = 1;
+          b['lssubqty'] = b['qty'];
+        }
+        // 新桌 PCMasterBean：master 内嵌 tmp（对齐 batchPcZc：printcpdflag=1、
+        // roundamt、tablestatus==1 时置 2）
+        final Map<String, dynamic> inTmp =
+            Map<String, dynamic>.from(newTmp ?? <String, dynamic>{});
+        inTmp['amt'] = inMaster['amt'];
+        inTmp['serviceamt'] = inMaster['serviceamt'];
+        inTmp['retailamt'] = inMaster['retailamt'];
+        inTmp['lastbilltype'] = 7;
+        inTmp['updatetime'] = inMaster['updatetime'];
+        inTmp['remark'] = '转入菜品';
+        inTmp['printcpdflag'] = 1;
+        inTmp['roundamt'] = 0;
+        if (_toInt(inTmp['tablestatus']) == 1) inTmp['tablestatus'] = 2;
+        inMaster['tmp'] = inTmp;
+
+        // 老桌 PCMasterBean：整单转出后剩余菜品为空、金额归 0（对齐 getZcOutDishes）
+        final Map<String, dynamic> outMaster = _buildOrderMaster(
+          amtOverride: 0,
+          serviceamtOverride: 0,
+          addamtOverride: 0,
+          remarkOverride: '',
+        );
+        outMaster['retailamt'] = 0;
+        outMaster['dscamt'] = 0;
+        outMaster['lowamt'] = 0;
+        outMaster['payment'] = 0;
+        outMaster['hangflag'] = 0;
+        _attachPcTmp(outMaster);
+
+        // 对齐 smdcapp TableChangeProductRequestDto →
+        // POST /api/table/TableChangeProduct @Field("data")=json
+        final Map<String, dynamic> changeDto = <String, dynamic>{
+          'inMasterTmpParmDto': <String, dynamic>{
+            'tableMaster': inMaster,
+            'detailList': fastFoodBean,
+          },
+          'outMasterTmpParmDto': <String, dynamic>{
+            'tableMaster': outMaster,
+            'detailList': <Map<String, dynamic>>[],
+          },
+          'changelist': returnList,
+          'printFlag': zcPrint ? 1 : 0,
+        };
+        await requestForm(
+          HttpApi.pcTableChangeProduct,
+          <String, dynamic>{'data': jsonEncode(changeDto)},
+          masterDevice: true,
+        );
+        // 对齐 smdcapp pcBatchPostTableInfo 成功后 transProMaster 记录转菜数据
+        // （云端接口，失败不影响转菜结果）
+        try {
+          await _postTransProMaster(
+            inMaster: inMaster,
+            newTmp: newTmp ?? <String, dynamic>{},
+            transList: returnList,
+          );
+        } catch (_) {}
+      } else {
+        // 云服务（对齐 smdcapp OrderModel.postInfo 云分支）：
+        // 先 transProMaster 记录转菜，成功后再上传新桌主单与明细
+        await _postTransProMaster(
+          inMaster: inMaster,
+          newTmp: newTmp ?? <String, dynamic>{},
+          transList: returnList,
+        );
+        await OrderRepository.placeOrder(
+          master: jsonEncode(inMaster),
+          detail: jsonEncode(fastFoodBean),
+          printType: zcPrint ? '21' : '-1',
+          printAllType: 1,
+        );
+        // 老桌台更新（对齐 smdcapp zcPostInfo）：整单转出后剩余为空，
+        // 转出明细带 deleteflag=1 一并上传
+        final List<Map<String, dynamic>> oldFastFood =
+            returnList.map((Map<String, dynamic> b) {
+          final Map<String, dynamic> c = Map<String, dynamic>.from(b);
+          c['updateflag'] = 1;
+          c['deleteflag'] = 1;
+          return c;
+        }).toList();
+        final Map<String, dynamic> outMaster = _buildOrderMaster(
+          amtOverride: 0,
+          serviceamtOverride: 0,
+          addamtOverride: 0,
+          remarkOverride: '',
+        );
+        outMaster['retailamt'] = 0;
+        outMaster['dscamt'] = 0;
+        outMaster['lowamt'] = 0;
+        outMaster['payment'] = 0;
+        outMaster['hangflag'] = 0;
+        await OrderRepository.placeOrder(
+          master: jsonEncode(outMaster),
+          detail: jsonEncode(oldFastFood),
+          printType: '',
+          printAllType: 1,
+        );
+      }
       if (!mounted) return;
       Toast.show('转菜成功');
       TableEventBus.fireTableChanged();
@@ -1351,18 +2189,30 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
 
   // ─────── 预打（对齐 smdcapp DetailOperationPopup.NAME_YD） ───────
 
+  /// 预打流程（对齐 smdcapp NAME_YD → updateMasterTmpPrePrintFlag + postInfo("8")）：
+  ///
+  /// 1. 更新预打印标识（对齐 OrderModel.updateMasterTmpPrePrintFlag）
+  /// 2. 触发预打单打印：
+  ///    - 主设备：对齐 OrderModel.ydPC → POST /api/print/RePrint，
+  ///      tablemaster = PCMasterBean JSON（tableMaster + detailList）
+  ///    - 云服务：对齐 postInfo("8") 云分支 → upSaleMasterTmp printtype=8 printalltype=1，
+  ///      再推送云打印任务（对齐 sendPrint → printMsgNotice，预打单 opertype=8）
   Future<void> _prePrint() async {
+    if (_detailList.isEmpty) {
+      Toast.show('订单明细为空');
+      return;
+    }
     try {
       final bool useMaster = ConnectionManager.pcAlive;
-      // 对齐 smdcapp: 更新预打印标识 tablestatus=5
+      // 1. 更新预打印标识
       if (useMaster) {
         await requestForm(
           HttpApi.pcUpdateMasterTmpPrePrintFlag,
           <String, dynamic>{
             'saleid': _saleid,
             'preprintflag': '1',
-            'spid': SpUtil.getString('spid') ?? '',
-            'sid': SpUtil.getString('sid') ?? '',
+            'spid': UserHelper.getSpidStr(),
+            'sid': UserHelper.getSidStr(),
           },
           masterDevice: true,
         );
@@ -1370,14 +2220,47 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         await requestForm(HttpApi.updateMasterTmpPrePrintFlag, <String, dynamic>{
           'saleid': _saleid,
           'preprintflag': '1',
-          'spid': SpUtil.getString('spid') ?? '',
-          'sid': SpUtil.getString('sid') ?? '',
+          'spid': UserHelper.getSpidStr(),
+          'sid': UserHelper.getSidStr(),
         });
       }
       if (!mounted) return;
-      // 对齐 smdcapp: 预打通过 postInfo("8") 上传
-      _postOrderUpdate(printtype: '8');
-      Toast.show('预打成功');
+
+      // 2. 触发预打单打印
+      final Map<String, dynamic>? tmp =
+          widget.tableJson?['tmp'] as Map<String, dynamic>?;
+      final String billno = tmp?['localbillno']?.toString() ?? '';
+      bool printed;
+      if (useMaster) {
+        // 对齐 smdcapp ydPC：组装 PCMasterBean 后调 /api/print/RePrint，
+        // master.tmp.printcpdflag=1、sendprintflag="1"（对齐 postInfo("8", isPcYD=true)）
+        _applyMemberPricing();
+        final Map<String, dynamic> master = _buildOrderMaster();
+        _attachPcTmp(master);
+        final Map<String, dynamic> masterTmp =
+            master['tmp'] as Map<String, dynamic>;
+        masterTmp['printcpdflag'] = 1;
+        masterTmp['sendprintflag'] = '1';
+        final Map<String, dynamic> pcMaster = <String, dynamic>{
+          'tableMaster': master,
+          'detailList': _detailList,
+        };
+        printed = await PrintService.instance.prePrint(
+          saleid: _saleid,
+          billno: billno,
+          pcMasterJson: jsonEncode(pcMaster),
+        );
+      } else {
+        // 对齐 smdcapp 云服务 postInfo("8")：printtype=8 上传主单与明细触发后台预打单
+        final bool uploaded = await _postOrderUpdate(printtype: '8');
+        printed = uploaded &&
+            await PrintService.instance.prePrint(
+              saleid: _saleid,
+              billno: billno,
+            );
+      }
+      if (!mounted) return;
+      Toast.show(printed ? '预打成功' : '预打失败');
     } catch (_) {
       if (mounted) Toast.show('预打失败');
     }
@@ -1393,8 +2276,8 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
           HttpApi.pcPrintKDInfo,
           <String, dynamic>{
             'saleid': _saleid,
-            'spid': SpUtil.getString('spid') ?? '',
-            'sid': SpUtil.getString('sid') ?? '',
+            'spid': UserHelper.getSpidStr(),
+            'sid': UserHelper.getSidStr(),
           },
           masterDevice: true,
         );
@@ -1402,8 +2285,8 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         await requestForm(HttpApi.restPrint, <String, dynamic>{
           'saleid': _saleid,
           'printtype': '15', // 客单
-          'spid': SpUtil.getString('spid') ?? '',
-          'sid': SpUtil.getString('sid') ?? '',
+          'spid': UserHelper.getSpidStr(),
+          'sid': UserHelper.getSidStr(),
         });
       }
       if (!mounted) return;
@@ -1795,10 +2678,8 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     final Color textColor = isDark ? Colors.white : const Color(0xFF1D2129);
     final Color subColor = isDark ? const Color(0xFFB8B8B8) : const Color(0xFF86909C);
 
-    // 有效商品数（非退菜）
-    final List<Map<String, dynamic>> validItems = _detailList
-        .where((Map<String, dynamic> e) => _toInt(e['presentflag']) != 2)
-        .toList();
+    // 展示列表含退菜明细（负数量行），保证退菜后能看到一行负数记录
+    final List<Map<String, dynamic>> validItems = _displayList;
     final int totalCount = validItems.length;
 
     // 收起时只显示前3条（对齐 smdcapp dp2px(70)*3 限高）
@@ -1998,7 +2879,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
 
     final bool isReturned = presentflag == 2;
 
-    return InkWell(
+    final Widget mainRow = InkWell(
       onTap: () => _showItemOperation(item),
       borderRadius: BorderRadius.circular(8),
       child: Container(
@@ -2038,14 +2919,33 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                     ),
                   ),
                 ),
-                // 价格
-                Text(
-                  '¥${_formatAmt(rrprice)}',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: isReturned ? const Color(0xFFC9CDD4) : textColor,
-                    decoration: isReturned ? TextDecoration.lineThrough : null,
-                  ),
+                // 价格（会员价/折扣低于原价时展示划线原价，对齐 smdcapp getPriceText）
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Text(
+                      '¥${_formatAmt(rrprice)}',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: isReturned ? const Color(0xFFC9CDD4) : textColor,
+                        decoration: isReturned ? TextDecoration.lineThrough : null,
+                      ),
+                    ),
+                    if (!isReturned &&
+                        _toDouble(item['sellprice']) > 0 &&
+                        _toDouble(item['sellprice']) > rrprice)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 4),
+                        child: Text(
+                          '¥${_formatAmt(_toDouble(item['sellprice']))}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF9C9C9C),
+                            decoration: TextDecoration.lineThrough,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
                 const SizedBox(width: 14),
                 // 数量
@@ -2074,6 +2974,98 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         ),
       ),
     );
+    if (_toInt(item['combflag']) != 1) {
+      return mainRow;
+    }
+    // 套餐主行：明细子行展示在主行下方（对齐 smdcapp rvInfo.models = bean.itemList）
+    final List<Map<String, dynamic>> children =
+        _combChildrenMap[item['onlyid']?.toString() ?? ''] ??
+            const <Map<String, dynamic>>[];
+    if (children.isEmpty) {
+      return mainRow;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        mainRow,
+        for (final Map<String, dynamic> child in children)
+          _buildCombChildRow(child, item, isDark),
+      ],
+    );
+  }
+
+  /// 套餐明细子行（对齐 smdcapp dishes_item_set_meal_down：名称(规格) | ￥cookaddamt | x数量，12sp 灰色缩进）
+  Widget _buildCombChildRow(
+      Map<String, dynamic> child, Map<String, dynamic> parent, bool isDark) {
+    final String name = child['productname']?.toString() ?? '';
+    final String spec = child['spec']?.toString() ?? '';
+    final double qty = _toDouble(child['qty']);
+    final double cookaddamt = _toDouble(child['cookaddamt']);
+    // 赠送/退菜状态与套餐主行同步（对齐 smdcapp CombHelper: child.presentflag = item.presentflag）
+    final int presentflag = _toInt(parent['presentflag']);
+    final bool isReturned = presentflag == 2;
+    final Color grayColor =
+        isReturned ? const Color(0xFFC9CDD4) : const Color(0xFF86909C);
+
+    // 做法/备注（对齐 smdcapp tvSku：cooktext，备注：remark）
+    final String cooktext = child['cooktext']?.toString() ?? '';
+    final String remark = child['remark']?.toString() ?? '';
+    final List<String> skuParts = <String>[
+      if (cooktext.isNotEmpty) cooktext,
+      if (remark.isNotEmpty) '备注：$remark',
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 16, right: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  spec.isNotEmpty ? '$name($spec)' : name,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: grayColor,
+                    decoration:
+                        isReturned ? TextDecoration.lineThrough : null,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Text(
+                '¥${_formatAmt(cookaddamt)}',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: grayColor,
+                  decoration:
+                      isReturned ? TextDecoration.lineThrough : null,
+                ),
+              ),
+              const SizedBox(width: 14),
+              SizedBox(
+                width: 38,
+                child: Text(
+                  'x${_formatQty(qty)}',
+                  style: TextStyle(fontSize: 12, color: grayColor),
+                  textAlign: TextAlign.right,
+                ),
+              ),
+            ],
+          ),
+          if (skuParts.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2, left: 2),
+              child: Text(
+                skuParts.join('，'),
+                style: TextStyle(fontSize: 11, color: grayColor),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   /// 单品操作弹窗（对齐 smdcapp showSingleOperation → OperationPopup）
@@ -2094,6 +3086,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       backgroundColor: Colors.transparent,
       builder: (_) => _SingleItemSheet(
         itemName: name,
+        isGiven: presentflag == 1,
         onAction: (String action) {
           NavigatorUtils.goBack(context);
           _handleSingleItemAction(action, item);
@@ -2142,14 +3135,9 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     );
   }
 
-  /// 订单信息卡片（对齐 smdcapp 订单信息 CardView：开台时间/服务员/最后下单/点菜员）
-  /// 服务员行受 setting_ShowWaiter 控制，点菜员行受 setting_show_display_waiter 控制
+  /// 订单信息卡片（对齐 smdcapp 订单信息 CardView：开台时间/服务员/最后下单/操作人，固定四行无条件展示）
   Widget _buildOrderInfoCard(bool isDark) {
     final Color lineColor = isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF5F6F8);
-    // 对齐 smdcapp OrderDetailActivity: isShowWaiter() && !salesname.isNullOrEmpty()
-    final bool showWaiter = (SpUtil.getBool('setting_ShowWaiter') ?? false) && _serverName.isNotEmpty;
-    // 对齐 smdcapp: isDisplayWaiter() && !opername.isNullOrEmpty()
-    final bool showOper = (SpUtil.getBool('setting_show_display_waiter') ?? false) && _operatorName.isNotEmpty;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -2160,12 +3148,12 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
           _sectionTitle('订单信息', isDark),
           const SizedBox(height: 4),
           _infoRow(Icons.access_time_outlined, '开台时间', _openTime, isDark, lineColor),
-          if (showWaiter)
-            _infoRow(Icons.person_outline, '服务员', _serverName, isDark, lineColor),
-          _infoRow(Icons.receipt_outlined, '最后下单', _lastOrderTime, isDark, lineColor,
-              isLast: !showOper),
-          if (showOper)
-            _infoRow(Icons.badge_outlined, '点菜员', _operatorName, isDark, lineColor, isLast: true),
+          // 对齐 smdcapp initTabInfo: tvTableWaiter = "服务员：" + tmp.servername
+          _infoRow(Icons.person_outline, '服务员', _serverName, isDark, lineColor),
+          _infoRow(Icons.receipt_outlined, '最后下单', _lastOrderTime, isDark, lineColor),
+          // 对齐 smdcapp initTabInfo: tvOperationName = "操作人：" + SpUtils.getName()
+          _infoRow(Icons.badge_outlined, '操作人', _operatorName, isDark, lineColor,
+              isLast: true),
         ],
       ),
     );
@@ -2185,14 +3173,16 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                 label,
                 style: const TextStyle(fontSize: 13, color: Color(0xFF86909C)),
               ),
-              const Spacer(),
-              Flexible(
+              const SizedBox(width: 12),
+              // 值占满剩余宽度右对齐，避免 Spacer 平分空间导致时间被省略号截断
+              Expanded(
                 child: Text(
                   value.isEmpty ? '--' : value,
                   style: TextStyle(
                     fontSize: 13,
                     color: isDark ? Colors.white : const Color(0xFF1D2129),
                   ),
+                  textAlign: TextAlign.right,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -2413,15 +3403,18 @@ class _DetailOperationSheet extends StatelessWidget {
         top: false,
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            // 拖拽指示条
-            Container(
-              margin: const EdgeInsets.only(top: 10),
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: const Color(0xFFE5E6EB),
-                borderRadius: BorderRadius.circular(2),
+            // 拖拽指示条（保持居中）
+            Center(
+              child: Container(
+                margin: const EdgeInsets.only(top: 10),
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE5E6EB),
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
             // 标题栏
@@ -2515,10 +3508,17 @@ class _OpItem {
 
 /// 单品操作底部弹窗（对齐 smdcapp OperationPopup 单品操作菜单）
 class _SingleItemSheet extends StatelessWidget {
-  const _SingleItemSheet({required this.itemName, required this.onAction});
+  const _SingleItemSheet({
+    required this.itemName,
+    required this.onAction,
+    this.isGiven = false,
+  });
 
   final String itemName;
   final ValueChanged<String> onAction;
+
+  /// 当前菜品是否已赠送（已赠送时"赠送"显示为"取消赠送"）
+  final bool isGiven;
 
   static const List<_OpItem> _actions = <_OpItem>[
     _OpItem('退菜', Icons.undo),
@@ -2531,6 +3531,12 @@ class _SingleItemSheet extends StatelessWidget {
     _OpItem('划菜', Icons.check_circle_outline),
   ];
 
+  /// 已赠送时把"赠送"替换为"取消赠送"
+  List<_OpItem> get _effectiveActions => _actions
+      .map((_OpItem e) =>
+          (isGiven && e.name == '赠送') ? const _OpItem('取消赠送', Icons.card_giftcard_outlined) : e)
+      .toList();
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -2542,15 +3548,18 @@ class _SingleItemSheet extends StatelessWidget {
         top: false,
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            // 拖拽指示条
-            Container(
-              margin: const EdgeInsets.only(top: 10),
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: const Color(0xFFE5E6EB),
-                borderRadius: BorderRadius.circular(2),
+            // 拖拽指示条（保持居中）
+            Center(
+              child: Container(
+                margin: const EdgeInsets.only(top: 10),
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE5E6EB),
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
             Padding(
@@ -2579,7 +3588,7 @@ class _SingleItemSheet extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(16, 2, 16, 16),
               child: Wrap(
                 runSpacing: 14,
-                children: _actions
+                children: _effectiveActions
                     .map((_OpItem item) => SizedBox(
                           width: (MediaQuery.of(context).size.width - 32) / 4,
                           child: InkWell(

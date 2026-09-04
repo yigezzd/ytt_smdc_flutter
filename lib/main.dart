@@ -9,6 +9,7 @@ import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/routers/not_found_page.dart';
 import 'package:flutter_deer/routers/routers.dart';
 import 'package:flutter_deer/setting/provider/theme_provider.dart';
+import 'package:flutter_deer/util/device_utils.dart';
 import 'package:flutter_deer/util/file_log_writer.dart';
 import 'package:flutter_deer/util/handle_error_utils.dart';
 import 'package:flutter_deer/util/log_utils.dart';
@@ -42,6 +43,11 @@ Future<void> main() async {
     /// 日志系统初始化（对齐 smdcapp JsonWriter.init + RecordsOrderLogModel）
     await FileLogWriter.instance.init();
     await OrderLogUtils.instance.init();
+
+    /// 设备信息初始化（对齐 smdcapp DeviceUtil：供公共参数 machserial 使用）
+    try {
+      await Device.initDeviceInfo();
+    } catch (_) {}
 
     /// 1.22 预览功能: 在输入频率与显示刷新率不匹配情况下提供平滑的滚动效果
     // GestureBinding.instance?.resamplingEnabled = true;

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:sp_util/sp_util.dart';
@@ -20,6 +22,27 @@ class ConnectionManager {
 
   /// 主设备是否可达（内存态，登录后由探活接口设置）
   static bool pcAlive = false;
+
+  static final StreamController<void> _masterDeviceLostController =
+      StreamController<void>.broadcast();
+
+  /// 主设备连接丢失事件流（对齐 smdcapp GlobalEventListener → EventBus.post(NetModeEvent)）
+  ///
+  /// 运行期间主设备接口请求发生网络层失败时广播，桌台页订阅后弹出连接失败提示弹窗。
+  static Stream<void> get onMasterDeviceLost => _masterDeviceLostController.stream;
+
+  /// 标记主设备连接丢失（对齐 smdcapp GlobalEventListener.callFailed → post NetModeEvent）
+  ///
+  /// 仅当 [pcAlive] 由 true 翻转为 false 时广播一次，避免并发请求重复触发。
+  static void notifyMasterDeviceLost() {
+    if (!pcAlive) {
+      return;
+    }
+    pcAlive = false;
+    if (!_masterDeviceLostController.isClosed) {
+      _masterDeviceLostController.add(null);
+    }
+  }
 
   /// 网络连接模式：1=直连主设备 2=云服务
   /// （暂不检测离线状态，后续可结合 connectivity_plus 返回 0=离线）

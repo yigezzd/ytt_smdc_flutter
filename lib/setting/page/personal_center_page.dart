@@ -252,8 +252,24 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
           'seq': 1,
         },
       );
-      final String retmsg = result['retmsg']?.toString() ?? '补单成功';
-      Toast.show(retmsg);
+      // 解析逐条结果（对齐 smdcapp PersonalCenterActivity: retcode==0 才算成功），
+      // 不能仅凭顶层 retcode 判成功，否则补单实际失败也会提示成功
+      final dynamic data = result['data'] ?? result['Data'];
+      bool ok = true;
+      String retmsg = result['retmsg']?.toString() ?? '';
+      if (data is List && data.isNotEmpty && data[0] is Map<String, dynamic>) {
+        final Map<String, dynamic> first = data[0] as Map<String, dynamic>;
+        ok = first['retcode'] == 0;
+        final String rmsg = first['retmsg']?.toString() ?? '';
+        if (rmsg.isNotEmpty) {
+          retmsg = rmsg;
+        }
+      }
+      if (ok) {
+        Toast.show(retmsg.isNotEmpty ? retmsg : '补单成功');
+      } else {
+        Toast.show(retmsg.isNotEmpty ? '补单失败：$retmsg' : '补单失败');
+      }
     } catch (_) {
       // 拦截器已统一提示错误
     }

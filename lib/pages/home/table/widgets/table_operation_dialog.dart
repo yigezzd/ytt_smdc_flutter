@@ -608,6 +608,8 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
   @override
   Widget build(BuildContext context) {
     final String title = '${widget.table.name}-待下单';
+    // 对齐 smdcapp ConstantSetKey.QY_ST（ClockTableFlag）：启用锁台参数才显示锁台按钮
+    final bool lockEnabled = (SpUtil.getString('ClockTableFlag') ?? '0') == '1';
 
     return Material(
       color: Colors.transparent,
@@ -667,11 +669,14 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
                     onTap: _onCancelTable,
                   ),
                   const SizedBox(width: 10),
-                  _buildGridItem(
-                    icon: Icons.lock_outline,
-                    label: '锁台',
-                    onTap: _onLockTable,
-                  ),
+                  if (lockEnabled)
+                    _buildGridItem(
+                      icon: Icons.lock_outline,
+                      label: '锁台',
+                      onTap: _onLockTable,
+                    )
+                  else //建议真机验证点：主设备连接状态下，对已下过套餐的桌台进入订单确认页，确认"已下单"tab 显示套餐主行+明细子行；顺带确认订单详情页展示正常。
+                    _buildGridPlaceholder(),
                 ],
               ),
               const SizedBox(height: 5),

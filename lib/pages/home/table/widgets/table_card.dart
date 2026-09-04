@@ -41,6 +41,28 @@ class _TableCardState extends State<TableCard> {
     setState(() => _pressed = value);
   }
 
+  /// 时间单位小徽章（h / m），带浅色圆角背景区分数字
+  Widget _unitBadge(String unit, bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 2.5, vertical: 0.5),
+      decoration: BoxDecoration(
+        color: isDark
+            ? Colours.dark_text_gray.withValues(alpha: 0.15)
+            : const Color(0xFFE5E6EB),
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Text(
+        unit,
+        style: TextStyle(
+          fontSize: 9,
+          fontWeight: FontWeight.w600,
+          color: isDark ? Colours.dark_text_gray : const Color(0xFF86909C),
+          height: 1.2,
+        ),
+      ),
+    );
+  }
+
   /// 角标小标签（锁台/挂单/预打）
   Widget _miniTag(String text, Color color) {
     return Container(
@@ -76,7 +98,7 @@ class _TableCardState extends State<TableCard> {
         : statusColor;
 
     final String? amountText = table.amountText;
-    final String? timeText = table.timeText;
+    final (int, int, bool)? timeParts = table.timeParts;
 
     // 卡片背景：非空闲带状态色柔和渐变，空闲纯净白
     final Color cardBg = isDark ? Colours.dark_material_bg : Colors.white;
@@ -190,7 +212,7 @@ class _TableCardState extends State<TableCard> {
                             ),
                     ),
                     const Spacer(),
-                    // 人数 / 开台时间
+                    // 人数 / 开台时长
                     SizedBox(
                       height: 17,
                       child: Row(
@@ -210,7 +232,7 @@ class _TableCardState extends State<TableCard> {
                               ),
                             ),
                           ],
-                          if (timeText != null) ...<Widget>[
+                          if (timeParts != null) ...<Widget>[
                             const SizedBox(width: 7),
                             Icon(
                               Icons.schedule_rounded,
@@ -218,11 +240,26 @@ class _TableCardState extends State<TableCard> {
                               color: isDark ? Colours.dark_text_gray : const Color(0xFF86909C),
                             ),
                             const SizedBox(width: 2),
-                            Text(
-                              timeText,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: isDark ? Colours.dark_text_gray : const Color(0xFF86909C),
+                            Text.rich(
+                              TextSpan(
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: isDark ? Colours.dark_text_gray : const Color(0xFF86909C),
+                                ),
+                                children: <InlineSpan>[
+                                  TextSpan(text: '${timeParts.$1}'),
+                                  WidgetSpan(
+                                    alignment: PlaceholderAlignment.middle,
+                                    child: _unitBadge('h', isDark),
+                                  ),
+                                  if (timeParts.$3) ...<InlineSpan>[
+                                    TextSpan(text: '${timeParts.$2}'),
+                                    WidgetSpan(
+                                      alignment: PlaceholderAlignment.middle,
+                                      child: _unitBadge('m', isDark),
+                                    ),
+                                  ],
+                                ],
                               ),
                             ),
                           ],

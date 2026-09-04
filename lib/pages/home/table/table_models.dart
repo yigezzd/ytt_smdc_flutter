@@ -359,8 +359,29 @@ class TableInfo {
     return amt.toStringAsFixed(2);
   }
 
-  /// 开台时间（HH:mm），空闲无时间
+  /// 开台时长（对齐 smdcapp DateUtils.getHMByDate：取当前时间与 billdate 的差值）
+  ///
+  /// 展示规则（保证不超出桌台卡片）：
+  /// - 超过 999 小时只显示 "999h"
+  /// - 超过 100 小时只显示整数小时，如 "100h"
+  /// - 其余显示 "XhYm"
   String? get timeText {
+    final (int, int, bool)? parts = timeParts;
+    if (parts == null) {
+      return null;
+    }
+    if (!parts.$3) {
+      return '${parts.$1}h';
+    }
+    return '${parts.$1}h${parts.$2}m';
+  }
+
+  /// 开台时长各部分（用于 RichText 渲染时区分数字和单位样式）
+  ///
+  /// 返回 [hours, minutes, showMinutes] 元组：
+  /// - hours 已按 999 封顶
+  /// - showMinutes 为 false 时表示只展示整数小时（>=100h），不渲染分钟部分
+  (int hours, int minutes, bool showMinutes)? get timeParts {
     final String billdate = tmp?.billdate ?? '';
     if (isIdle || billdate.isEmpty) {
       return null;
@@ -369,8 +390,20 @@ class TableInfo {
     if (dt == null) {
       return null;
     }
-    String two(int n) => n.toString().padLeft(2, '0');
-    return '${two(dt.hour)}:${two(dt.minute)}';
+    int diff = DateTime.now().difference(dt).inSeconds;
+    if (diff < 0) {
+      diff = 0;
+    }
+    int hh = diff ~/ 3600;
+    final int mm = (diff ~/ 60) % 60;
+    if (hh > 999) {
+      hh = 999;
+      return (hh, 0, false);
+    }
+    if (hh >= 100) {
+      return (hh, 0, false);
+    }
+    return (hh, mm, true);
   }
 
   /// 序列化为 JSON（对齐 smdcapp TableInfoBean 全字段，用于 PC 模式接口提交）

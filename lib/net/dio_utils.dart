@@ -1,9 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/util/log_utils.dart';
+import 'package:flutter_deer/util/user_helper.dart';
 import 'base_entity.dart';
 import 'error_handle.dart';
 
@@ -54,13 +57,28 @@ class DioUtils {
     );
     _dio = Dio(options);
     /// Fiddler抓包代理配置 https://www.jianshu.com/p/d831b1f7c45b
-   // _dio.httpClientAdapter = IOHttpClientAdapter()..onHttpClientCreate = (HttpClient client) {
-   //   client.findProxy = (uri) {
-   //     //proxy all request to localhost:8888
-   //     return 'PROXY 10.41.0.132:8888';
-   //   };
-   //   return client;
-   // };
+    /// 仅非 Web 平台配置：Web 端默认 adapter 为 BrowserHttpClientAdapter，
+    /// 强转 IOHttpClientAdapter 会抛 TypeError，导致所有请求失败（登录即提示“网络请求异常”）
+    if (!kIsWeb) {
+      bool proxyLogPrinted = false;
+      (_dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
+        final client = HttpClient();
+        client.findProxy = (uri) {
+          /// 仅 debug 模式且 spid == 154 时走代理抓包
+          final int currentSpid = UserHelper.getSpid();
+          if (!proxyLogPrinted) {
+            proxyLogPrinted = true;
+            debugPrint('=== Proxy Debug === kDebugMode: $kDebugMode, spid: $currentSpid, willProxy: ${kDebugMode && currentSpid == 154}');
+          }
+          if (kDebugMode && currentSpid == 154) {
+            return 'PROXY 192.168.8.175:8888';
+          }
+          return 'DIRECT';
+        };
+        client.badCertificateCallback = (cert, host, port) => true;
+        return client;
+      };
+    }
 
     /// 添加拦截器
     void addInterceptor(Interceptor interceptor) {

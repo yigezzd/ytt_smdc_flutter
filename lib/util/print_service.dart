@@ -172,21 +172,26 @@ class PrintService {
     }
   }
 
-  /// 预打（对齐 smdcapp updateMasterTmpPrePrintFlag + RePrint）
-  Future<bool> prePrint({required String saleid}) async {
+  /// 预打单打印（对齐 smdcapp 预打流程 postInfo("8")）
+  ///
+  /// 主设备模式：对齐 OrderModel.ydPC → POST /api/print/RePrint，
+  ///   参数 tablemaster = PCMasterBean JSON（tableMaster + detailList），
+  ///   由主设备按预打单（打印类型8）出票
+  /// 云服务模式：对齐 sendPrint → printMsgNotice 推送云打印任务，opertype=8（预打单）
+  ///   （主单/明细已由 upSaleMasterTmp printtype=8 printalltype=1 上传）
+  Future<bool> prePrint({
+    required String saleid,
+    String billno = '',
+    String pcMasterJson = '',
+  }) async {
     try {
       if (ConnectionManager.pcAlive) {
         await requestForm(HttpApi.pcRePrint, <String, dynamic>{
-          'saleid': saleid,
-          'preprintflag': '1',
+          'tablemaster': pcMasterJson,
         }, masterDevice: true);
-      } else {
-        await requestForm(HttpApi.updateMasterTmpPrePrintFlag, <String, dynamic>{
-          'saleid': saleid,
-          'preprintflag': '1',
-        });
+        return true;
       }
-      return true;
+      return _cloudPrintNotice(saleid: saleid, billno: billno, opertype: '8');
     } catch (e) {
       Log.e('PrintService.prePrint error: $e');
       return false;

@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_deer/db/deposit_dao.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/res/constant.dart';
@@ -230,6 +232,14 @@ class _DepositSheetState extends State<DepositSheet> {
         'data': jsonEncode(depositData),
         'printtype': '-1',
       });
+      // 双写本地押金流水（非 Web；失败静默，不阻断流程）
+      if (!kIsWeb) {
+        try {
+          await DepositDao.instance.saveDeposit(depositData);
+        } catch (e) {
+          debugPrint('本地押金流水写入失败: $e');
+        }
+      }
       if (!mounted) return;
       Toast.show('交押金成功');
       Navigator.pop(context, true);

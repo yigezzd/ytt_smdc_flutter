@@ -5,6 +5,8 @@ import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/net/table_download_manager.dart';
 import 'package:flutter_deer/res/constant.dart';
+import 'package:flutter_deer/util/store_mode_utils.dart';
+import 'package:flutter_deer/util/user_helper.dart';
 import 'package:sp_util/sp_util.dart';
 
 /// 菜品分类模型（对齐 smdcapp DishesTypeBean.DataBean.children）
@@ -29,6 +31,15 @@ class DishCategory {
   final String name;
   final int isort;
   final int stopflag;
+}
+
+/// 出品档口模型（对齐 smdcapp KitchenBean.ListBean 核心字段）
+class KitchenItem {
+  const KitchenItem({required this.dishid, required this.name});
+
+  /// 厨打方案ID（-1=不打印）
+  final String dishid;
+  final String name;
 }
 
 /// 商品模型（对齐 smdcapp ProductBean 核心字段）
@@ -65,6 +76,7 @@ class DishProduct {
     this.stockflag = 0,
     this.inprice = 0,
     this.startsellqty = 0,
+    this.addsellqty = 0,
     this.servicefeeflag = 0,
     this.moreeatflag = 0,
     this.combtype = 0,
@@ -107,6 +119,7 @@ class DishProduct {
       stockflag: _toInt(json['stockflag']),
       inprice: _toDouble(json['inprice']),
       startsellqty: _toDouble(json['startsellqty']),
+      addsellqty: _toDouble(json['addsellqty']),
       servicefeeflag: _toInt(json['servicefeeflag']),
       moreeatflag: _toInt(json['moreeatflag']),
       combtype: _toInt(json['combtype']),
@@ -190,6 +203,9 @@ class DishProduct {
   /// 起售数量（对齐 smdcapp startsellqty）
   final double startsellqty;
 
+  /// 增售卖数量（对齐 smdcapp addsellqty）
+  final double addsellqty;
+
   /// 服务费标志（对齐 smdcapp servicefeeflag）：1=计服务费
   final int servicefeeflag;
 
@@ -210,6 +226,15 @@ class DishProduct {
 
   /// 售卖结束日期（对齐 smdcapp enddate）
   final String enddate;
+
+  /// 有效起售数量（对齐 smdcapp：startsellqty==0 按 1 处理）
+  double get startQty => startsellqty <= 0 ? 1 : startsellqty;
+
+  /// 有效增售数量（对齐 smdcapp：addsellqty<=0 按 1 处理）
+  double get addQty => addsellqty <= 0 ? 1 : addsellqty;
+
+  /// 是否显示“X份起售”按钮（起售数量大于1时显示）
+  bool get showStartSell => startQty > 1;
 
   /// 是否有规格或做法（需要弹窗选择）
   bool get hasSpec => specflag == 1 || cookflag == 1;
@@ -474,6 +499,8 @@ class ComboItem {
     this.sellclearflag = 0,
     this.stockqty = 0,
     this.specname = '',
+    this.specid = '',
+    this.combsetproductid = '',
   });
 
   factory ComboItem.fromJson(Map<String, dynamic> json) {
@@ -494,6 +521,8 @@ class ComboItem {
       sellclearflag: _toInt(json['sellclearflag']),
       stockqty: _toDouble(json['stockqty']),
       specname: json['specname']?.toString() ?? '',
+      specid: json['specid']?.toString() ?? '',
+      combsetproductid: json['combsetproductid']?.toString() ?? '',
     );
   }
 
@@ -536,6 +565,12 @@ class ComboItem {
 
   /// 规格名称
   final String specname;
+
+  /// 规格ID（对齐 smdcapp ProductCombSet.specid，非空时明细行上传 spec/specname）
+  final String specid;
+
+  /// 套餐明细配置ID（对齐 smdcapp ProductCombSet.combsetproductid）
+  final String combsetproductid;
 
   // ===== UI 状态 =====
 
@@ -787,6 +822,57 @@ class OrderRepository {
         .toList()
       ..sort((DishCategory a, DishCategory b) => a.isort.compareTo(b.isort));
     return result;
+  }
+
+  /// 读取本地商品 productid → combflag 映射（对齐 smdcapp ProductHelper.getProductMin）
+  ///
+  /// 已下单明细接口（尤其主设备模式）可能不返回 combflag 等商品参数
+  /// （smdcapp CartGoodsModel.initOrderInfo 注释："主设备模式没有这些参数"），
+  /// smdcapp 按 productid 从本地商品库回填 combflag，否则套餐主行会被误判为
+  /// 明细行导致订单确认页已下单套餐不显示（对齐 smdcapp svn r132898 修复）。
+  static Future<Map<String, int>> fetchLocalCombFlags() async {
+    try {
+      final List<Map<String, dynamic>> rows =
+          await TableDownloadManager.readTableData('t_bi_product');
+      final Map<String, int> map = <String, int>{};
+      for (final Map<String, dynamic> r in rows) {
+        final String pid = r['productid']?.toString() ?? '';
+        if (pid.isNotEmpty) {
+          map[pid] = _toInt(r['combflag']);
+        }
+      }
+      return map;
+    } catch (_) {
+      return <String, int>{};
+    }
+  }
+
+  /// 从本地缓存读取商品定价相关字段（对齐 smdcapp CartGoodsModel.initOrderInfo 回填逻辑）
+  ///
+  /// 主设备模式明细接口不返回 combflag/dscflag/mprice1~3 等商品参数，
+  /// 需按 productid 从本地商品库回填，供会员价/折扣计算使用。
+  /// 返回 productid → {combflag, dscflag, mprice1, mprice2, mprice3}。
+  static Future<Map<String, Map<String, dynamic>>> fetchLocalProductPriceFields() async {
+    try {
+      final List<Map<String, dynamic>> rows =
+          await TableDownloadManager.readTableData('t_bi_product');
+      final Map<String, Map<String, dynamic>> map = <String, Map<String, dynamic>>{};
+      for (final Map<String, dynamic> r in rows) {
+        final String pid = r['productid']?.toString() ?? '';
+        if (pid.isNotEmpty) {
+          map[pid] = <String, dynamic>{
+            'combflag': _toInt(r['combflag']),
+            'dscflag': _toInt(r['dscflag']),
+            'mprice1': _toDouble(r['mprice1']),
+            'mprice2': _toDouble(r['mprice2']),
+            'mprice3': _toDouble(r['mprice3']),
+          };
+        }
+      }
+      return map;
+    } catch (_) {
+      return <String, Map<String, dynamic>>{};
+    }
   }
 
   /// 从本地缓存读取商品列表（对齐 smdcapp ProductHelper.getProduct + SaleTimeValidator）
@@ -1174,6 +1260,57 @@ class OrderRepository {
     return result;
   }
 
+  /// 获取出品档口列表（对齐 smdcapp DishesApi.getKitchenList(2)：opertype=2 出品打印配置）
+  ///
+  /// 返回档口列表（dishid + name），失败静默返回空列表（临时菜弹窗默认“不打印”兑底）
+  static Future<List<KitchenItem>> fetchKitchenList() async {
+    try {
+      final Map<String, dynamic> resp = await requestForm(
+        HttpApi.kitchenGetList,
+        <String, dynamic>{
+          'opertype': '2',
+          'field': 'id',
+          'type': 'asc',
+          'page': '1',
+          'pagesize': '200',
+        },
+        showError: false,
+      );
+      final dynamic data = resp['data'] ?? resp['Data'];
+      if (data is Map<String, dynamic>) {
+        final dynamic list = data['list'];
+        if (list is List) {
+          return list
+              .whereType<Map<String, dynamic>>()
+              .map((Map<String, dynamic> e) => KitchenItem(
+                    dishid: e['dishid']?.toString() ?? '',
+                    name: e['name']?.toString() ?? '',
+                  ))
+              .toList();
+        }
+      }
+      return <KitchenItem>[];
+    } catch (_) {
+      return <KitchenItem>[];
+    }
+  }
+
+  /// 生成菜品条码（对齐 smdcapp DishesApi.getBarcode：value=分类ID，type=1）
+  static Future<String> fetchBarcode(String typeid) async {
+    final Map<String, dynamic> resp = await requestForm(
+      HttpApi.productGetBarcode,
+      <String, dynamic>{'value': typeid, 'type': '1'},
+      showError: false,
+    );
+    return resp['data']?.toString() ?? '';
+  }
+
+  /// 保存临时菜菜品资料（对齐 smdcapp DishesApi.addProduct）
+  static Future<Map<String, dynamic>> addTempProduct(
+      Map<String, dynamic> params) {
+    return requestForm(HttpApi.productAdd, params, showError: false);
+  }
+
   /// 下单（对齐 smdcapp OrderModel.postTableInfo）
   ///
   /// 主设备模式：对齐 smdcapp DishesHttpUtilPC.postTableInfo
@@ -1308,6 +1445,15 @@ class OrderRepository {
       // 主设备模式：对齐 smdcapp PCTableChangeVTO { masterTmpDto: tableInfo }
       final Map<String, dynamic> tmp = Map<String, dynamic>.from(
           tableJson?['tmp'] as Map<String, dynamic>? ?? <String, dynamic>{});
+      // 对齐 smdcapp objectClone 逻辑：克隆 table 后同步更新 tmp 的
+      // personnum/remark/serverid/servername 四个字段（修改开台信息/服务员生效）
+      final int? personNum = int.tryParse(personnum);
+      if (personNum != null) {
+        tmp['personnum'] = personNum;
+      }
+      tmp['remark'] = remark;
+      tmp['serverid'] = serverid;
+      tmp['servername'] = servername;
       tmp['vipid'] = vipid;
       tmp['vipno'] = vipno;
       tmp['vipname'] = vipname;
@@ -1406,8 +1552,172 @@ class OrderRepository {
     return <Map<String, dynamic>>[];
   }
 
-  /// 获取必点菜列表（对齐 smdcapp DishesApi.yxMust）
+  /// 从本地缓存获取必点菜列表（对齐 smdcapp ProductHelper.getMustProduct +
+  /// MustMasterDao.queryAreaZC/queryAreaZCALL）
   ///
+  /// 数据源为 tabledown 本地表：t_must_master（主表）、t_must_tablearea（区域关联）、
+  /// t_must_product（方案商品）、t_bi_product / t_bi_product_spec（商品明细）。
+  /// [areaid] 为空表示快餐模式无区域，查询全部（对齐 queryAreaZCALL）。
+  static Future<List<Map<String, dynamic>>> fetchMustDishesFromLocal({
+    String areaid = '',
+  }) async {
+    try {
+      final List<Map<String, dynamic>> masters =
+          await TableDownloadManager.readTableData('t_must_master');
+      if (masters.isEmpty) {
+        return <Map<String, dynamic>>[];
+      }
+      final List<Map<String, dynamic>> areas =
+          await TableDownloadManager.readTableData('t_must_tablearea');
+      final List<Map<String, dynamic>> mustProducts =
+          await TableDownloadManager.readTableData('t_must_product');
+      final List<Map<String, dynamic>> products =
+          await TableDownloadManager.readTableData('t_bi_product');
+      final List<Map<String, dynamic>> productSpecs =
+          await TableDownloadManager.readTableData('t_bi_product_spec');
+
+      // 当前门店 sid/spid（对齐 smdcapp SpUtils.getSID/getSPID）
+      final List<String> sidSpid = _currentSidSpid();
+      final String sid = sidSpid[0];
+      final String spid = sidSpid[1];
+      final int storemodel = StoreModeUtils.getCurrentStoreModel();
+
+      // 区域索引：billid → areaid 列表（对齐 t_must_tablearea 关联）
+      final Map<String, List<String>> billAreaMap = <String, List<String>>{};
+      for (final Map<String, dynamic> a in areas) {
+        final String billid = a['billid']?.toString() ?? '';
+        final String aid = a['areaid']?.toString() ?? '';
+        if (billid.isEmpty) continue;
+        billAreaMap.putIfAbsent(billid, () => <String>[]).add(aid);
+      }
+
+      // 商品索引：productid → 商品行（对齐 ProductDao.queryByProductId）
+      final Map<String, Map<String, dynamic>> productMap =
+          <String, Map<String, dynamic>>{};
+      for (final Map<String, dynamic> p in products) {
+        final String pid = p['productid']?.toString() ?? '';
+        if (pid.isNotEmpty) {
+          productMap[pid] = p;
+        }
+      }
+
+      final DateTime now = DateTime.now();
+      final String today = _formatDay(now);
+      final int nowMinutes = now.hour * 60 + now.minute;
+
+      final List<Map<String, dynamic>> result = <Map<String, dynamic>>[];
+      for (final Map<String, dynamic> m in masters) {
+        // 门店过滤（对齐 queryAreaZC a.spid = :spid AND a.sid = :sid）
+        if ((m['sid']?.toString() ?? '') != sid ||
+            (m['spid']?.toString() ?? '') != spid) {
+          continue;
+        }
+        // 模式开关：正餐 appflag=1 / 快餐 appflag1=1（对齐 getMustProduct filter）；
+        // 无区域（快餐 queryAreaZCALL）时 appflag=1 或 appflag1=1 均有效
+        final bool appOk = areaid.isEmpty
+            ? (_toInt(m['appflag']) == 1 || _toInt(m['appflag1']) == 1)
+            : (storemodel == StoreModeUtils.storeModelFast
+                ? _toInt(m['appflag1']) == 1
+                : _toInt(m['appflag']) == 1);
+        if (!appOk) continue;
+        if (_toInt(m['stopflag']) != 0) continue;
+        if (_toInt(m['status']) != 1) continue;
+        // 日期有效性：dateflag=1 时需在 startdate~enddate 内；
+        // dateflag=0 的直接跳过（对齐 getMustProduct `dateflag == 0 → continue`）
+        if (_toInt(m['dateflag']) != 1) continue;
+        final String start = _datePart(m['startdate']);
+        final String end = _datePart(m['enddate']);
+        if (start.isNotEmpty && today.compareTo(start) < 0) continue;
+        if (end.isNotEmpty && today.compareTo(end) > 0) continue;
+        // 区域匹配（对齐 queryAreaZC：b.areaid = :areaid or b.areaid IS NULL）
+        if (areaid.isNotEmpty) {
+          final List<String>? areaIds =
+              billAreaMap[m['billid']?.toString() ?? ''];
+          if (areaIds != null &&
+              areaIds.isNotEmpty &&
+              !areaIds.contains(areaid)) {
+            continue;
+          }
+        }
+        // 时段校验：timeperiod1/2/3 依次判定，任一命中即有效（对齐 getMustProduct）
+        if (!_isMustTimePeriodValid(m, nowMinutes)) continue;
+
+        // 查询方案商品（对齐 MustProductDao.queryByBillid）并组装商品明细
+        final String billid = m['billid']?.toString() ?? '';
+        final List<Map<String, dynamic>> infoList = <Map<String, dynamic>>[];
+        for (final Map<String, dynamic> mp in mustProducts) {
+          if ((mp['billid']?.toString() ?? '') != billid) continue;
+          final String pid = mp['productid']?.toString() ?? '';
+          final Map<String, dynamic>? p = productMap[pid];
+          // 商品不存在则跳过（对齐 smdcapp queryByProductId?.let）
+          if (p == null) continue;
+          final String specid = mp['specid']?.toString() ?? '';
+          double sellprice = _toDouble(p['sellprice']);
+          // 指定规格时用规格价覆盖（对齐 productSpecDao.queryBySpecid → p.sellprice）
+          if (specid.isNotEmpty) {
+            for (final Map<String, dynamic> ps in productSpecs) {
+              if ((ps['productid']?.toString() ?? '') == pid &&
+                  (ps['specid']?.toString() ?? '') == specid) {
+                sellprice = _toDouble(ps['sellprice']);
+                break;
+              }
+            }
+          }
+          infoList.add(<String, dynamic>{
+            'productid': pid,
+            'name': p['name']?.toString() ?? '',
+            'sellprice': sellprice,
+            'specid': specid,
+            'specname': mp['specname']?.toString() ?? '',
+            'combflag': _toInt(p['combflag']),
+          });
+        }
+        result.add(<String, dynamic>{
+          'mustrule': _toInt(m['mustrule']),
+          'musttype': _toInt(m['musttype']),
+          'name': m['name']?.toString() ?? '',
+          'billid': billid,
+          'checkflag': _toInt(m['checkflag']),
+          'outcheckflag': _toInt(m['outcheckflag']),
+          'mustproductlist': infoList,
+        });
+      }
+      return result;
+    } catch (_) {
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  /// 必点菜时段校验（对齐 smdcapp getMustProduct timeperiod1/2/3 链式判定）
+  ///
+  /// 时段1在当前有效(stopflag=0)时判定；时段2/3 仅在前一时段未命中(stopflag=1)时判定，
+  /// 即多个时段为"或"关系：命中任一时段即有效。
+  static bool _isMustTimePeriodValid(Map<String, dynamic> m, int nowMinutes) {
+    int stopflag = 0;
+    final List<String> keys = <String>['timeperiod1', 'timeperiod2', 'timeperiod3'];
+    for (int i = 0; i < keys.length; i++) {
+      final String period = m[keys[i]]?.toString() ?? '';
+      if (period.isEmpty) continue;
+      final bool shouldEval = (i == 0 && stopflag == 0) || (i > 0 && stopflag == 1);
+      if (!shouldEval) continue;
+      final List<String> range = period.split('-');
+      if (range.length != 2) continue;
+      final int? start = _parseHHmm(range[0]);
+      final int? end = _parseHHmm(range[1]);
+      if (start == null || end == null) continue;
+      // 对齐 TimeUtils.timeIsInRound：命中时段 stopflag=0，否则置 1 继续看下一时段
+      stopflag = (nowMinutes >= start && nowMinutes <= end) ? 0 : 1;
+    }
+    return stopflag == 0;
+  }
+
+  /// 当前门店 sid/spid（对齐 smdcapp SpUtils.getSID/getSPID，取自登录保存的 store）
+  static List<String> _currentSidSpid() =>
+      <String>[UserHelper.getSidStr(), UserHelper.getSpidStr()];
+
+  /// 获取必点菜列表-云服务实时接口（对齐 smdcapp DishesApi.yxMust）
+  ///
+  /// 仅作为本地缓存为空时的回退（对齐分类/商品的本地优先策略）。
   /// [areaid] 桌台区域ID，[yxtype] 类型（默认 "1"）
   static Future<List<Map<String, dynamic>>> fetchMustDishes({
     required String areaid,

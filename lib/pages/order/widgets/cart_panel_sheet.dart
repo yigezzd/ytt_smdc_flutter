@@ -5,6 +5,7 @@ import 'package:flutter_deer/components/dish_operation_popup.dart';
 import 'package:flutter_deer/components/spec_cook_sheet.dart';
 import 'package:flutter_deer/pages/order/order_models.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
+import 'package:flutter_deer/pages/order/widgets/set_meal_sheet.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:sp_util/sp_util.dart';
 
@@ -270,6 +271,8 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
                       if (item.isGift) _buildTag('赠', const Color(0xFF00B42A)),
                       if (item.isDiscounted) _buildTag('折', _kBrandRed),
                       if (item.isBag) _buildTag('包', const Color(0xFF86909C)),
+                      // 必点菜标识（对齐 smdcapp DishesTagHelper：mustflag==1 红色“必”标）
+                      if (item.mustflag == 1) _buildTag('必', _kBrandRed),
                     ],
                   ),
                   if (item.specText.isNotEmpty)
@@ -491,8 +494,9 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
     final String? operation = await DishOperationPopup.show(
       context,
       dishName: item.displayName,
-      isCookProduct: true,
-      isComboProduct: false,
+      // 对齐 smdcapp: isShowCook(combflag!=1) / isShowComb(combflag==1)
+      isCookProduct: !item.isCombo,
+      isComboProduct: item.isCombo,
       isSuspended: item.isSuspended,
     );
     if (operation == null || !mounted) return;
@@ -622,6 +626,10 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
         // 做法修改（对齐 smdcapp checkSpec + SpecCookPopup2 修改模式）
         await _handleCookModify(item);
 
+      case DishOperationType.combo:
+        // 套餐修改（对齐 smdcapp NAME_COMB → handleChangeComb）
+        await _handleComboModify(item);
+
       case DishOperationType.rename:
         // 对齐 smdcapp ChangeNamePopup: 修改名称+价格
         final RenameResult? result = await DishRenameSheet.show(
@@ -707,6 +715,55 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
         : (result.cookText.isEmpty ? specPrefix : '$specPrefix、${result.cookText}');
     item.extraPrice = result.cookExtra;
     _notifyChanged(item);
+  }
+
+  /// 套餐修改（对齐 smdcapp OperationPopup.NAME_COMB → handleChangeComb：
+  /// 拉取套餐配置，编辑模式打开套餐弹窗，确认后替换明细与加减价）
+  Future<void> _handleComboModify(CartItem item) async {
+    // 显示加载中
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(
+        child: SizedBox(
+          width: 36,
+          height: 36,
+          child: CircularProgressIndicator(strokeWidth: 3),
+        ),
+      ),
+    );
+    ComboMealData? comboData;
+    try {
+      comboData = await OrderRepository.fetchProductComb(item.product.id);
+    } catch (_) {
+      comboData = null;
+    }
+    if (!mounted) return;
+    Navigator.of(context).pop(); // 关闭 loading
+
+    if (comboData == null || comboData.prolist.isEmpty) {
+      Toast.show('暂无套餐数据');
+      return;
+    }
+
+    await SetMealSheet.show(
+      context,
+      product: DishProduct(
+        productid: item.product.id,
+        name: item.product.name,
+        sellprice: item.product.price,
+        combflag: 1,
+      ),
+      comboData: comboData,
+      isEditMode: true,
+      initialSelection: item.combItems,
+      onConfirmEdit: (SetMealResult result) {
+        item.combItems = result.selectedItems;
+        item.extraPrice = result.combAddAmt;
+        item.specText = result.specText;
+        _notifyChanged(item);
+      },
+    );
   }
 
   /// 从当前 specText 中推导规格名前缀（多规格商品保留规格名）
