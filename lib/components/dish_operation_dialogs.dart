@@ -299,7 +299,8 @@ class _DishDiscountSheetState extends State<DishDiscountSheet> {
   Widget _buildQuickBtn(String label, String value, bool isDark) {
     return Expanded(
       child: GestureDetector(
-        onTap: () => setState(() => _controller.text = value == '100' ? '' : value),
+        // 对齐 smdcapp DiscountPopup：tv_no 清空后 setValue("100")，输入框显示 100
+        onTap: () => setState(() => _controller.text = value),
         child: Container(
           height: 34,
           decoration: BoxDecoration(

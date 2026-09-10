@@ -97,6 +97,10 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
   /// 会员同步中（防重复点击）
   bool _memberSyncing = false;
 
+  /// 整单折扣率（对齐 smdcapp changeDiscount: tableInfo.tmp.servicediscount），
+  /// 整单打折后随主单/内嵌 tmp 上传，null 表示未操作过沿用桌台 tmp 原值
+  double? _servicediscount;
+
   @override
   void initState() {
     super.initState();
@@ -986,7 +990,9 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       'cashid': UserHelper.getUserid(),
       'updatetime': nowStr,
       'tabletypeid': tmp?['tabletypeid']?.toString() ?? '',
-      'servicediscount': tmp?['servicediscount']?.toString() ?? '',
+      // 对齐 smdcapp MasterBean/tmp：servicediscount 为 double 类型
+      'servicediscount':
+          _servicediscount ?? _toDouble(tmp?['servicediscount']),
       'sid': sid,
       'spid': spid,
       'remark': remark,
@@ -1013,6 +1019,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     tmpCopy['addamt'] = master['addamt'];
     tmpCopy['lowamt'] = master['lowamt'];
     tmpCopy['dscamt'] = master['dscamt'];
+    tmpCopy['servicediscount'] = master['servicediscount'];
     tmpCopy['remark'] = master['remark'];
     tmpCopy['lastbilltype'] = 7;
     tmpCopy['updatetime'] = master['updatetime'];
@@ -1440,17 +1447,49 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       Toast.show('请输入有效折扣');
       return;
     }
-    // 对齐 smdcapp: 每个可打折商品按折扣重算现价与金额。
-    // 先把现价重置为原价再重算，保证"不打折"(discount=100) 能取消已有折扣恢复原价。
+    // 对齐 smdcapp changeDiscount(pos=-1)：逐行 updataDis，跳过不可打折/已退/已赠/团购行
     for (final Map<String, dynamic> item in _detailList) {
-      if (_toInt(item['presentflag']) == 2) continue;
-      if (_toInt(item['presentflag']) == 1) continue; // 赠送不打折
-      if (_toInt(item['dscflag']) == 0) continue; // 不允许打折
-      item['discount'] = discount;
-      item['rrprice'] = _toDouble(item['sellprice']);
-      _calcDownMemberPrice(item, _member);
+      final int presentflag = _toInt(item['presentflag']);
+      final int tpdishflag = _toInt(item['tpdishflag']);
+      final bool skipDsc = (_toInt(item['dscflag']) == 0 && tpdishflag != 1) ||
+          (tpdishflag == 1 && _toInt(item['tpdscflag']) == 0);
+      if (skipDsc ||
+          _toDouble(item['subqty']) > 0 ||
+          presentflag == 2 ||
+          presentflag == 1 ||
+          _toInt(item['douyinflag']) == 1) {
+        continue;
+      }
+      final double sellprice = _toDouble(item['sellprice']);
+      final double qty = _toDouble(item['qty']);
+      // 对齐 smdcapp updataDis：>99 视为不打折恢复原价并清手工折扣标记，
+      // 否则按折扣重算现价/金额并标记 specpriceflag=4/opertype=4（手工折扣）
+      if (discount > 99) {
+        item['discount'] = 100;
+        item['rrprice'] = sellprice;
+        item['rramt'] = _round2(sellprice * qty);
+        item['specpriceflag'] = 0;
+        item['opertype'] = 1;
+        item['operamt'] = item['rramt'];
+      } else {
+        final double rrprice = _round2(sellprice * discount / 100);
+        final double rramt = _round2(rrprice * qty);
+        item['discount'] = discount;
+        item['rrprice'] = rrprice;
+        item['rramt'] = rramt;
+        item['specpriceflag'] = 4;
+        item['opertype'] = 4;
+        item['operamt'] = _round2(sellprice * qty - rramt);
+      }
+      item['operremark'] = result.remark;
+      item['opertime'] = _formatNow();
       item['updateflag'] = 1;
+      _calcDownMemberPrice(item, _member);
     }
+    // 对齐 smdcapp changeDiscount：整单折扣率同步 tmp.servicediscount 随主单上传
+    _servicediscount = discount;
+    // 对齐 smdcapp refresh()：先刷新本地 UI 再 postInfo，避免上传异常时页面无变化
+    setState(() {});
     Toast.show('整单折扣成功');
     _postOrderUpdate();
   }

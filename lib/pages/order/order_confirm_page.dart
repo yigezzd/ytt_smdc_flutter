@@ -16,7 +16,9 @@ import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/pages/order/widgets/set_meal_sheet.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
+import 'package:flutter_deer/routers/routers.dart';
 import 'package:flutter_deer/util/file_log_writer.dart';
+import 'package:flutter_deer/util/store_mode_utils.dart';
 import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:sp_util/sp_util.dart';
@@ -38,6 +40,7 @@ class OrderConfirmPage extends StatefulWidget {
     this.serverName = '',
     this.remark = '',
     this.tableJson,
+    this.fastMode = false,
   });
 
   final String tableName;
@@ -50,6 +53,9 @@ class OrderConfirmPage extends StatefulWidget {
   final String serverName;
   final String remark;
   final Map<String, dynamic>? tableJson;
+
+  /// 快餐模式（对齐 smdcapp：无桌台，不走下单接口，直接去结账页上传流水）
+  final bool fastMode;
 
   @override
   State<OrderConfirmPage> createState() => _OrderConfirmPageState();
@@ -94,8 +100,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
     _orderRemark = widget.remark;
     // 对齐 smdcapp: cbPrintKd.isChecked = decodeBoolean(ENABLE_KD, true)
     _printKd = SpUtil.getBool('ENABLE_KD', defValue: true) ?? true;
-    // 对齐 smdcapp PlacedOrderFragment2.initData：加载已下单菜品
-    _loadOrderedItems();
+    // 对齐 smdcapp PlacedOrderFragment2.initData：加载已下单菜品（快餐模式无已下单数据，跳过）
+    if (!widget.fastMode) {
+      _loadOrderedItems();
+    }
   }
 
   @override
@@ -421,6 +429,11 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
   // ═══════════════════ 下单逻辑 ═══════════════════
 
   Future<void> _placeOrder() async {
+    // 对齐 smdcapp：快餐模式无桌台，不走 upSaleMasterTmp 下单，直接去结账页
+    if (widget.fastMode) {
+      _goSettle();
+      return;
+    }
     if (_isOrdering) {
       Toast.show('正在下单中，请稍后...');
       return;
@@ -495,6 +508,56 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
         });
       }
     }
+  }
+
+  /// 快餐模式去结账（对齐 smdcapp OrderFastDetailActivity3.goSettle → SettleActivity）
+  ///
+  /// 快餐无桌台，smdcapp 从不调用 upSaleMasterTmp，单据（master/detail）
+  /// 在结账页随支付通过 saleflow 一并上传。
+  void _goSettle() {
+    if (_pendingItems.isEmpty) {
+      Toast.show('当前没有商品，请添加商品');
+      return;
+    }
+
+    // 金额口径对齐 smdcapp getDownPrice/showAllPriceInfo：
+    // 菜品费=总原价+做法加价，优惠=菜品费-应付，应付=现价合计
+    final double totalRR = _grandTotal;
+    final double totalOriginal = _pendingItems.fold<double>(
+            0.0, (double s, CartItem i) => s + i.product.price * i.quantity) +
+        _orderedItems.fold<double>(
+            0.0, (double s, CartItem i) => s + i.product.price * i.quantity);
+    final double addamt = _pendingItems.fold<double>(
+        0.0, (double s, CartItem i) => s + i.extraPrice);
+    final double dishAmt = totalOriginal + addamt;
+    final double diff = dishAmt - totalRR;
+    final double disAmt = diff > 0 ? diff : 0;
+
+    final String saleid = widget.saleid.isNotEmpty
+        ? widget.saleid
+        : StoreModeUtils.generateSaleId();
+
+    NavigatorUtils.push(
+      context,
+      Routes.settlePage,
+      arguments: <String, dynamic>{
+        'tableName': widget.tableName,
+        'persons': widget.persons,
+        'tableId': widget.tableId,
+        'tableCode': widget.tableCode,
+        'saleid': saleid,
+        'serverId': widget.serverId,
+        'serverName': widget.serverName,
+        'remark': _orderRemark,
+        'tableJson': widget.tableJson,
+        'detailList': _buildDetailList(),
+        'dishAmt': dishAmt,
+        'serviceAmt': 0,
+        'lowAmt': 0,
+        'disAmt': disAmt,
+        'payAmt': totalRR,
+      },
+    );
   }
 
   String _buildMasterJson() {
@@ -605,7 +668,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
     return item.discount < 100 ? base * item.discount / 100 : base;
   }
 
-  String _buildDetailJson() {
+  List<Map<String, dynamic>> _buildDetailList() {
     String sid = '';
     String spid = '';
     try {
@@ -636,6 +699,13 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
     final String saleid = tmp?['saleid']?.toString() ?? widget.saleid;
     final String billno = tmp?['localbillno']?.toString() ?? '';
     final String serverId = tmp?['serverid']?.toString() ?? widget.serverId;
+    // 对齐 smdcapp bindSaleInfo 快餐分支（dcMode==0）：销售员缺省取当前登录人
+    String salesId = serverId;
+    String salesName = widget.serverName;
+    if (widget.fastMode && salesId.isEmpty) {
+      salesId = userId;
+      salesName = userName;
+    }
 
     final List<Map<String, dynamic>> details = <Map<String, dynamic>>[];
 
@@ -668,8 +738,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
         'cookaddamt': isComb ? 0 : item.extraPrice,
         'bagamt': item.bagPrice,
         'salesname':
-            item.waiterName.isNotEmpty ? item.waiterName : widget.serverName,
-        'salesid': serverId,
+            item.waiterName.isNotEmpty ? item.waiterName : salesName,
+        'salesid': salesId,
         'operid': userId,
         'opername': userName,
         'createtime': _formatDateTime(DateTime.now()),
@@ -732,13 +802,16 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
           userName: userName,
           saleid: saleid,
           billno: billno,
-          serverId: serverId,
+          serverId: salesId,
+          salesName: salesName,
         ));
       }
     }
 
-    return jsonEncode(details);
+    return details;
   }
+
+  String _buildDetailJson() => jsonEncode(_buildDetailList());
 
   /// 构建套餐明细子行（对齐 smdcapp ShoppingCartUtil.getSetMealInfo +
   /// OrderModel productToDetailBean 套餐分支）
@@ -757,11 +830,13 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
     required String saleid,
     required String billno,
     required String serverId,
+    String? salesName,
   }) {
     final List<Map<String, dynamic>> children = <Map<String, dynamic>>[];
     final String now = _formatDateTime(DateTime.now());
-    final String salesname =
-        item.waiterName.isNotEmpty ? item.waiterName : widget.serverName;
+    final String salesname = item.waiterName.isNotEmpty
+        ? item.waiterName
+        : (salesName ?? widget.serverName);
     for (final ComboSelectedItem c in item.combItems) {
       children.add(<String, dynamic>{
         'id': 0,
@@ -1354,7 +1429,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
               ),
               Expanded(
                 child: Text(
-                  '${widget.tableName}--订单确认',
+                  // 对齐 smdcapp OrderFastDetailActivity3：快餐模式标题为“订单详情”
+                  widget.fastMode
+                      ? '订单详情'
+                      : '${widget.tableName}--订单确认',
                   style: const TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.w600,
@@ -2108,8 +2186,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // 保存菜品（仅主设备连接时显示）
-                  if (ConnectionManager.pcAlive) ...[
+                  // 保存菜品（仅主设备连接且正餐模式显示；快餐无桌台临时单）
+                  if (ConnectionManager.pcAlive && !widget.fastMode) ...[
                     Expanded(
                       child: _BottomBtn(
                         label: '保存菜品',
@@ -2126,11 +2204,13 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // 立即下单（红色主按钮）
+                  // 立即下单/去结账（红色主按钮；快餐模式对齐 smdcapp tvPay → 结账页）
                   Expanded(
                     flex: 2,
                     child: GestureDetector(
-                      onTap: _isLoading ? null : _placeOrder,
+                      onTap: _isLoading
+                          ? null
+                          : (widget.fastMode ? _goSettle : _placeOrder),
                       child: Container(
                         height: 38,
                         decoration: BoxDecoration(
@@ -2151,8 +2231,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
                                       strokeWidth: 2,
                                       valueColor: AlwaysStoppedAnimation<Color>(Colors.white)),
                                 )
-                              : const Text('立即下单',
-                                  style: TextStyle(
+                              : Text(
+                                  widget.fastMode ? '去结账' : '立即下单',
+                                  style: const TextStyle(
                                       fontSize: 14,
                                       color: Colors.white,
                                       fontWeight: FontWeight.w600)),
@@ -2179,7 +2260,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
           children: <Widget>[
             _buildTitleBar(),
             _buildHeaderCard(),
-            _buildTabs(),
+            if (!widget.fastMode) _buildTabs(),
             Expanded(
               child: Container(
                 margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
@@ -2196,15 +2277,20 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
                 ),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(12),
-                  child: TabBarView(
-                    controller: _tabController,
-                    children: <Widget>[
-                      _buildItemList(_pendingItems, editable: true),
-                      _loadingOrdered
-                          ? const Center(child: CircularProgressIndicator(strokeWidth: 2.5))
-                          : _buildItemList(_orderedItems, editable: false),
-                    ],
-                  ),
+                  child: widget.fastMode
+                      ? _buildItemList(_pendingItems, editable: true)
+                      : TabBarView(
+                          controller: _tabController,
+                          children: <Widget>[
+                            _buildItemList(_pendingItems, editable: true),
+                            _loadingOrdered
+                                ? const Center(
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2.5))
+                                : _buildItemList(_orderedItems,
+                                    editable: false),
+                          ],
+                        ),
                 ),
               ),
             ),

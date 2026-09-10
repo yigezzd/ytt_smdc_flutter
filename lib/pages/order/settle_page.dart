@@ -290,6 +290,8 @@ class _SettlePageState extends State<SettlePage> {
 
   /// 同步会员信息到后端桌台（对齐 smdcapp SettleActivity.upMember → OrderModel.updateMasterTmp）
   Future<void> _syncMemberToServer({required VipMember? member}) async {
+    // 对齐 smdcapp：仅正餐模式（storemodel==2）同步桌台会员，快餐无桌台跳过
+    if (StoreModeUtils.isFastMode()) return;
     final Map<String, dynamic>? tmp =
         widget.tableJson?['tmp'] as Map<String, dynamic>?;
     final String saleid = widget.saleid.isNotEmpty
@@ -975,12 +977,14 @@ class _SettlePageState extends State<SettlePage> {
     final String machNo = SpUtil.getString(Constant.machNo) ?? '';
     final Map<String, dynamic>? tmp =
         widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    // 对齐 smdcapp getSaleMasterBean：tablebean==null（快餐）时服务员取当前登录人
+    final bool hasTable = widget.tableJson != null || widget.tableId.isNotEmpty;
     final String serverId = widget.serverId.isNotEmpty
         ? widget.serverId
-        : (tmp?['serverid']?.toString() ?? '');
+        : (tmp?['serverid']?.toString() ?? (hasTable ? '' : userId));
     final String serverName = widget.serverName.isNotEmpty
         ? widget.serverName
-        : (tmp?['servername']?.toString() ?? '');
+        : (tmp?['servername']?.toString() ?? (hasTable ? '' : userName));
 
     // 减免金额合计（payid=06，对齐 smdcapp reductionamt=operamt）
     double reductionamt = 0;
@@ -1005,8 +1009,10 @@ class _SettlePageState extends State<SettlePage> {
       'tableid': widget.tableId.isNotEmpty
           ? widget.tableId
           : (tmp?['tableid']?.toString() ?? ''),
-      'tablename': widget.tableName,
-      'tableno': widget.tableCode,
+      // 快餐/无桌台不上传桌台字段（对齐 smdcapp getSaleMasterBean tablebean==null 分支）
+      if (hasTable) 'tablename': widget.tableName,
+      if (hasTable) 'tableno': widget.tableCode,
+      if (hasTable) 'personnum': widget.persons.toString(),
       'areaid': tmp?['areaid']?.toString() ?? '',
       'amt': _rd2(widget.payAmt),
       'retailamt': AmountCalcUtils.add(
@@ -1161,6 +1167,8 @@ class _SettlePageState extends State<SettlePage> {
 
   /// 清台（对齐 smdcapp cancelOrder → clearTable / PcClearTable）
   Future<void> _clearTable() async {
+    // 快餐/无桌台结账无需清台（对齐 smdcapp：clearTable 仅 tablebean != null 时调用）
+    if (widget.tableJson == null && widget.tableId.isEmpty) return;
     try {
       final bool useMaster = ConnectionManager.pcAlive;
       if (useMaster) {
@@ -1386,8 +1394,12 @@ class _SettlePageState extends State<SettlePage> {
                 child: ListView(
                   padding: const EdgeInsets.all(12),
                   children: <Widget>[
-                    _buildTableCard(isDark),
-                    const SizedBox(height: 10),
+                    // 对齐 smdcapp SettleActivity：桌台信息为 null（快餐模式）不显示桌台卡片
+                    if (widget.tableJson != null ||
+                        widget.tableId.isNotEmpty) ...[
+                      _buildTableCard(isDark),
+                      const SizedBox(height: 10),
+                    ],
                     _buildOrderDetailCard(isDark),
                     const SizedBox(height: 10),
                     _buildPromotionCard(isDark),

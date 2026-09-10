@@ -3,7 +3,6 @@ import 'package:flutter_deer/components/spec_cook_sheet.dart';
 import 'package:flutter_deer/db/entity/db_table_name.dart';
 import 'package:flutter_deer/db/entity/product_type_entity.dart';
 import 'package:flutter_deer/db/entity/product_unit_entity.dart';
-import 'package:flutter_deer/db/dao/reason_info_dao.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/table_download_manager.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
@@ -145,12 +144,16 @@ class _TemporaryDishSheetState extends State<TemporaryDishSheet> {
 
   /// 加载分类/单位/档口/快捷备注（对齐 smdcapp getDangkou）
   ///
-  /// 分类/单位改从 [TableDownloadManager] 基础数据缓存读取（与点菜页分类同源），
-  /// 避免 sqflite 严格 spid 过滤/整型强转导致空列表。
+  /// 全部经 [TableDownloadManager.readTableData] 读取（Web 走内存缓存、
+  /// 移动端走 SQLite），不可直连 DAO：Web 平台 sqflite 抛 UnsupportedError
+  /// 会被下方 catch 吞掉，导致 setState 不执行、所有下拉为空。
+  /// 分类本地缓存为空时回退点菜页同源接口（OrderRepository.fetchCategories），
+  /// 保证“点菜页有分类则临时菜弹窗必有分类”。
   Future<void> _loadData() async {
     final int spid = UserHelper.getSpid();
     final int sid = UserHelper.getSid();
     try {
+      // 对齐 smdcapp ProductTypeDao.queryAllType：stopflag=0 and status=1 and mobileshowflag=1
       final List<Map<String, dynamic>> typeRows =
           await TableDownloadManager.readTableData(DbTableName.tBiType);
       final List<ProductTypeEntity> types = typeRows
@@ -162,16 +165,28 @@ class _TemporaryDishSheetState extends State<TemporaryDishSheet> {
           .toList()
         ..sort((ProductTypeEntity a, ProductTypeEntity b) =>
             a.isort.compareTo(b.isort));
+      if (types.isEmpty) {
+        types.addAll(await _fetchTypesFallback());
+      }
+      // 对齐 smdcapp ProductUnitDao.queryAll：status = 1
       final List<Map<String, dynamic>> unitRows =
           await TableDownloadManager.readTableData(DbTableName.tBiUnit);
       final List<ProductUnitEntity> units = unitRows
-          .where((Map<String, dynamic> r) =>
-              _i(r['stopflag']) == 0 && (_i(r['spid']) == spid || _i(r['spid']) == 0))
+          .where((Map<String, dynamic> r) => _i(r['status']) == 1)
           .map(_unitFromRow)
           .toList();
+      // 对齐 smdcapp ReasonInfoDao.queryByTypeId：typeid + status=1 + spid + sid
       final List<Map<String, dynamic>> remarkRows =
-          await ReasonInfoDao.instance
-              .queryByTypeid('06', spid: spid, sid: sid);
+          await TableDownloadManager.readTableData(DbTableName.tBiReasonInfo);
+      final List<_RemarkItem> remarks = remarkRows
+          .where((Map<String, dynamic> r) =>
+              r['typeid']?.toString() == '06' &&
+              _i(r['status']) == 1 &&
+              _i(r['spid']) == spid &&
+              _i(r['sid']) == sid)
+          .map((Map<String, dynamic> r) =>
+              _RemarkItem(r['value']?.toString() ?? ''))
+          .toList();
       final List<KitchenItem> kitchens = await OrderRepository.fetchKitchenList();
       if (!mounted) return;
       setState(() {
@@ -184,11 +199,26 @@ class _TemporaryDishSheetState extends State<TemporaryDishSheet> {
         _kitchens2 = <KitchenItem>[const KitchenItem(dishid: '-1', name: '不打印'), ...kitchens];
         _kitchen1 = _kitchens1[0];
         _kitchen2 = _kitchens2[0];
-        _remarks.addAll(remarkRows.map((Map<String, dynamic> r) =>
-            _RemarkItem(r['value']?.toString() ?? '')));
+        _remarks.addAll(remarks);
       });
     } catch (_) {
       // 数据加载失败静默处理，确认时按空校验提示
+    }
+  }
+
+  /// 分类本地缓存为空时的回退（与点菜页同源：本地 t_bi_type → getTypeList 实时接口）
+  Future<List<ProductTypeEntity>> _fetchTypesFallback() async {
+    try {
+      final List<DishCategory> cats = await OrderRepository.fetchCategories();
+      return cats
+          .map((DishCategory c) => ProductTypeEntity(
+                typeid: c.typeid,
+                name: c.name,
+                isort: c.isort,
+              ))
+          .toList();
+    } catch (_) {
+      return <ProductTypeEntity>[];
     }
   }
 

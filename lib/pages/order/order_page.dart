@@ -1268,6 +1268,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         'serverName': widget.serverName,
         'remark': widget.remark,
         'tableJson': widget.tableJson,
+        'fastMode': widget.fastMode,
       },
     );
   }

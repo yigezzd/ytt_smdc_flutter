@@ -62,6 +62,7 @@ class OrderRouter implements IRouterProvider {
         serverName: args['serverName'] as String? ?? '',
         remark: args['remark'] as String? ?? '',
         tableJson: args['tableJson'] as Map<String, dynamic>?,
+        fastMode: args['fastMode'] as bool? ?? false,
       );
     }));
 
