@@ -18,6 +18,7 @@ import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
 import 'package:flutter_deer/util/file_log_writer.dart';
+import 'package:flutter_deer/util/print_service.dart';
 import 'package:flutter_deer/util/store_mode_utils.dart';
 import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
@@ -96,6 +97,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    // 对齐 smdcapp AwaitOrderFragment.data()：待下单列表 = 购物车全量（含必点菜）
     _pendingItems = List<CartItem>.from(widget.cartItems);
     _orderRemark = widget.remark;
     // 对齐 smdcapp: cbPrintKd.isChecked = decodeBoolean(ENABLE_KD, true)
@@ -487,6 +489,12 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
 
       if (success) {
         Toast.show('下单成功');
+        // 对齐 smdcapp postTableInfo 成功后的打印回调：触发厨打/出品单打印
+        final String billno = widget.tableJson?['tmp']?['localbillno']?.toString() ?? '';
+        final String saleid = widget.saleid.isNotEmpty
+            ? widget.saleid
+            : (widget.tableJson?['tmp']?['saleid']?.toString() ?? '');
+        PrintService.instance.triggerCookPrint(saleid: saleid, billno: billno);
         // 对齐 smdcapp：下单成功后返回桌台首页并刷新桌台数据（桌台变为待结算状态）
         TableEventBus.fireTableChanged();
         if (mounted) {
@@ -709,8 +717,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
 
     final List<Map<String, dynamic>> details = <Map<String, dynamic>>[];
 
-    // 对齐 smdcapp: 新下单明细 seq = 已下单最大 seq + 1（首单为1），
-    // onlyid 为明细唯一标识（退菜/催菜/挂起等操作均按 onlyid 定位）
+    // 对齐 smdcapp CartGoodsModel：本批待下单明细共用同一 seq（= 已下单最大 seq + 1），
+    // 打印服务按 info.seq == bean.seq 过滤，同批菜品 seq 相同才能整批出票
     final int newSeq = _orderedMaxSeq + 1;
 
     for (final CartItem item in _pendingItems) {
@@ -733,6 +741,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
         'spec': isComb ? '' : item.specText,
         'presentflag': item.isGift ? 1 : 0,
         'hangflag': item.isSuspended ? 1 : 0,
+        // 对齐 smdcapp：新下单商品 isPrint=true；挂起商品需 hashangflag=99 才会出挂起单
+        'isPrint': true,
+        if (item.isSuspended) 'hashangflag': 99,
         'weighflag': item.isWeigh ? 1 : 0,
         'weighnum': item.weighNum,
         'cookaddamt': isComb ? 0 : item.extraPrice,
@@ -864,6 +875,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
         'remark': '',
         'presentflag': item.isGift ? 1 : 0,
         'hangflag': item.isSuspended ? 1 : 0,
+        // 对齐 smdcapp：新下单商品 isPrint=true；挂起商品需 hashangflag=99 才会出挂起单
+        'isPrint': true,
+        if (item.isSuspended) 'hashangflag': 99,
         'weighflag': 0,
         'weighnum': 0,
         'cookaddamt': 0,
@@ -1130,6 +1144,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
         spid: spid,
         userId: userId,
         userName: userName,
+        // 对齐 smdcapp OrderConfirmationActivity2.saveProduct：
+        // 保存菜品时过滤必点菜（必点菜由点菜页进入时重新计算，避免恢复后重复）
+        excludeMust: forSave,
       ),
       'isUnionFlag': false,
     };
@@ -1138,12 +1155,14 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
   /// 构建主设备模式明细列表（对齐 smdcapp OrderModel.getDownOrderBean 核心字段）
   ///
   /// 下单与保存菜品共用（对齐 smdcapp：postTableInfo 与 saveProduct 的
-  /// detailList 均来自同一套 getDownOrderBean/待下单列表结构）
+  /// detailList 均来自同一套 getDownOrderBean/待下单列表结构）；
+  /// saveProduct 场景排除必点菜（对齐 OrderConfirmationActivity2.saveProduct）
   List<Map<String, dynamic>> _buildPCDetailList({
     required String sid,
     required String spid,
     required String userId,
     required String userName,
+    bool excludeMust = false,
   }) {
     final Map<String, dynamic>? tmp =
         widget.tableJson?['tmp'] as Map<String, dynamic>?;
@@ -1152,9 +1171,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
     final String serverId = tmp?['serverid']?.toString() ?? widget.serverId;
 
     final List<Map<String, dynamic>> detailList = <Map<String, dynamic>>[];
-    // 对齐 smdcapp: 新明细 seq = 已下单最大 seq + 1（套餐主行/子行共用）
+    // 对齐 smdcapp CartGoodsModel：本批待下单明细共用同一 seq（= 已下单最大 seq + 1）
     final int newSeq = _orderedMaxSeq + 1;
     for (final CartItem item in _pendingItems) {
+      if (excludeMust && item.mustflag == 1) continue;
       final String onlyid = _genOnlyId();
       final bool isComb = item.isCombo;
       detailList.add(<String, dynamic>{
@@ -1173,6 +1193,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
         'spec': isComb ? '' : item.specText,
         'presentflag': item.isGift ? 1 : 0,
         'hangflag': item.isSuspended ? 1 : 0,
+        // 对齐 smdcapp：新下单商品 isPrint=true；挂起商品需 hashangflag=99 才会出挂起单
+        'isPrint': true,
+        if (item.isSuspended) 'hashangflag': 99,
         'weighflag': item.isWeigh ? 1 : 0,
         'weighnum': item.weighNum,
         'cookaddamt': isComb ? 0 : item.extraPrice,
@@ -1264,8 +1287,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
 
   /// 构建保存菜品的JSON（对齐 smdcapp OrderConfirmationActivity2.saveProduct）
   ///
-  /// fastFoodBean = 购物车待下单列表（getDownOrderBean 完整结构，filter mustflag != 1，
-  /// 本项目无必点菜建模，等效全量待下单）
+  /// fastFoodBean = 购物车待下单列表（getDownOrderBean 完整结构，过滤必点菜 mustflag == 1）
   /// downPrice = ShoppingCartUtil.getDownPrice(null, null) → 主单金额均按 0 计算
   /// masterBean = getMasterBeanPC(tableInfo, downPrice, minSalemoney=0, servermoney=0, addamt, remark)
   /// pcMasterBean = { tableMaster, detailList, isUnionFlag: false }
@@ -1635,8 +1657,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage>
     // 套餐主行不展示拼接sku串（明细已逐行展开，对齐 smdcapp 主行仅做法/备注）
     final String skuDesc = item.isCombo ? '' : item.specText;
 
-    // 状态标签（对齐 smdcapp DishesTagHelper：赠/折/挂），下单前即可见
+    // 状态标签（对齐 smdcapp DishesTagHelper：必/赠/折/挂），下单前即可见
     final List<Widget> tags = <Widget>[
+      if (item.mustflag == 1) _tag('必', _kBrandRed),
       if (item.isGift) _tag('赠', const Color(0xFFFF8547)),
       if (item.isDiscounted)
         _tag('${(item.discount / 10.0).toStringAsFixed(1)}折', const Color(0xFF5672FF)),

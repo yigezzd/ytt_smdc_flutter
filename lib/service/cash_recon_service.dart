@@ -40,15 +40,16 @@ class CashReconService {
         String logouttime,
       })> loadHandoverData() async {
     if (isLocal) {
+      // 对齐 smdcapp HandWordActivity：本地 SQLite 为主数据源，云端仅回退
       try {
-        final cloud = await _loadHandoverCloud();
-        if (cloud.list.isNotEmpty || cloud.sumdata.isNotEmpty) {
-          return cloud;
+        final local = await _loadHandoverLocal();
+        if (local.list.isNotEmpty || local.sumdata.isNotEmpty) {
+          return local;
         }
       } catch (_) {
-        // 云端不可用时回退本地
+        // 本地不可用时回退云端
       }
-      return _loadHandoverLocal();
+      return _loadHandoverCloud();
     }
     return _loadHandoverCloud();
   }

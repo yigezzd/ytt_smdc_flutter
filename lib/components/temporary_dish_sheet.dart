@@ -1060,8 +1060,8 @@ class _TemporaryDishSheetState extends State<TemporaryDishSheet> {
   /// 缩小版开关（适配表单行高）
   Widget _buildSwitch(bool value, bool isDark, VoidCallback onChanged) {
     return SizedBox(
-      height: 22,
-      width: 38,
+      height: 28,
+      width: 48,
       child: FittedBox(
         child: Switch(
           value: value,

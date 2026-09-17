@@ -475,6 +475,9 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
   }
 
   /// 立即下单（对齐 smdcapp SetMealPopup tvOrder.onClick）
+  ///
+  /// 必须先关闭弹窗再回调跳转：回调会推入下单确认页，若之后再 pop
+  /// 会把刚推入的页面弹掉，"下单"就退化为仅加购。
   void _buyNow() {
     final String error = _validateSelection();
     if (error.isNotEmpty) {
@@ -482,6 +485,7 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
       return;
     }
     final List<dynamic> priceInfo = _calcSetMealPrice();
+    Navigator.of(context).pop();
     widget.onBuyNow?.call(SetMealResult(
       quantity: _quantity,
       specText: priceInfo[0] as String,
@@ -489,7 +493,6 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
       combAddAmt: priceInfo[1] as double,
       selectedItems: priceInfo[2] as List<ComboSelectedItem>,
     ));
-    Navigator.of(context).pop();
   }
 
   // ==================== UI构建 ====================

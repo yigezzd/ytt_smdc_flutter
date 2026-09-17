@@ -26,6 +26,7 @@ import 'package:flutter_deer/util/store_mode_utils.dart';
 import 'package:flutter_deer/util/promotion_helper.dart';
 import 'package:flutter_deer/util/amount_calc_utils.dart';
 import 'package:flutter_deer/util/params_sp_utils.dart';
+import 'package:flutter_deer/util/print_service.dart';
 import 'package:sp_util/sp_util.dart';
 
 /// 品牌红
@@ -921,6 +922,13 @@ class _SettlePageState extends State<SettlePage> {
       }
 
       if (success) {
+        // 对齐 smdcapp SettleActivity 支付完成打印：结帐单打印
+        final String settleBillno = saleMaster['billno']?.toString() ?? '';
+        PrintService.instance.triggerSettlePrint(
+          saleid: widget.saleid,
+          billno: settleBillno,
+          data: jsonEncode(saleMaster),
+        );
         // 双写本地结账流水（非 Web：t_sale_master/t_sale_payway/t_sale_detail/
         // t_sale_cook，失败静默不阻断，对齐计划：本地写失败不影响结账流程）
         if (!kIsWeb) {
@@ -1008,7 +1016,7 @@ class _SettlePageState extends State<SettlePage> {
       'machno': machNo,
       'tableid': widget.tableId.isNotEmpty
           ? widget.tableId
-          : (tmp?['tableid']?.toString() ?? ''),
+          : (tmp?['tableid']?.toString() ?? (hasTable ? '' : '-1')),
       // 快餐/无桌台不上传桌台字段（对齐 smdcapp getSaleMasterBean tablebean==null 分支）
       if (hasTable) 'tablename': widget.tableName,
       if (hasTable) 'tableno': widget.tableCode,
@@ -1555,8 +1563,8 @@ class _SettlePageState extends State<SettlePage> {
         children: <Widget>[
           _sectionTitle('订单明细', isDark),
           const SizedBox(height: 10),
-          // 菜品列表（最多显示5条）
-          ...widget.detailList.take(5).map((Map<String, dynamic> item) {
+          // 菜品列表（最多显示15条）
+          ...widget.detailList.take(15).map((Map<String, dynamic> item) {
             final String name = item['productname']?.toString() ?? '';
             final double price = _toDouble(item['rrprice']);
             final double qty = _toDouble(item['qty']);

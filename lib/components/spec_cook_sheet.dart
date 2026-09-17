@@ -457,11 +457,13 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
       }
     }
     if (buyNow) {
+      // 先关闭弹窗再回调跳转，否则回调推入的下单确认页会被随后的 pop 弹掉
+      Navigator.of(context).pop();
       widget.onBuyNow?.call(_quantity, _specText, _unitPrice, _wholeExtraPrice);
-    } else {
-      widget.onAddToCart?.call(_quantity, _specText, _unitPrice, _wholeExtraPrice);
-      Toast.show('已加入购物车');
+      return;
     }
+    widget.onAddToCart?.call(_quantity, _specText, _unitPrice, _wholeExtraPrice);
+    Toast.show('已加入购物车');
     Navigator.of(context).pop();
   }
 

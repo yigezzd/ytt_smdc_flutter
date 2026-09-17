@@ -277,6 +277,13 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       final int dcMode =
           StoreModeUtils.getCurrentStoreModel() == StoreModeUtils.storeModelNormal ? 1 : 0;
       if (!(mustfreeflag != '1' || dcMode == 0)) return;
+      // 对齐 smdcapp CartGoodsModel.addMust：仅待下单桌台（tablestatus==1）校验必点菜，
+      // 已有下单记录的桌台（后续加菜）不再重复计算
+      if (tmp != null &&
+          tmp['tablestatus'] != null &&
+          _mustToInt(tmp['tablestatus']) != 1) {
+        return;
+      }
 
       final String areaid = widget.tableJson?['areaid']?.toString() ?? '';
       // 数据源：优先读本地 tabledown 必点菜表（对齐 smdcapp ProductHelper.getMustProduct，
@@ -475,6 +482,11 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       if (details.isEmpty || !mounted) return;
       setState(() {
         for (final Map<String, dynamic> d in details) {
+          // 必点菜行不恢复（进入页面时由 _initMustDishes 重新计算，
+          // 对齐 saveProduct 过滤 mustflag==1，避免与自动加购行合并后数量翻倍）
+          if (_mustToInt(d['mustflag']) == 1) {
+            continue;
+          }
           // 套餐明细行归组到主行，不单独加入购物车
           // （对齐 smdcapp ShoppingCartUtil.test3 按 combid/combproductid 归组）
           final String combid = d['combid']?.toString() ?? '';
@@ -1260,6 +1272,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       arguments: <String, dynamic>{
         'tableName': widget.tableName,
         'persons': widget.persons,
+        // 对齐 smdcapp AwaitOrderFragment.data()：待下单列表 = 购物车全量（含必点菜）
         'cartItems': _cartItems,
         'tableId': widget.tableId,
         'tableCode': widget.tableCode,

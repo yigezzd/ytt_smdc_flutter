@@ -119,7 +119,7 @@ class PrintService {
       return true;
     }
     if (isCloudPrint) {
-      return _cloudPrintNotice(saleid: saleid, billno: billno, opertype: '3');
+      return cloudPrintNotice(saleid: saleid, billno: billno, opertype: '3');
     }
     return false;
   }
@@ -136,7 +136,7 @@ class PrintService {
       return _pcPrintPayInfo(data);
     }
     if (isCloudPrint) {
-      return _cloudPrintNotice(saleid: saleid, billno: billno, opertype: '2');
+      return cloudPrintNotice(saleid: saleid, billno: billno, opertype: '2');
     }
     return false;
   }
@@ -191,7 +191,7 @@ class PrintService {
         }, masterDevice: true);
         return true;
       }
-      return _cloudPrintNotice(saleid: saleid, billno: billno, opertype: '8');
+      return cloudPrintNotice(saleid: saleid, billno: billno, opertype: '8');
     } catch (e) {
       Log.e('PrintService.prePrint error: $e');
       return false;
@@ -280,7 +280,7 @@ class PrintService {
   // ──────────── 内部方法 ─────────────────────────────────────────
 
   /// 云打印通知（对齐 smdcapp DishesApi printMsgNotice）
-  Future<bool> _cloudPrintNotice({
+  Future<bool> cloudPrintNotice({
     required String saleid,
     required String billno,
     required String opertype,
@@ -296,7 +296,7 @@ class PrintService {
       });
       return true;
     } catch (e) {
-      Log.e('PrintService._cloudPrintNotice error: $e');
+      Log.e('PrintService.cloudPrintNotice error: $e');
       return false;
     }
   }
