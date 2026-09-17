@@ -124,7 +124,7 @@ class MyApp extends StatelessWidget {
 
   Widget _buildMaterialApp(ThemeProvider provider) {
     return MaterialApp(
-      title: '点餐APP',
+      title: '聚客美滋滋',
       // showPerformanceOverlay: true, //显示性能标签
       debugShowCheckedModeBanner: false, // 去除右上角debug的标签
       // checkerboardRasterCacheImages: true,
