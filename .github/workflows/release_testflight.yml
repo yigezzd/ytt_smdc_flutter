@@ -6,12 +6,14 @@
 #   ASC_KEY_P8                     AuthKey_xxx.p8 文件内容（含 BEGIN/END PRIVATE KEY 行）
 #   APPLE_TEAM_ID                  开发者账号 Team ID（Membership 页可见，10 位）
 #   MATCH_PASSWORD                 证书仓库加密口令（自定义强密码，务必妥善保存）
-#   CERT_REPO_SSH_KEY              证书仓库部署私钥（已添加为 ylx-ios-certs 仓库的 Deploy Key）
+#   CERT_REPO_SSH_KEY              证书仓库部署私钥（已添加为 ytt-smdc-ios-certs 仓库的 Deploy Key）
 #
 # 说明：
-#   - 与 ylx-boss-flutter 共用同一个苹果开发者账号，因此复用同一证书仓库与上述 Secrets 取值
+#   - 与 ylx-boss-flutter 同属一个苹果开发者账号，但使用本项目独立的证书仓库
+#     （yigezzd/ytt-smdc-ios-certs），加密口令与证书均与 boss 项目隔离
 #   - 签名证书与描述文件由 fastlane match 自动创建，加密存储在私有仓库 CERT_REPO
-#   - 首次运行会自动创建 App Store 描述文件（Apple Distribution 证书若已存在则直接复用）
+#   - 首次运行会自动创建本项目自己的 Distribution 证书 + App Store 描述文件
+#     （苹果账号最多 3 张 Distribution 证书，不与其他项目共用）
 #   - 构建号使用 GitHub 运行序号，避免重复上传同版本号被 App Store Connect 拒绝
 #   - 需要先在 App Store Connect 创建好 App 记录（Bundle ID: com.ytt.smdc）
 #
@@ -23,7 +25,7 @@ on:
   workflow_dispatch:
 
 env:
-  CERT_REPO: git@github.com:yigezzd/ylx-ios-certs.git
+  CERT_REPO: git@github.com:yigezzd/ytt-smdc-ios-certs.git
   BUNDLE_ID: com.ytt.smdc
   ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
   ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
