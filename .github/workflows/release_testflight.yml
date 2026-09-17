@@ -52,7 +52,7 @@ jobs:
       - name: 写入 App Store Connect API 密钥
         run: |
           mkdir -p private_keys
-          printf '%s' "$ASC_KEY_P8" > "private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s\n' "$ASC_KEY_P8" > "private_keys/AuthKey_${ASC_KEY_ID}.p8"
           mkdir -p ~/.appstoreconnect/private_keys
           cp "private_keys/AuthKey_${ASC_KEY_ID}.p8" ~/.appstoreconnect/private_keys/
           python3 - <<'PYEOF'
@@ -75,7 +75,7 @@ jobs:
           CERT_REPO_SSH_KEY: ${{ secrets.CERT_REPO_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh
-          printf '%s' "$CERT_REPO_SSH_KEY" > ~/.ssh/cert_repo_key
+          printf '%s\n' "$CERT_REPO_SSH_KEY" > ~/.ssh/cert_repo_key
           chmod 600 ~/.ssh/cert_repo_key
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/cert_repo_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
 
