@@ -4,6 +4,26 @@ import 'package:flutter/services.dart';
 /// 品牌红（全局统一）
 const Color _kBrandRed = Color(0xFFE63F31);
 
+/// 居中弹窗内容容器：键盘弹起时弹窗整体上移，避免底部按钮被系统键盘遮挡；
+/// 可用高度不足时内容可滚动，避免弹窗溢出屏幕。
+///
+/// 自绘居中卡片（非 Dialog/BottomSheet）必须用它包一层，否则系统键盘会盖住底部按钮。
+class KeyboardAvoidingDialogBody extends StatelessWidget {
+  const KeyboardAvoidingDialogBody({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 120),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Center(child: SingleChildScrollView(child: child)),
+    );
+  }
+}
+
 /// 通用确认弹窗组件（对齐图二样式：居中标题 + 居中内容 + 双按钮并排）
 ///
 /// 使用方式：
@@ -250,6 +270,9 @@ class InputDialog extends StatefulWidget {
   final double? changeBaseAmount;
 
   /// 弹出输入弹窗，返回输入的文本；返回 null 表示取消
+  ///
+  /// [barrierDismissible] 默认 false：输入框弹窗点遮罩不关闭，
+  /// 避免误触遮罩丢失已输入内容（取消请点"取消"按钮或系统返回键）。
   static Future<String?> show(
     BuildContext context, {
     String title = '请输入',
@@ -258,7 +281,7 @@ class InputDialog extends StatefulWidget {
     String cancelText = '取消',
     String confirmText = '确定',
     int maxLines = 3,
-    bool barrierDismissible = true,
+    bool barrierDismissible = false,
     TextInputType? keyboardType,
     List<TextInputFormatter>? inputFormatters,
     double? changeBaseAmount,
@@ -317,143 +340,146 @@ class _InputDialogState extends State<InputDialog> {
 
   @override
   Widget build(BuildContext context) {
+    return KeyboardAvoidingDialogBody(child: _buildCard(context));
+  }
+
+  /// 弹窗卡片
+  Widget _buildCard(BuildContext context) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Center(
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          width: 300,
-          padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.12),
-                blurRadius: 24,
-                offset: const Offset(0, 8),
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        width: 300,
+        padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.12),
+              blurRadius: 24,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 标题
+            Text(
+              widget.title,
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w600,
+                color: isDark ? Colors.white : const Color(0xFF1D2129),
+              ),
+            ),
+            const SizedBox(height: 16),
+            // 输入框
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              maxLines: widget.maxLines,
+              keyboardType: widget.keyboardType,
+              inputFormatters: widget.inputFormatters,
+              style: TextStyle(
+                fontSize: 14,
+                color: isDark ? Colors.white : const Color(0xFF1D2129),
+              ),
+              decoration: InputDecoration(
+                hintText: widget.hintText,
+                hintStyle: const TextStyle(fontSize: 14, color: Color(0xFFC9CDD4)),
+                filled: true,
+                fillColor: isDark ? const Color(0xFF3A3A3C) : const Color(0xFFF7F8FA),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: Color(0xFFE5E6EB), width: 1),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: _kBrandRed, width: 1.2),
+                ),
+              ),
+            ),
+            // 找零提示（对齐 smdcapp PricePopup tvChange：输入 > 应收时显示）
+            if (_changeAmt != null) ...<Widget>[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '找零：¥${_changeAmt!.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: _kBrandRed,
+                  ),
+                ),
               ),
             ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // 标题
-              Text(
-                widget.title,
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                  color: isDark ? Colors.white : const Color(0xFF1D2129),
-                ),
-              ),
-              const SizedBox(height: 16),
-              // 输入框
-              TextField(
-                controller: _controller,
-                autofocus: true,
-                maxLines: widget.maxLines,
-                keyboardType: widget.keyboardType,
-                inputFormatters: widget.inputFormatters,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: isDark ? Colors.white : const Color(0xFF1D2129),
-                ),
-                decoration: InputDecoration(
-                  hintText: widget.hintText,
-                  hintStyle: const TextStyle(fontSize: 14, color: Color(0xFFC9CDD4)),
-                  filled: true,
-                  fillColor: isDark ? const Color(0xFF3A3A3C) : const Color(0xFFF7F8FA),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: Color(0xFFE5E6EB), width: 1),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: _kBrandRed, width: 1.2),
+            const SizedBox(height: 24),
+            // 按钮区域
+            Row(
+              children: [
+                // 取消按钮
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => Navigator.of(context).pop(),
+                    child: Container(
+                      height: 42,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF3A3A3C) : const Color(0xFFF2F3F5),
+                        borderRadius: BorderRadius.circular(8),
+                        border: isDark
+                            ? Border.all(color: const Color(0xFF4A4A4C), width: 0.5)
+                            : null,
+                      ),
+                      child: Text(
+                        widget.cancelText,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          color: isDark ? const Color(0xFFCCCCCC) : const Color(0xFF4E5969),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-              // 找零提示（对齐 smdcapp PricePopup tvChange：输入 > 应收时显示）
-              if (_changeAmt != null) ...<Widget>[
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    '找零：¥${_changeAmt!.toStringAsFixed(2)}',
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: _kBrandRed,
+                const SizedBox(width: 12),
+                // 确定按钮
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => Navigator.of(context).pop(_controller.text.trim()),
+                    child: Container(
+                      height: 42,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: _kBrandRed,
+                        borderRadius: BorderRadius.circular(8),
+                        boxShadow: [
+                          BoxShadow(
+                            color: _kBrandRed.withOpacity(0.3),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                      child: Text(
+                        widget.confirmText,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.white,
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ],
-              const SizedBox(height: 24),
-              // 按钮区域
-              Row(
-                children: [
-                  // 取消按钮
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () => Navigator.of(context).pop(),
-                      child: Container(
-                        height: 42,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF3A3A3C) : const Color(0xFFF2F3F5),
-                          borderRadius: BorderRadius.circular(8),
-                          border: isDark
-                              ? Border.all(color: const Color(0xFF4A4A4C), width: 0.5)
-                              : null,
-                        ),
-                        child: Text(
-                          widget.cancelText,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                            color: isDark ? const Color(0xFFCCCCCC) : const Color(0xFF4E5969),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  // 确定按钮
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () => Navigator.of(context).pop(_controller.text.trim()),
-                      child: Container(
-                        height: 42,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: _kBrandRed,
-                          borderRadius: BorderRadius.circular(8),
-                          boxShadow: [
-                            BoxShadow(
-                              color: _kBrandRed.withOpacity(0.3),
-                              blurRadius: 8,
-                              offset: const Offset(0, 3),
-                            ),
-                          ],
-                        ),
-                        child: Text(
-                          widget.confirmText,
-                          style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w500,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

@@ -4,8 +4,10 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
+import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:intl/intl.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sp_util/sp_util.dart';
 
@@ -13,11 +15,11 @@ import 'package:sp_util/sp_util.dart';
 ///
 /// 功能：
 /// 1. 异步批量写入日志文件（使用 StreamController 队列，避免高频 IO）
-/// 2. 按日期分目录：{appDocDir}/log/{yyyy-MM-dd}/json_writer/{yyyy-MM-dd}.log
-/// 3. 分类日志支持：crash_log / mq_log / sql_log / print_log 等
+/// 2. 按日期分目录：{appDocDir}/log/{yyyy-MM-dd}/{category}/{yyyy-MM-dd}.log
+/// 3. 分类日志支持：api_log / crash_log / mq_log / sql_log / print_log 等
 /// 4. 单条日志最大 650KB 截断保护
-/// 5. 磁盘空间低于 100MB 停止写入
-/// 6. 启动时记录设备基础信息
+/// 5. 磁盘空间低于 100MB 停止写入（暂未实现，smdcapp 由 StorageUtils 提供）
+/// 6. 日志统一格式：`时间_{yyyy-MM-dd HH:mm:ss.SSS}_{主设备连接}_{tag} [Size: x]:{正文}`
 /// 7. 自动清理过期日志（保留天数按月份：1-2月20天，其他10天）
 class FileLogWriter {
   FileLogWriter._();
@@ -46,6 +48,9 @@ class FileLogWriter {
 
   /// 日志分类（对齐 smdcapp FileUtils.FolderType）
   static const String categoryJsonWriter = 'json_writer';
+
+  /// 接口流水（对齐 smdcapp LoggingInterceptor 的"接口日志"）
+  static const String categoryApiLog = 'api_log';
   static const String categoryCrashLog = 'crash_log';
   static const String categoryMqLog = 'mq_log';
   static const String categorySqlLog = 'sql_log';
@@ -84,15 +89,17 @@ class FileLogWriter {
   ///
   /// 需在登录成功后调用（此时商户号/门店/机号已存入 SpUtil），
   /// 对齐 smdcapp LoginActivity 登录成功后调用 initLogInfo 的时机。
-  void logDeviceInfo() {
+  Future<void> logDeviceInfo() async {
     if (!_initialized || kIsWeb) return;
-    _writeDeviceInfo();
+    await _writeDeviceInfo();
   }
 
   // ─────────────── 公共写入方法 ───────────────
 
   /// 写入运行日志（对齐 smdcapp JsonWriter.writeToFile）
-  void writeToFile(dynamic data, {String tag = '描述'}) {
+  ///
+  /// [category] 默认写入 json_writer，指定后写入对应分类目录（如 mq_log）。
+  void writeToFile(dynamic data, {String tag = '描述', String category = categoryJsonWriter}) {
     if (data == null) return;
     String content;
     if (data is String) {
@@ -104,7 +111,55 @@ class FileLogWriter {
         content = 'Serialization Error: $e';
       }
     }
-    _enqueue(content, tag, categoryJsonWriter);
+    _enqueue(content, tag, category);
+  }
+
+  /// 写入接口流水日志（对齐 smdcapp LoggingInterceptor 的接口日志）
+  ///
+  /// 首行固定为可检索的定位信息：`POST 接口路径 → 成功/失败 结论 耗时`，
+  /// 之后为请求参数与响应原始内容（各自一行，内部换行已折叠）。
+  void writeApiLog({
+    required String method,
+    required String path,
+    required String result,
+    required bool success,
+    int elapsedMs = 0,
+    String params = '',
+    String response = '',
+  }) {
+    final sb = StringBuffer();
+    sb.write(method);
+    sb.write(' ');
+    sb.write(path);
+    sb.write(success ? ' → 成功 ' : ' → 失败 ');
+    sb.write(result);
+    if (elapsedMs > 0) {
+      sb.write(' ${elapsedMs}ms');
+    }
+    if (params.isNotEmpty) {
+      sb.write('\n参数: ${_oneLine(params)}');
+    }
+    if (response.isNotEmpty) {
+      sb.write('\n响应: ${_oneLine(response)}');
+    }
+    _enqueue(sb.toString(), '接口流水', categoryApiLog);
+  }
+
+  /// 写入崩溃日志（未捕获异常 / Flutter 框架异常）
+  ///
+  /// 立即同步落盘：进程随后可能退出，不能等批量缓冲（否则最后几行正是关键线索）。
+  /// 首行携带异常摘要，堆栈按行跟随其后。
+  void writeCrashLog(Object error, StackTrace? stackTrace, {String context = ''}) {
+    final sb = StringBuffer('未捕获异常 ');
+    sb.write(_oneLine(error.toString()));
+    if (context.isNotEmpty) {
+      sb.write(' | 场景: $context');
+    }
+    final String stack = stackTrace?.toString().trimRight() ?? '';
+    if (stack.isNotEmpty) {
+      sb.write('\n$stack');
+    }
+    _enqueue(sb.toString(), '崩溃日志', categoryCrashLog, immediate: true);
   }
 
   /// 写入错误日志（对齐 smdcapp WriteErrorLogUtils.writeErrorLog）
@@ -126,7 +181,8 @@ class FileLogWriter {
     sb.writeln('${_timePrefix()}---->>>$url');
     sb.writeln('${_timePrefix()}---->>>$params');
     sb.writeln('----time >>>${_formatTime(DateTime.now())}');
-    _enqueue(sb.toString(), '错误日志', categoryCrashLog);
+    // 立即落盘：接口失败后往往紧跟着崩溃或退出，批量缓冲会把这批线索丢掉
+    _enqueue(sb.toString(), '错误日志', categoryCrashLog, immediate: true);
   }
 
   /// 写入MQ日志（对齐 smdcapp WriteErrorLogUtils.writeMqLog）
@@ -174,7 +230,7 @@ class FileLogWriter {
 
   // ─────────────── 内部实现 ───────────────
 
-  void _enqueue(String data, String tag, String category) {
+  void _enqueue(String data, String tag, String category, {bool immediate = false}) {
     if (!_initialized || kIsWeb) return;
 
     // 长度截断保护（对齐 smdcapp MAX_LOG_LENGTH）
@@ -184,24 +240,28 @@ class FileLogWriter {
           '${data.substring(0, _maxLogLength)}\n...[Truncated, Original total: ${data.length} chars]';
     }
 
-    // 计算大小显示
+    // 计算大小显示（对齐 smdcapp JsonWriter.sendToChannel）
     final int len = data.length;
-    String sizeDisplay;
-    if (len > 1024 * 1024) {
-      sizeDisplay = '${(len * 100 / (1024 * 1024)).toStringAsFixed(2)} MB';
-    } else {
-      sizeDisplay = '${(len * 100 / 1024).toStringAsFixed(2)} KB';
-    }
+    final String sizeDisplay = len > 1024 * 1024
+        ? '${(len / (1024 * 1024)).toStringAsFixed(2)} MB'
+        : '${(len / 1024).toStringAsFixed(2)} KB';
 
     final enrichedTag = '$tag [Size: $sizeDisplay]';
     final time = DateFormat('yyyy-MM-dd HH:mm:ss.SSS').format(DateTime.now());
 
-    _logController.add(_LogItem(
+    final item = _LogItem(
       tag: enrichedTag,
       data: processedData,
       time: time,
       category: category,
-    ));
+    );
+
+    if (immediate) {
+      _writeItemsSync(<_LogItem>[item]);
+      return;
+    }
+
+    _logController.add(item);
   }
 
   void _onLogItem(_LogItem item) {
@@ -232,42 +292,12 @@ class FileLogWriter {
     try {
       if (_logRootPath == null) return;
 
-      // 按分类分组写入
-      final Map<String, List<_LogItem>> grouped = {};
-      for (final item in items) {
-        grouped.putIfAbsent(item.category, () => []).add(item);
-      }
-
-      final dateStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      final String dateStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      final Map<String, List<_LogItem>> grouped = _groupByCategory(items);
 
       for (final entry in grouped.entries) {
-        final category = entry.key;
-        final categoryItems = entry.value;
-
-        final dirPath = '$_logRootPath/$dateStr/$category';
-        final dir = Directory(dirPath);
-        if (!dir.existsSync()) {
-          dir.createSync(recursive: true);
-        }
-
-        final filePath = '$dirPath/$dateStr.log';
-        final file = File(filePath);
-
-        final sb = StringBuffer();
-        for (final item in categoryItems) {
-          // 格式：时间_{time}_{pcAlive}_{tag}:{data}
-          sb.write('时间_');
-          sb.write(item.time);
-          sb.write('_');
-          sb.write(ConnectionManager.pcAlive);
-          sb.write('_');
-          sb.write(item.tag);
-          sb.write(':');
-          sb.write(item.data);
-          sb.write('\n');
-        }
-
-        await file.writeAsString(sb.toString(),
+        final File file = _categoryFile(dateStr, entry.key);
+        await file.writeAsString(_recordsText(entry.value),
             mode: FileMode.append, flush: true);
       }
     } catch (e) {
@@ -277,11 +307,77 @@ class FileLogWriter {
     }
   }
 
+  /// 同步落盘（崩溃等进程可能随时退出的场景，不走批量缓冲）
+  void _writeItemsSync(List<_LogItem> items) {
+    if (_logRootPath == null) return;
+    try {
+      final String dateStr = DateFormat('yyyy-MM-dd').format(DateTime.now());
+      final Map<String, List<_LogItem>> grouped = _groupByCategory(items);
+
+      for (final entry in grouped.entries) {
+        _categoryFile(dateStr, entry.key)
+            .writeAsStringSync(_recordsText(entry.value),
+                mode: FileMode.append, flush: true);
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('FileLogWriter immediate write error: $e');
+      }
+    }
+  }
+
+  Map<String, List<_LogItem>> _groupByCategory(List<_LogItem> items) {
+    final Map<String, List<_LogItem>> grouped = {};
+    for (final item in items) {
+      grouped.putIfAbsent(item.category, () => []).add(item);
+    }
+    return grouped;
+  }
+
+  File _categoryFile(String dateStr, String category) {
+    final dirPath = '$_logRootPath/$dateStr/$category';
+    final dir = Directory(dirPath);
+    if (!dir.existsSync()) {
+      dir.createSync(recursive: true);
+    }
+    return File('$dirPath/$dateStr.log');
+  }
+
+  String _recordsText(List<_LogItem> items) {
+    final sb = StringBuffer();
+    for (final item in items) {
+      // 格式：时间_{time}_{pcAlive}_{tag}:{data}
+      sb.write('时间_');
+      sb.write(item.time);
+      sb.write('_');
+      sb.write(ConnectionManager.pcAlive);
+      sb.write('_');
+      sb.write(item.tag);
+      sb.write(':');
+      sb.write(item.data);
+      sb.write('\n');
+    }
+    return sb.toString();
+  }
+
+  /// 折叠内部换行，保证一条记录在文件中的行数可预期
+  static String _oneLine(String text) =>
+      text.replaceAll('\r', '').replaceAll('\n', ' ');
+
   /// 记录设备基础信息（对齐 smdcapp JsonWriter.initLogInfo）
-  void _writeDeviceInfo() {
+  Future<void> _writeDeviceInfo() async {
+    String appVersion = '';
+    try {
+      final PackageInfo info = await PackageInfo.fromPlatform();
+      appVersion = '${info.version}+${info.buildNumber}';
+    } catch (_) {}
+
     final sb = StringBuffer('\n');
     sb.writeln('---------初始化信息---------');
     sb.writeln('连接模式: ${ConnectionManager.pcAlive ? "主设备" : "云服务"}');
+    sb.writeln('软件版本: $appVersion');
+    sb.writeln('云服务地址: ${HttpApi.baseUrlYtt}');
+    sb.writeln('主设备地址: ${ConnectionManager.getLocalhost()}');
     sb.writeln('商户号: ${SpUtil.getString(Constant.businessNumber) ?? ""}');
     sb.writeln('门店编码: ${SpUtil.getString(Constant.storeCode) ?? ""}');
     sb.writeln('机号: ${SpUtil.getString(Constant.machNo) ?? ""}');

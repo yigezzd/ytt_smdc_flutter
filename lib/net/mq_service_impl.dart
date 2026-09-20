@@ -9,6 +9,7 @@ import 'dart:convert';
 
 import 'package:dart_amqp/dart_amqp.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_deer/util/file_log_writer.dart';
 import 'package:flutter_deer/util/log_upload_utils.dart';
 
 /// 桌台变更事件流控制器
@@ -74,6 +75,16 @@ String _account = '';
 String _storeCode = '';
 String _machNo = '';
 
+/// MQ 日志：控制台 + mq_log 文件
+///
+/// Release 下 debugPrint 被置空，MQ 连接与消息处理过程只能靠文件日志回溯。
+void _mqLog(String message) {
+  final String line = '[MqService] $message';
+  debugPrint(line);
+  FileLogWriter.instance
+      .writeToFile(message, tag: 'MQ', category: FileLogWriter.categoryMqLog);
+}
+
 /// 连接 RabbitMQ（对齐 smdcapp RabbitMqUtil.Connect）
 Future<void> connectMq({
   required String host,
@@ -98,7 +109,7 @@ Future<void> connectMq({
     // 先断开旧连接
     await _closeConnection();
 
-    debugPrint('[MqService] 正在连接 RabbitMQ: $host:$port, '
+    _mqLog('正在连接 RabbitMQ: $host:$port, '
         'account=$_account, storeCode=$_storeCode, machNo=$_machNo');
 
     final ConnectionSettings settings = ConnectionSettings(
@@ -112,7 +123,7 @@ Future<void> connectMq({
     _client = Client(settings: settings);
     await _client!.connect();
     _channel = await _client!.channel();
-    debugPrint('[MqService] TCP连接成功，channel已建立');
+    _mqLog('TCP连接成功，channel已建立');
 
     // 队列名：{account}-{storeCode}-{machNo}（对齐 smdcapp QUEUE_NAME）
     final String queueName = '$_account-$_storeCode-$_machNo';
@@ -123,7 +134,7 @@ Future<void> connectMq({
       durable: false,
       autoDelete: true,
     );
-    debugPrint('[MqService] 队列声明成功: $queueName');
+    _mqLog('队列声明成功: $queueName');
 
     // 引用已存在的 topic exchange（对齐 smdcapp：不声明 exchange，仅绑定）
     // 服务端 "ytt" exchange 已存在，重新声明可能因 durable 不匹配导致 channel 关闭
@@ -138,7 +149,7 @@ Future<void> connectMq({
     await queue.bind(exchange, 'ytt.$_account.$_storeCode');
     await queue.bind(exchange, 'ytt.$_account.$_storeCode.$_machNo');
 
-    debugPrint('[MqService] 已连接 RabbitMQ: $host:$port, queue=$queueName, '
+    _mqLog('已连接 RabbitMQ: $host:$port, queue=$queueName, '
         'routingKeys=[ytt.$_account, ytt.$_account.$_storeCode, ytt.$_account.$_storeCode.$_machNo]');
     _connected = true;
 
@@ -150,7 +161,7 @@ Future<void> connectMq({
       message.ack();
     });
   } catch (e) {
-    debugPrint('[MqService] 连接失败: $e');
+    _mqLog('连接失败: $e');
     _connected = false;
     // 10秒后重试（对齐 smdcapp setNetworkRecoveryInterval(10000)）
     _scheduleReconnect();
@@ -177,15 +188,15 @@ void _handleMessage(AmqpMessage message) {
         break;
       case 5:
         // 上传日志（对齐 smdcapp RabbitMqUtil case 5 → JsonWriter.uploadLog）
-        debugPrint('[MqService] 收到上传日志指令 retcode=5');
+        _mqLog('收到上传日志指令 retcode=5');
         // 异步执行日志压缩上传，不阻塞 MQ 消息处理（内部已捕获异常）
         LogUploadUtils.uploadLog().then((result) {
-          debugPrint('[MqService] 日志上传结果: $result');
+          _mqLog('日志上传结果: $result');
         });
         break;
       case 6:
         // 数据清空/强制下线（对齐 smdcapp AppStateManager.setLoginStatus）
-        debugPrint('[MqService] 收到强制下线推送 retcode=6');
+        _mqLog('收到强制下线推送 retcode=6');
         if (!_forceLogoutController.isClosed) {
           _forceLogoutController.add('登录失效，请重新登录');
         }
@@ -194,19 +205,19 @@ void _handleMessage(AmqpMessage message) {
       case 10:
       case 11:
         // 桌台变更（开台/锁台/清台/下单等）
-        debugPrint('[MqService] 收到桌台变更推送 retcode=$retcode');
+        _mqLog('收到桌台变更推送 retcode=$retcode');
         _handleTableChange(json);
         break;
       case 9:
         // 扫码点餐接单（对齐 smdcapp sendMsg(handler, 9, msg)）
-        debugPrint('[MqService] 收到扫码点餐接单推送 retcode=9');
+        _mqLog('收到扫码点餐接单推送 retcode=9');
         if (!_scanOrderController.isClosed) {
           _scanOrderController.add(json);
         }
         break;
       case 13:
         // 刷新叫号列表（对齐 smdcapp sendMsg(handler, 13, ...)）
-        debugPrint('[MqService] 收到叫号刷新推送 retcode=13');
+        _mqLog('收到叫号刷新推送 retcode=13');
         if (!_callNumberController.isClosed) {
           _callNumberController.add(null);
         }
@@ -214,18 +225,18 @@ void _handleMessage(AmqpMessage message) {
       case 66:
         // 打印通知（对齐 smdcapp printMsgNotice）
         final String data = json['data']?.toString() ?? '';
-        debugPrint('[MqService] 收到打印通知推送 retcode=66');
+        _mqLog('收到打印通知推送 retcode=66');
         if (data.isNotEmpty && !_printNoticeController.isClosed) {
           _printNoticeController.add(data);
         }
         break;
       default:
         // 其它消息暂不处理
-        debugPrint('[MqService] 未处理的消息码 retcode=$retcode');
+        _mqLog('未处理的消息码 retcode=$retcode');
         break;
     }
   } catch (e) {
-    debugPrint('[MqService] 消息解析失败: $e');
+    _mqLog('消息解析失败: $e');
   }
 }
 
@@ -261,7 +272,7 @@ void _handleTableChange(Map<String, dynamic> json) {
       }
     }
   } catch (e) {
-    debugPrint('[MqService] 锁台事件解析失败: $e');
+    _mqLog('锁台事件解析失败: $e');
   }
 }
 
@@ -270,7 +281,7 @@ void _scheduleReconnect() {
   _reconnectTimer?.cancel();
   _reconnectTimer = Timer(const Duration(seconds: 10), () {
     if (!_connected && _account.isNotEmpty) {
-      debugPrint('[MqService] 尝试重连 RabbitMQ...');
+      _mqLog('尝试重连 RabbitMQ...');
       connectMq(
         host: _host,
         port: _port,
@@ -288,7 +299,7 @@ void disconnectMq() {
   _reconnectTimer = null;
   _connected = false;
   _closeConnection();
-  debugPrint('[MqService] 已断开 RabbitMQ 连接');
+  _mqLog('已断开 RabbitMQ 连接');
 }
 
 /// 关闭底层连接

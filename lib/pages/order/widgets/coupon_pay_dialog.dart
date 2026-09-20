@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_deer/components/confirm_dialog.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/util/device_utils.dart';
@@ -146,7 +147,7 @@ class _CouponPayDialogState extends State<CouponPayDialog> {
     return PopScope(
       // 对齐 smdcapp XPopup dismissOnBackPressed(false)：只能通过取消关闭
       canPop: false,
-      child: Center(
+      child: KeyboardAvoidingDialogBody(
         child: Material(
           color: Colors.transparent,
           child: Container(

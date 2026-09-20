@@ -117,9 +117,11 @@ class _ReservePageState extends State<ReservePage> {
     final TextEditingController timeCtrl = TextEditingController();
     return showDialog<Map<String, dynamic>>(
       context: context,
+      // 表单弹窗：点遮罩不关闭，避免误触丢失已填内容（取消请点"取消"）
+      barrierDismissible: false,
       builder: (BuildContext ctx) {
         final bool isDark = Theme.of(ctx).brightness == Brightness.dark;
-        return Center(
+        return KeyboardAvoidingDialogBody(
           child: Material(
             color: Colors.transparent,
             child: Container(

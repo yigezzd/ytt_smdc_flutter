@@ -21,21 +21,62 @@ import 'package:sp_util/sp_util.dart';
 /// 防止多个并发请求同时触发跳转登录页
 bool _isRedirectingToLogin = false;
 
-/// 记录接口操作日志（对齐 smdcapp WriteErrorLogUtils.writeErrorLog(null, url, params, tips)）
+/// 本文件所有接口调用均为 POST（云服务 JSON、主设备表单编码）
+const String _kHttpMethod = 'POST';
+
+/// 不逐条记录成功流水的接口路径（对齐 smdcapp LoggingInterceptor.IGNORE_PATHS）
 ///
-/// 所有接口调用（[request] / [requestForm]）的成功与失败都会经此记录到 crash_log 分类，
-/// 使运行日志能完整追溯每一次接口操作。[params] 过大时由 FileLogWriter 自动截断保护。
-void _logApi(String url, dynamic params, String result) {
+/// 这些接口响应体大（全量菜品/桌台数据）或调用频繁（桌台列表、主设备探活），
+/// 逐条记录会让日志迅速膨胀并淹没有效信息；失败时仍会记录，便于排查。
+const List<String> _ignoredLogPaths = <String>[
+  '/update/tabledown',
+  '/bi/product/getProductList',
+  '/bi/type/getTypeListandCode',
+  '/table/info/getTableInfoList',
+  '/table/area/getAreaList',
+  '/api/table/GetTableInfoList',
+  '/api/table/QueryTableAreaList',
+  '/reserve/findList',
+  '/api/host/GetHostSyncTime',
+];
+
+/// 记录接口日志
+///
+/// - 成功与失败都写入 api_log 流水（[FileLogWriter.writeApiLog]），首行携带
+///   `接口路径 → 成功/失败 结论 耗时`，便于直接检索定位；
+/// - 失败/异常额外写一份到 crash_log（[FileLogWriter.writeErrorLog]），
+///   使"出问题时刻"在 crash_log 中仍可一眼看到；
+/// - [_ignoredLogPaths] 中的接口成功时不记录（避免日志膨胀），失败仍记录。
+void _logApi(
+  String url,
+  dynamic params,
+  String result, {
+  bool success = false,
+  int elapsedMs = 0,
+  String response = '',
+}) {
   String path = url;
   try {
     path = Uri.parse(url).path;
   } catch (_) {}
-  FileLogWriter.instance.writeErrorLog(
-    null,
-    path,
-    params is String ? params : json.encode(params),
-    result,
+  final String paramsText = params == null
+      ? ''
+      : (params is String ? params : json.encode(params));
+
+  if (success && _ignoredLogPaths.any(path.contains)) return;
+
+  FileLogWriter.instance.writeApiLog(
+    method: _kHttpMethod,
+    path: path,
+    result: result,
+    success: success,
+    elapsedMs: elapsedMs,
+    params: paramsText,
+    response: response,
   );
+  if (!success) {
+    FileLogWriter.instance.writeErrorLog(null, path, paramsText, result);
+  }
 }
 
 /// ylx-boss 风格的统一请求方法（与 Vue 端 util.ts 保持一致）
@@ -135,11 +176,14 @@ Future<Map<String, dynamic>> request(
   const String baseUrl = HttpApi.baseUrlYtt;
   final String fullUrl = url.startsWith('http') ? url : '$baseUrl$url';
 
+  final Stopwatch stopwatch = Stopwatch()..start();
   try {
     final Response<String> response = await DioUtils.instance.dio.post<String>(
       fullUrl,
       data: requestData,
     );
+    stopwatch.stop();
+    final int elapsed = stopwatch.elapsedMilliseconds;
     final String content = response.data.toString();
     final Map<String, dynamic> jsonMap =
         json.decode(content) as Map<String, dynamic>;
@@ -148,29 +192,36 @@ Future<Map<String, dynamic>> request(
       final dynamic retcode = jsonMap['retcode'];
       final String retmsg = jsonMap['retmsg']?.toString() ?? '请求失败';
       if (retcode == 0) {
-        _logApi(fullUrl, params, '接口成功 retcode=0');
+        _logApi(fullUrl, params, 'retcode=0',
+            success: true, elapsedMs: elapsed, response: content);
         return jsonMap;
       }
       if (retcode == -2 || retcode == -3) {
         // 登录信息失效：清除缓存并跳转登录页
+        _logApi(fullUrl, params, 'retcode=$retcode retmsg=$retmsg',
+            elapsedMs: elapsed, response: content);
         _handleLoginExpired(retmsg);
         throw _ApiException(jsonMap);
       }
       if (showError && retmsg.isNotEmpty) {
         Toast.show(retmsg);
       }
-      _logApi(fullUrl, params, '接口失败 retcode=$retcode retmsg=$retmsg');
+      _logApi(fullUrl, params, 'retcode=$retcode retmsg=$retmsg',
+          elapsedMs: elapsed, response: content);
       throw _ApiException(jsonMap);
     }
     // 兼容非 retcode 格式（如拦截器包装的 code/message）
     if (jsonMap['code'] == 0) {
-      _logApi(fullUrl, params, '接口成功 code=0');
+      _logApi(fullUrl, params, 'code=0',
+          success: true, elapsedMs: elapsed, response: content);
       return jsonMap;
     }
     final String msg = jsonMap['message']?.toString() ?? '请求失败';
     if (showError && msg.isNotEmpty) {
       Toast.show(msg);
     }
+    _logApi(fullUrl, params, 'code=${jsonMap['code']} message=$msg',
+        elapsedMs: elapsed, response: content);
     throw _ApiException(jsonMap);
   } on _ApiException {
     // 业务异常直接向上抛出（已 Toast）
@@ -178,10 +229,12 @@ Future<Map<String, dynamic>> request(
   } catch (e) {
     // 网络异常 / DioException —— 始终提取真实错误信息，不论 showError
     String errorMsg = '网络请求异常';
+    String respText = '';
     if (e is DioException) {
       if (e.response?.data != null) {
         try {
           final dynamic respData = e.response!.data;
+          respText = respData.toString();
           final Map<String, dynamic> errMap = respData is String
               ? json.decode(respData) as Map<String, dynamic>
               : (respData as Map<String, dynamic>);
@@ -200,7 +253,8 @@ Future<Map<String, dynamic>> request(
       }
     }
     if (showError) Toast.show(errorMsg);
-    _logApi(fullUrl, params, '接口异常: $errorMsg');
+    _logApi(fullUrl, params, '异常: $errorMsg',
+        elapsedMs: stopwatch.elapsedMilliseconds, response: respText);
     throw _ApiException(<String, dynamic>{'retcode': -1, 'retmsg': errorMsg});
   }
 }
@@ -441,6 +495,7 @@ Future<Map<String, dynamic>> requestForm(
   final Map<String, dynamic> signedData =
       await _buildSignedParams(formData, fullUrl);
 
+  final Stopwatch stopwatch = Stopwatch()..start();
   try {
     final Response<String> response = await DioUtils.instance.dio.post<String>(
       fullUrl,
@@ -449,6 +504,8 @@ Future<Map<String, dynamic>> requestForm(
         contentType: Headers.formUrlEncodedContentType,
       ),
     );
+    stopwatch.stop();
+    final int elapsed = stopwatch.elapsedMilliseconds;
     final String content = response.data.toString();
     final Map<String, dynamic> jsonMap =
         json.decode(content) as Map<String, dynamic>;
@@ -458,13 +515,15 @@ Future<Map<String, dynamic>> requestForm(
       final bool success = jsonMap['Success'] == true;
       final String message = jsonMap['Message']?.toString() ?? '请求失败';
       if (success) {
-        _logApi(fullUrl, signedData, '主设备接口成功 Success=true');
+        _logApi(fullUrl, signedData, 'Success=true',
+            success: true, elapsedMs: elapsed, response: content);
         return jsonMap;
       }
       if (showError && message.isNotEmpty) {
         Toast.show(message);
       }
-      _logApi(fullUrl, signedData, '主设备接口失败 Message=$message');
+      _logApi(fullUrl, signedData, 'Message=$message',
+          elapsedMs: elapsed, response: content);
       throw _ApiException(jsonMap);
     }
 
@@ -472,7 +531,8 @@ Future<Map<String, dynamic>> requestForm(
       final dynamic retcode = jsonMap['retcode'];
       final String retmsg = jsonMap['retmsg']?.toString() ?? '请求失败';
       if (retcode == 0) {
-        _logApi(fullUrl, signedData, '接口成功 retcode=0');
+        _logApi(fullUrl, signedData, 'retcode=0',
+            success: true, elapsedMs: elapsed, response: content);
         return jsonMap;
       }
       if (retcode == -2 || retcode == -3) {
@@ -480,23 +540,28 @@ Future<Map<String, dynamic>> requestForm(
       } else if (showError && retmsg.isNotEmpty) {
         Toast.show(retmsg);
       }
-      _logApi(fullUrl, signedData, '接口失败 retcode=$retcode retmsg=$retmsg');
+      _logApi(fullUrl, signedData, 'retcode=$retcode retmsg=$retmsg',
+          elapsedMs: elapsed, response: content);
       throw _ApiException(jsonMap);
     }
     // 兼容非 retcode 格式
     if (jsonMap['code'] == 0) {
-      _logApi(fullUrl, signedData, '接口成功 code=0');
+      _logApi(fullUrl, signedData, 'code=0',
+          success: true, elapsedMs: elapsed, response: content);
       return jsonMap;
     }
     final String msg = jsonMap['message']?.toString() ?? '请求失败';
     if (showError && msg.isNotEmpty) {
       Toast.show(msg);
     }
+    _logApi(fullUrl, signedData, 'code=${jsonMap['code']} message=$msg',
+        elapsedMs: elapsed, response: content);
     throw _ApiException(jsonMap);
   } on _ApiException {
     rethrow;
   } catch (e) {
     String errorMsg = '网络请求异常';
+    String respText = '';
     if (e is DioException) {
       // 主设备请求发生网络层失败（无响应体：连接拒绝/超时等，对齐 smdcapp
       // GlobalEventListener.callFailed → 广播 NetModeEvent），标记主设备丢失
@@ -506,6 +571,7 @@ Future<Map<String, dynamic>> requestForm(
       if (e.response?.data != null) {
         try {
           final dynamic respData = e.response!.data;
+          respText = respData.toString();
           final Map<String, dynamic> errMap = respData is String
               ? json.decode(respData) as Map<String, dynamic>
               : (respData as Map<String, dynamic>);
@@ -525,7 +591,8 @@ Future<Map<String, dynamic>> requestForm(
     if (showError) {
       Toast.show(errorMsg);
     }
-    _logApi(fullUrl, signedData, '接口异常: $errorMsg');
+    _logApi(fullUrl, signedData, '异常: $errorMsg',
+        elapsedMs: stopwatch.elapsedMilliseconds, response: respText);
     throw _ApiException(<String, dynamic>{'retcode': -1, 'retmsg': errorMsg});
   }
 }
@@ -537,11 +604,13 @@ Future<Map<String, dynamic>> requestForm(
 Future<bool> checkMasterDeviceAlive() async {
   final String localhost = ConnectionManager.getLocalhost();
   if (localhost.isEmpty || !localhost.startsWith('http')) {
+    _logApi(HttpApi.pcGetHostSyncTime, null, '登录响应未返回主设备地址，跳过探测');
     ConnectionManager.pcAlive = false;
     return false;
   }
 
   final String fullUrl = '$localhost${HttpApi.pcGetHostSyncTime}';
+  final Stopwatch stopwatch = Stopwatch()..start();
   try {
     final Map<String, dynamic> signedData =
         await _buildSignedParams(<String, dynamic>{'data': ''}, fullUrl);
@@ -552,11 +621,15 @@ Future<bool> checkMasterDeviceAlive() async {
         contentType: Headers.formUrlEncodedContentType,
       ),
     );
+    stopwatch.stop();
+    final int elapsed = stopwatch.elapsedMilliseconds;
+    final String content = response.data.toString();
     final Map<String, dynamic> jsonMap =
-        json.decode(response.data.toString()) as Map<String, dynamic>;
+        json.decode(content) as Map<String, dynamic>;
 
     if (jsonMap['Success'] != true) {
-      _logApi(fullUrl, signedData, '主设备探测失败 Success!=true');
+      _logApi(fullUrl, signedData, 'Success != true',
+          elapsedMs: elapsed, response: content);
       ConnectionManager.pcAlive = false;
       return false;
     }
@@ -578,16 +651,19 @@ Future<bool> checkMasterDeviceAlive() async {
         }
       } catch (_) {}
       final bool match = pcSid.isNotEmpty && pcSid == sid && pcSpid == spid;
-      _logApi(fullUrl, signedData, '主设备探测完成 可达=$match');
+      _logApi(fullUrl, signedData, '可达=$match (主设备sid=$pcSid 门店sid=$sid)',
+          success: match, elapsedMs: elapsed, response: content);
       ConnectionManager.pcAlive = match;
       return match;
     }
 
     ConnectionManager.pcAlive = true;
-    _logApi(fullUrl, signedData, '主设备探测成功 pcAlive=true');
+    _logApi(fullUrl, signedData, 'Success=true',
+        success: true, elapsedMs: elapsed, response: content);
     return true;
-  } catch (_) {
-    _logApi(fullUrl, <String, dynamic>{'data': ''}, '主设备探测异常');
+  } catch (e) {
+    _logApi(fullUrl, <String, dynamic>{'data': ''}, '异常: $e',
+        elapsedMs: stopwatch.elapsedMilliseconds);
     ConnectionManager.pcAlive = false;
     return false;
   }

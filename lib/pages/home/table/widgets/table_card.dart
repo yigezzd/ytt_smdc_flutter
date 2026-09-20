@@ -99,6 +99,7 @@ class _TableCardState extends State<TableCard> {
 
     final String? amountText = table.amountText;
     final (int, int, bool)? timeParts = table.timeParts;
+    final Color hintColor = isDark ? Colours.dark_text_gray : const Color(0xFF86909C);
 
     // 卡片背景：非空闲带状态色柔和渐变，空闲纯净白
     final Color cardBg = isDark ? Colours.dark_material_bg : Colors.white;
@@ -151,7 +152,7 @@ class _TableCardState extends State<TableCard> {
         child: Stack(
           children: <Widget>[
             Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 7),
+              padding: const EdgeInsets.fromLTRB(10, 7, 10, 6),
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
@@ -212,64 +213,79 @@ class _TableCardState extends State<TableCard> {
                             ),
                     ),
                     const Spacer(),
-                    // 人数 / 开台时长
-                    SizedBox(
-                      height: 17,
-                      child: Row(
+                    // 人数 / 开台时长（分两行展示，窄卡片下更易读）
+                    if (table.personText.isNotEmpty || timeParts != null)
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
-                          if (table.personText.isNotEmpty) ...<Widget>[
-                            Icon(
-                              Icons.person_outline_rounded,
-                              size: 14,
-                              color: isDark ? Colours.dark_text_gray : const Color(0xFF86909C),
-                            ),
-                            const SizedBox(width: 2),
-                            Text(
-                              table.personText,
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: isDark ? Colours.dark_text_gray : const Color(0xFF86909C),
-                              ),
-                            ),
-                          ],
-                          if (timeParts != null) ...<Widget>[
-                            const SizedBox(width: 7),
-                            Icon(
-                              Icons.schedule_rounded,
-                              size: 13,
-                              color: isDark ? Colours.dark_text_gray : const Color(0xFF86909C),
-                            ),
-                            const SizedBox(width: 2),
-                            Text.rich(
-                              TextSpan(
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: isDark ? Colours.dark_text_gray : const Color(0xFF86909C),
-                                ),
-                                children: <InlineSpan>[
-                                  TextSpan(text: '${timeParts.$1}'),
-                                  WidgetSpan(
-                                    alignment: PlaceholderAlignment.middle,
-                                    child: _unitBadge('h', isDark),
+                          if (table.personText.isNotEmpty)
+                            SizedBox(
+                              height: 14,
+                              child: Row(
+                                children: <Widget>[
+                                  Icon(
+                                    Icons.person_outline_rounded,
+                                    size: 12.5,
+                                    color: hintColor,
                                   ),
-                                  if (timeParts.$3) ...<InlineSpan>[
-                                    TextSpan(text: '${timeParts.$2}'),
-                                    WidgetSpan(
-                                      alignment: PlaceholderAlignment.middle,
-                                      child: _unitBadge('m', isDark),
+                                  const SizedBox(width: 2),
+                                  Flexible(
+                                    child: Text(
+                                      table.personText,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          fontSize: 12, height: 1.1, color: hintColor),
                                     ),
-                                  ],
+                                  ),
                                 ],
                               ),
                             ),
-                          ],
+                          if (timeParts != null)
+                            SizedBox(
+                              height: 14,
+                              child: Row(
+                                children: <Widget>[
+                                  Icon(
+                                    Icons.schedule_rounded,
+                                    size: 12.5,
+                                    color: hintColor,
+                                  ),
+                                  const SizedBox(width: 2),
+                                  Flexible(
+                                    child: Text.rich(
+                                      TextSpan(
+                                        style: TextStyle(
+                                            fontSize: 12, height: 1.1, color: hintColor),
+                                        children: <InlineSpan>[
+                                          TextSpan(text: '${timeParts.$1}'),
+                                          WidgetSpan(
+                                            alignment: PlaceholderAlignment.middle,
+                                            child: _unitBadge('h', isDark),
+                                          ),
+                                          if (timeParts.$3) ...<InlineSpan>[
+                                            TextSpan(text: '${timeParts.$2}'),
+                                            WidgetSpan(
+                                              alignment: PlaceholderAlignment.middle,
+                                              child: _unitBadge('m', isDark),
+                                            ),
+                                          ],
+                                        ],
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                         ],
                       ),
-                    ),
-                    const SizedBox(height: 2),
+                    const SizedBox(height: 1),
                     // 金额（空闲/待清台无金额时占位保持高度一致）
                     SizedBox(
-                      height: 19,
+                      height: 18,
                       child: amountText == null
                           ? null
                           : Text(
@@ -284,7 +300,7 @@ class _TableCardState extends State<TableCard> {
                               ),
                             ),
                     ),
-                    const SizedBox(height: 5),
+                    const SizedBox(height: 4),
                     // 状态徽章（胶囊形）
                     Align(
                       alignment: Alignment.centerLeft,

@@ -67,8 +67,12 @@ class _MemberSearchSheetState extends State<MemberSearchSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final double maxHeight = MediaQuery.of(context).size.height * 0.65;
+    // 键盘弹起时整层上移，避免搜索框/结果列表被系统键盘遮挡
+    final double keyboardInset = MediaQuery.of(context).viewInsets.bottom;
+    final double maxHeight =
+        (MediaQuery.of(context).size.height - keyboardInset) * 0.65;
     return Container(
+      margin: EdgeInsets.only(bottom: keyboardInset),
       constraints: BoxConstraints(maxHeight: maxHeight),
       decoration: const BoxDecoration(
         color: Colors.white,
