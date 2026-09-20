@@ -270,7 +270,9 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
                       if (item.isSuspended) _buildTag('挂', const Color(0xFFFF8547)),
                       if (item.isGift) _buildTag('赠', const Color(0xFF00B42A)),
                       if (item.isDiscounted) _buildTag('折', _kBrandRed),
-                      if (item.isBag) _buildTag('包', const Color(0xFF86909C)),
+                      // 基础促销标签（对齐 smdcapp DishesTagHelper 促标）
+                      if (item.isPromotion) _buildTag('促', _kBrandRed),
+                      if (item.isBag) _buildTag('包', const Color(0xFF0055FF)),
                       // 必点菜标识（对齐 smdcapp DishesTagHelper：mustflag==1 红色“必”标）
                       if (item.mustflag == 1) _buildTag('必', _kBrandRed),
                     ],
@@ -489,7 +491,7 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
     );
   }
 
-  /// 显示菜品操作弹窗（对齐 smdcapp AwaitOrderFragment.showOperation）
+  /// 显示菜品操作弹窗（对齐 smdcapp AwaitOrderFragment2.showOperation）
   Future<void> _showDishOperation(CartItem item) async {
     final String? operation = await DishOperationPopup.show(
       context,
@@ -497,7 +499,10 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
       // 对齐 smdcapp: isShowCook(combflag!=1) / isShowComb(combflag==1)
       isCookProduct: !item.isCombo,
       isComboProduct: item.isCombo,
+      // 对齐 smdcapp OperationAction：已生效的操作显示为"取消XX"
       isSuspended: item.isSuspended,
+      isGift: item.isGift,
+      isBag: item.isBag,
     );
     if (operation == null || !mounted) return;
     _handleOperation(operation, item);
@@ -525,6 +530,14 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
         }
 
       case DishOperationType.gift:
+        // 已赠送：直接取消赠送（对齐 smdcapp handleGiveaway presentflag==1 分支）
+        if (item.isGift) {
+          item.isGift = false;
+          item.giftRemark = '';
+          _notifyChanged(item);
+          Toast.show('已取消赠送');
+          return;
+        }
         // 对齐 smdcapp GiveNumPopup 赠送逻辑
         final GiveResult? result = await DishGiveSheet.show(
           context,
@@ -533,14 +546,8 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
           isGive: item.isGift,
         );
         if (result != null) {
-          if (item.isGift) {
-            // 取消赠送
-            item.isGift = false;
-            item.giftRemark = '';
-          } else {
-            item.isGift = true;
-            item.giftRemark = result.remark;
-          }
+          item.isGift = true;
+          item.giftRemark = result.remark;
           _notifyChanged(item);
         }
 
@@ -566,14 +573,20 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
         }
 
       case DishOperationType.suspend:
-        // 对齐 smdcapp: hangflag == 0 时才能挂起
-        if (!item.isSuspended) {
-          item.isSuspended = true;
-          _notifyChanged(item);
-          Toast.show('已挂起');
-        }
+        // 对齐 smdcapp CartActionHandler.hangUpProduct：已挂起则取消挂起
+        final bool nextSuspend = !item.isSuspended;
+        item.isSuspended = nextSuspend;
+        _notifyChanged(item);
+        Toast.show(nextSuspend ? '已挂起' : '已取消挂起');
 
       case DishOperationType.bag:
+        // 已打包时直接取消，和赠送/挂起保持一致。
+        if (item.isBag) {
+          item.cancelBag();
+          _notifyChanged(item);
+          Toast.show('已取消打包');
+          return;
+        }
         // 对齐 smdcapp BagPricePopup
         final double? bagPrice = await DishBagSheet.show(
           context,
@@ -581,12 +594,10 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
           currentBagPrice: item.bagPrice,
         );
         if (bagPrice != null) {
-          if (bagPrice <= -1) {
-            item.bagPrice = 0;
-          } else {
-            item.bagPrice = bagPrice;
-          }
+          item.isBag = bagPrice >= 0;
+          item.bagPrice = item.isBag ? bagPrice : 0;
           _notifyChanged(item);
+          Toast.show(bagPrice < 0 ? '已取消打包' : '打包成功');
         }
 
       case DishOperationType.remark:

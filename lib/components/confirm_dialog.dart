@@ -219,6 +219,7 @@ class InputDialog extends StatefulWidget {
     this.maxLines = 3,
     this.keyboardType,
     this.inputFormatters,
+    this.changeBaseAmount,
   });
 
   /// 弹窗标题
@@ -245,6 +246,9 @@ class InputDialog extends StatefulWidget {
   /// 输入格式化器（如仅允许数字和小数点）
   final List<TextInputFormatter>? inputFormatters;
 
+  /// 应收金额：设置后输入值大于该值时实时显示找零（对齐 smdcapp PricePopup tvChange）
+  final double? changeBaseAmount;
+
   /// 弹出输入弹窗，返回输入的文本；返回 null 表示取消
   static Future<String?> show(
     BuildContext context, {
@@ -257,6 +261,7 @@ class InputDialog extends StatefulWidget {
     bool barrierDismissible = true,
     TextInputType? keyboardType,
     List<TextInputFormatter>? inputFormatters,
+    double? changeBaseAmount,
   }) {
     return showDialog<String>(
       context: context,
@@ -270,6 +275,7 @@ class InputDialog extends StatefulWidget {
         maxLines: maxLines,
         keyboardType: keyboardType,
         inputFormatters: inputFormatters,
+        changeBaseAmount: changeBaseAmount,
       ),
     );
   }
@@ -285,12 +291,28 @@ class _InputDialogState extends State<InputDialog> {
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.initialValue);
+    _controller.addListener(_onChanged);
+  }
+
+  void _onChanged() {
+    // 输入金额大于应收时实时显示找零（对齐 smdcapp PricePopup tvChange）
+    if (widget.changeBaseAmount == null) return;
+    setState(() {});
   }
 
   @override
   void dispose() {
+    _controller.removeListener(_onChanged);
     _controller.dispose();
     super.dispose();
+  }
+
+  /// 找零金额（未超出应收时为 null）
+  double? get _changeAmt {
+    final double? base = widget.changeBaseAmount;
+    if (base == null) return null;
+    final double input = double.tryParse(_controller.text.trim()) ?? 0;
+    return input > base ? input - base : null;
   }
 
   @override
@@ -354,6 +376,21 @@ class _InputDialogState extends State<InputDialog> {
                   ),
                 ),
               ),
+              // 找零提示（对齐 smdcapp PricePopup tvChange：输入 > 应收时显示）
+              if (_changeAmt != null) ...<Widget>[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '找零：¥${_changeAmt!.toStringAsFixed(2)}',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: _kBrandRed,
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 24),
               // 按钮区域
               Row(

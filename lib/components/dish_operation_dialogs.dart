@@ -1156,7 +1156,7 @@ class _DishBagSheetState extends State<DishBagSheet> {
                 color: isDark ? Colors.white : const Color(0xFF1D2129),
               ),
               decoration: InputDecoration(
-                hintText: '请输入打包费（0或清空=取消打包）',
+                hintText: '请输入打包费（0=免费打包）',
                 hintStyle: TextStyle(
                   fontSize: 14,
                   color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4),
@@ -1185,34 +1185,33 @@ class _DishBagSheetState extends State<DishBagSheet> {
             const SizedBox(height: 20),
             Row(
               children: <Widget>[
-                // 取消打包（对齐 smdcapp price <= -1 逻辑）
-                if (widget.currentBagPrice > 0)
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: () => Navigator.of(context).pop(-1),
-                      child: Container(
-                        height: 44,
-                        margin: const EdgeInsets.only(right: 10),
-                        decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF7F8FA),
-                          borderRadius: BorderRadius.circular(22),
-                          border: Border.all(
-                            color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB),
-                          ),
+                // 取消打包（对齐 smdcapp BagPopup2 tv_cancel：常显，返回 price=-1）
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => Navigator.of(context).pop(-1.0),
+                    child: Container(
+                      height: 44,
+                      margin: const EdgeInsets.only(right: 10),
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF7F8FA),
+                        borderRadius: BorderRadius.circular(22),
+                        border: Border.all(
+                          color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB),
                         ),
-                        child: Center(
-                          child: Text(
-                            '取消打包',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: isDark ? Colors.white70 : const Color(0xFF666666),
-                            ),
+                      ),
+                      child: Center(
+                        child: Text(
+                          '取消打包',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? Colors.white70 : const Color(0xFF666666),
                           ),
                         ),
                       ),
                     ),
                   ),
+                ),
                 Expanded(
                   child: SizedBox(
                     height: 44,
@@ -1220,7 +1219,7 @@ class _DishBagSheetState extends State<DishBagSheet> {
                       onPressed: () {
                         final String text = _controller.text.trim();
                         if (text.isEmpty) {
-                          Navigator.of(context).pop(-1);
+                          Navigator.of(context).pop(-1.0);
                           return;
                         }
                         final double? price = double.tryParse(text);
@@ -1958,7 +1957,7 @@ class _DishReturnSheetState extends State<DishReturnSheet> {
               TextField(
                 controller: _remarkCtrl,
                 decoration: const InputDecoration(
-                  hintText: '输入退菜原因（可选）',
+                  hintText: '输入退菜原因',
                   border: OutlineInputBorder(),
                   contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   isDense: true,
@@ -2015,6 +2014,350 @@ class _DishReturnSheetState extends State<DishReturnSheet> {
         num: _num,
         remark: sb.toString(),
         prnretflag: _printTicket ? 1 : 0,
+      ),
+    );
+  }
+}
+
+// ==================== 称重确认弹窗 ====================
+
+/// 称重行（对齐 smdcapp ReweighPopup 列表项：名称/单价/金额/原数量/是否已称）
+class ReweighEntry {
+  const ReweighEntry({
+    required this.name,
+    required this.price,
+    required this.amount,
+    required this.qty,
+    required this.confirmed,
+  });
+
+  final String name;
+  final double price;
+  final double amount;
+
+  /// 原数量（称重菜为当前重量）
+  final double qty;
+
+  /// 是否已称过（对齐 smdcapp confirmqty > 0）
+  final bool confirmed;
+}
+
+/// 称重结果（index=行下标，weight=新重量）
+class ReweighResult {
+  const ReweighResult(this.index, this.weight);
+
+  final int index;
+  final double weight;
+}
+
+/// 称重确认弹窗（对齐 smdcapp ReweighPopup）
+///
+/// 本次操作全部可称重菜品在一张弹窗里逐行录入重量（未称的排前面），
+/// 留空的行不做修改。返回录入结果列表，null=取消。
+class ReweighSheet extends StatefulWidget {
+  const ReweighSheet({super.key, required this.entries});
+
+  final List<ReweighEntry> entries;
+
+  static Future<List<ReweighResult>?> show(
+    BuildContext context, {
+    required List<ReweighEntry> entries,
+  }) {
+    return showModalBottomSheet<List<ReweighResult>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => ReweighSheet(entries: entries),
+    );
+  }
+
+  @override
+  State<ReweighSheet> createState() => _ReweighSheetState();
+}
+
+class _ReweighSheetState extends State<ReweighSheet> {
+  late final List<TextEditingController> _controllers;
+
+  @override
+  void initState() {
+    super.initState();
+    _controllers = List<TextEditingController>.generate(
+      widget.entries.length,
+      (_) => TextEditingController(),
+    );
+  }
+
+  @override
+  void dispose() {
+    for (final TextEditingController c in _controllers) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  static String _fmt(double v) {
+    if (v == v.roundToDouble()) return v.toInt().toString();
+    return v
+        .toStringAsFixed(3)
+        .replaceFirst(RegExp(r'0+$'), '')
+        .replaceFirst(RegExp(r'\.$'), '');
+  }
+
+  void _confirm() {
+    final List<ReweighResult> results = <ReweighResult>[];
+    for (int i = 0; i < _controllers.length; i++) {
+      final String text = _controllers[i].text.trim();
+      if (text.isEmpty) continue;
+      double? weight = double.tryParse(text);
+      if (weight == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('重量格式错误'), duration: Duration(seconds: 1)),
+        );
+        return;
+      }
+      // 对齐 smdcapp ReweighPopup: 最大数量 999.999
+      if (weight > 999.999) weight = 999.999;
+      if (weight <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('重量需大于0'), duration: Duration(seconds: 1)),
+        );
+        return;
+      }
+      results.add(ReweighResult(i, weight));
+    }
+    if (results.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请输入新的重量'), duration: Duration(seconds: 1)),
+      );
+      return;
+    }
+    Navigator.of(context).pop(results);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color titleColor = isDark ? Colors.white : const Color(0xFF1D2129);
+    final Color subColor = isDark ? const Color(0xFFB8B8B8) : const Color(0xFF86909C);
+
+    return Container(
+      constraints: BoxConstraints(
+        // 对齐 smdcapp ReweighPopup.getMaxHeight()：弹窗最高 70% 屏高
+        maxHeight: MediaQuery.of(context).size.height * 0.7,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF242526) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      padding: EdgeInsets.fromLTRB(
+        16, 16, 16,
+        16 + MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Container(
+                width: 4,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: _kBrandRed,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '称重确认',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: titleColor,
+                  ),
+                ),
+              ),
+              GestureDetector(
+                onTap: () => Navigator.of(context).pop(),
+                child: Icon(
+                  Icons.close,
+                  size: 20,
+                  color: isDark ? Colors.white70 : const Color(0xFF86909C),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: <Widget>[
+              Expanded(
+                flex: 3,
+                child: Text('菜品', style: TextStyle(fontSize: 12, color: subColor)),
+              ),
+              Expanded(
+                flex: 2,
+                child: Text('原数量',
+                    style: TextStyle(fontSize: 12, color: subColor),
+                    textAlign: TextAlign.center),
+              ),
+              Expanded(
+                flex: 2,
+                child: Text('新重量',
+                    style: TextStyle(fontSize: 12, color: subColor),
+                    textAlign: TextAlign.center),
+              ),
+            ],
+          ),
+          const Divider(height: 14),
+          Flexible(
+            child: SingleChildScrollView(
+              child: Column(
+                children: List<Widget>.generate(
+                  widget.entries.length,
+                  (int i) => _buildRow(i, isDark),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => Navigator.of(context).pop(),
+                  child: Container(
+                    height: 44,
+                    margin: const EdgeInsets.only(right: 10),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF7F8FA),
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(
+                        color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB),
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        '取消',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? Colors.white70 : const Color(0xFF666666),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: SizedBox(
+                  height: 44,
+                  child: ElevatedButton(
+                    onPressed: _confirm,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _kBrandRed,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(22),
+                      ),
+                      elevation: 0,
+                    ),
+                    child: const Text('确定',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRow(int index, bool isDark) {
+    final ReweighEntry e = widget.entries[index];
+    final Color textColor = isDark ? Colors.white : const Color(0xFF1D2129);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            flex: 3,
+            child: Row(
+              children: <Widget>[
+                Flexible(
+                  child: Text(
+                    e.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 14, color: textColor),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                // 已称/未称徽标（对齐 smdcapp tv_weigh_one / tv_weigh_zero）
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: e.confirmed ? const Color(0xFF00B42A) : _kBrandRed,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    e.confirmed ? '已称' : '未称',
+                    style: const TextStyle(fontSize: 10, color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              _fmt(e.qty),
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: textColor),
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: SizedBox(
+              height: 34,
+              child: TextField(
+                controller: _controllers[index],
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: <TextInputFormatter>[
+                  FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,3}')),
+                ],
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: textColor),
+                decoration: InputDecoration(
+                  hintText: '重量',
+                  hintStyle: TextStyle(
+                    fontSize: 13,
+                    color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4),
+                  ),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(
+                      color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
+                    ),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: BorderSide(
+                      color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                    borderSide: const BorderSide(color: _kBrandRed),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

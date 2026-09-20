@@ -11,17 +11,21 @@ import 'package:flutter_deer/components/dishes_more_sheet.dart';
 import 'package:flutter_deer/components/spec_cook_sheet.dart';
 import 'package:flutter_deer/components/temporary_dish_sheet.dart';
 import 'package:flutter_deer/components/verify_dishes_sheet.dart';
+import 'package:flutter_deer/db/dao/table_type_dao.dart';
+import 'package:flutter_deer/db/entity/table_type_entity.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/pages/order/order_models.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
+import 'package:flutter_deer/pages/order/promotion_manager.dart';
 import 'package:flutter_deer/pages/order/widgets/cart_panel_sheet.dart';
 import 'package:flutter_deer/pages/order/widgets/set_meal_sheet.dart';
 import 'package:flutter_deer/pages/order/widgets/time_price_sheet.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
 import 'package:flutter_deer/util/device_utils.dart';
+import 'package:flutter_deer/util/params_sp_utils.dart';
 import 'package:flutter_deer/util/store_mode_utils.dart';
 import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
@@ -144,8 +148,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   /// 搜索关键词
   String _searchKeyword = '';
 
-  /// 沽清商品ID集合（对齐 smdcapp GuQingBean/WarnProductBean，productid → warnqty）
-  final Map<String, double> _warnProductMap = <String, double>{};
+  /// 沽清剩余基数（对齐 smdcapp GuQingBean：leftqty = warnqty - saleqty，productid → 剩余）
+  final Map<String, double> _guQingLeftMap = <String, double>{};
 
   /// 必点菜规则缓存（对齐 smdcapp mustBean，修改人数后 checkMust 复用）
   List<Map<String, dynamic>> _mustGroups = <Map<String, dynamic>>[];
@@ -185,6 +189,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     });
 
     try {
+      // 基础促销（分类折扣/菜品折扣/特价菜）来自本地促销表，需与菜品同步加载
+      await PromotionManager.instance.init();
       // 并行加载分类、商品和沽清数据（对齐 smdcapp：菜品接口固定走云服务，不走主设备）
       final results = await Future.wait(<Future<dynamic>>[
         OrderRepository.fetchCategories(),
@@ -196,21 +202,27 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       final List<DishProduct> products = results[1] as List<DishProduct>;
       final List<Map<String, dynamic>> warnList = results[2] as List<Map<String, dynamic>>;
 
-      // 解析沽清数据（对齐 smdcapp GuQingBean: productid + warnqty）
-      _warnProductMap.clear();
+      // 解析沽清数据（对齐 smdcapp DishesModel.getProductWarnList：leftqty = warnqty - saleqty）
+      _guQingLeftMap.clear();
       for (final Map<String, dynamic> w in warnList) {
         final String pid = w['productid']?.toString() ?? '';
-        if (pid.isNotEmpty) {
-          final double warnqty = double.tryParse(w['warnqty']?.toString() ?? '0') ?? 0;
-          _warnProductMap[pid] = warnqty;
-        }
+        if (pid.isEmpty) continue;
+        final double warnqty = double.tryParse(w['warnqty']?.toString() ?? '0') ?? 0;
+        final double saleqty = double.tryParse(w['saleqty']?.toString() ?? '0') ?? 0;
+        _guQingLeftMap[pid] = warnqty - saleqty;
       }
+
+      // 二级分类向上归并到一级（对齐 smdcapp：点菜页左栏只展示一级分类，
+      // 挂在二级分类下的菜品需归并到其父分类，否则整批菜品不显示）
+      final Map<String, String> categoryParentMap =
+          await OrderRepository.fetchCategoryParentMap();
 
       // 按 typeid 分组
       final Map<String, List<DishProduct>> grouped = <String, List<DishProduct>>{};
       for (final DishProduct p in products) {
-        grouped.putIfAbsent(p.typeid, () => <DishProduct>[]).add(p);
-        _productTypeIdMap[p.productid] = p.typeid;
+        final String typeId = categoryParentMap[p.typeid] ?? p.typeid;
+        grouped.putIfAbsent(typeId, () => <DishProduct>[]).add(p);
+        _productTypeIdMap[p.productid] = typeId;
       }
 
       // 过滤掉没有商品的分类
@@ -259,6 +271,19 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   Future<void> _initCartFromServer() async {
     await _initMustDishes();
     await _restoreSavedCart();
+    _applyPromotionsToCart();
+  }
+
+  /// 为购物车条目套用基础促销（对齐 smdcapp PriceEngine.isPromotion 分支）
+  void _applyPromotionsToCart() {
+    if (PromotionManager.instance.isEmpty) return;
+    for (final CartItem item in _cartItems) {
+      final String typeid = _productTypeIdMap[item.product.id] ?? '';
+      if (typeid.isNotEmpty && item.typeid.isEmpty) {
+        item.typeid = typeid;
+      }
+      PromotionManager.instance.applyToCartItem(item);
+    }
   }
 
   /// 必点菜自动加入购物车（对齐 smdcapp CartGoodsModel.initMust → addMust →
@@ -655,13 +680,19 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           .join(',');
     }
 
+    // 服务端 cookaddamt 含打包费（对齐 smdcapp：打包绑定为整份加价做法计入 cookaddamt），
+    // 打包费另行按 bagamt 还原，此处剔除避免合计重复计入；
+    // 历史数据 cookaddamt 未含打包费时按原值使用
+    final double bagPrice = _mustToDouble(d['bagamt']);
+    final double rawCookAdd = _mustToDouble(d['cookaddamt']);
+    final double cookAdd = rawCookAdd >= bagPrice ? rawCookAdd - bagPrice : rawCookAdd;
     final CartItem item = CartItem(
       product: product,
       quantity: weighflag == 1 ? 1 : (qty > 0 ? qty.toInt() : 1),
       specText: specText,
       extraPrice: isComb
           ? (_mustToDouble(d['combaddamt']) / (qty > 0 ? qty : 1))
-          : _mustToDouble(d['cookaddamt']),
+          : cookAdd,
       weighNum: weighflag == 1 ? (weighnum > 0 ? weighnum : qty) : 0,
       combItems: combItems,
     );
@@ -671,7 +702,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     item.mustflag = _mustToInt(d['mustflag']);
     item.mustType = _mustToInt(d['mustType'] ?? d['musttype']);
     item.isSuspended = _mustToInt(d['hangflag']) == 1;
-    item.bagPrice = _mustToDouble(d['bagamt']);
+    item.bagPrice = bagPrice;
+    item.isBag = _mustToInt(d['bagstatus']) == 1 || item.bagPrice > 0;
     final double discount = _mustToDouble(d['discount']);
     if (discount > 0 && discount < 100) {
       item.discount = discount;
@@ -854,12 +886,15 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       if (index >= 0) {
         _cartItems[index].quantity += step;
       } else {
-        _cartItems.add(CartItem(
+        final CartItem item = CartItem(
           product: product,
           quantity: step,
           specText: specText,
           extraPrice: extraPrice,
-        ));
+        );
+        item.typeid = dish.typeid;
+        PromotionManager.instance.applyToCartItem(item);
+        _cartItems.add(item);
       }
       _rebuildCountMap();
     });
@@ -867,7 +902,10 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   }
 
   /// 规格商品加购（对齐 smdcapp addCart 逻辑）
-  void _addSpecToCart(DishProduct dish, int quantity, String specText, double unitPrice, double wholeExtra) {
+  void _addSpecToCart(DishProduct dish, SpecCookSubmit data) {
+    final int quantity = data.quantity;
+    final String specText = data.specText;
+    final double wholeExtra = data.wholeExtra;
     // 限点校验（对齐 smdcapp DialogHelper）
     if (dish.maxsellqty > 0) {
       final double currentQty = _cartItems
@@ -881,7 +919,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     final Product product = Product(
       id: dish.productid,
       name: dish.name,
-      price: unitPrice,
+      price: data.unitPrice,
       desc: dish.typename.isNotEmpty ? dish.typename : '产品简介',
       emoji: '🍜',
       gradient: const <Color>[Color(0xFFFFF1F0), Color(0xFFFFE7E3)],
@@ -898,12 +936,18 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       if (index >= 0) {
         _cartItems[index].quantity += quantity;
       } else {
-        _cartItems.add(CartItem(
+        final CartItem item = CartItem(
           product: product,
           quantity: quantity,
           specText: specText,
           extraPrice: wholeExtra,
-        ));
+        );
+        item.typeid = dish.typeid;
+        // 规格与做法分列存储，下单时按 smdcapp 字段分别上传
+        item.specName = data.specName;
+        item.cookText = data.cookText;
+        PromotionManager.instance.applyToCartItem(item);
+        _cartItems.add(item);
       }
       _rebuildCountMap();
     });
@@ -939,11 +983,11 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         context,
         product: dish,
         specData: specData,
-        onAddToCart: (int qty, String specText, double unitPrice, double wholeExtra) {
-          _addSpecToCart(dish, qty, specText, unitPrice, wholeExtra);
+        onAddToCart: (SpecCookSubmit data) {
+          _addSpecToCart(dish, data);
         },
-        onBuyNow: (int qty, String specText, double unitPrice, double wholeExtra) {
-          _addSpecToCart(dish, qty, specText, unitPrice, wholeExtra);
+        onBuyNow: (SpecCookSubmit data) {
+          _addSpecToCart(dish, data);
           _goConfirm();
         },
       );
@@ -1261,10 +1305,20 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   }
 
   /// 跳转订单确认页
-  void _goConfirm() {
+  Future<void> _goConfirm() async {
     if (_cartItems.isEmpty) {
       Toast.show('购物车还是空的，先选几个菜吧');
       return;
+    }
+    // 可选必点菜校验（对齐 smdcapp CartGoodsModel.addMust(isCheckOptional=true)）
+    final String? mustHint = _checkOptionalMust();
+    if (mustHint != null) {
+      final bool go = await ConfirmDialog.show(
+        context,
+        content: '$mustHint\n是否继续下单？',
+        confirmText: '继续下单',
+      );
+      if (!go || !mounted) return;
     }
     NavigatorUtils.push(
       context,
@@ -1284,6 +1338,43 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         'fastMode': widget.fastMode,
       },
     );
+  }
+
+  /// 校验可选必点菜（对齐 smdcapp MustHelper.checkOptionalMandatory）
+  ///
+  /// 可选方案 mustrule==1：按「已点数量 / 每份必点数量」累加，总项数需 ≥ 人数
+  /// （musttype==0 每人必点取人数，否则取 1）。返回未满足提示，满足时返回 null。
+  String? _checkOptionalMust() {
+    if (_mustGroups.isEmpty) return null;
+    final Map<String, dynamic>? tmp =
+        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final int tmpPerson = _mustToInt(tmp?['personnum']);
+    final int personNum = tmpPerson > 0 ? tmpPerson : _persons;
+    for (final Map<String, dynamic> group in _mustGroups) {
+      if (_mustToInt(group['mustrule']) != 1) continue;
+      final dynamic rawList = group['mustproductlist'];
+      if (rawList is! List || rawList.isEmpty) continue;
+      final double required = _mustToInt(group['musttype']) == 0
+          ? (personNum < 1 ? 1 : personNum).toDouble()
+          : 1.0;
+      double totalSelections = 0;
+      for (final dynamic raw in rawList) {
+        if (raw is! Map<String, dynamic>) continue;
+        final String pid = raw['productid']?.toString() ?? '';
+        if (pid.isEmpty) continue;
+        final double baseQty =
+            double.tryParse(raw['mustqty']?.toString() ?? '') ?? 0;
+        final double per = baseQty > 0 ? baseQty : 1.0;
+        final double inCartQty = _cartItems
+            .where((CartItem c) => c.product.id == pid && !c.isRefunded)
+            .fold(0.0, (double s, CartItem c) => s + c.quantity);
+        totalSelections += inCartQty / per;
+      }
+      if (totalSelections < required) {
+        return '可选必点菜未选择\n方案：${group['name']?.toString() ?? ''}';
+      }
+    }
+    return null;
   }
 
   // ==================== 搜索与扫码 ====================
@@ -1786,7 +1877,25 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   }
 
   /// 修改开台信息弹窗（对齐 smdcapp DishesHomeAct2.showChangeTablePop → TableOpenBottomV2Dialog 修改模式）
-  void _showEditTableInfoSheet() {
+  Future<void> _showEditTableInfoSheet() async {
+    // 附加费（对齐 smdcapp 修改模式：OpenTableAmtFlag=1 时只读展示 tmp.additionid 对应名称）
+    String additionName = '';
+    if (ParamsSpUtils.getOpenTableAmtFlag() == '1') {
+      final String additionId =
+          widget.tableJson?['tmp']?['additionid']?.toString() ?? '';
+      if (additionId.isEmpty) {
+        additionName = '无';
+      } else {
+        try {
+          final TableTypeEntity? type =
+              await TableTypeDao.instance.getByCreateid(additionId);
+          additionName = type?.name ?? '无';
+        } catch (_) {
+          additionName = '无';
+        }
+      }
+      if (!mounted) return;
+    }
     final TextEditingController personCtrl =
         TextEditingController(text: '$_persons');
     final TextEditingController remarkCtrl =
@@ -1913,6 +2022,32 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                       ),
                     ],
                   ),
+                  // 附加费（对齐 smdcapp 修改模式：OpenTableAmtFlag=1 时只读展示）
+                  if (additionName.isNotEmpty) ...<Widget>[
+                    const SizedBox(height: 16),
+                    Row(
+                      children: <Widget>[
+                        const Text('附加费：', style: TextStyle(fontSize: 15, color: Color(0xFF4E5969))),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Container(
+                            height: 40,
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            alignment: Alignment.centerLeft,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF7F8FA),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: const Color(0xFFE5E6EB)),
+                            ),
+                            child: Text(
+                              additionName,
+                              style: const TextStyle(fontSize: 14, color: Color(0xFF86909C)),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   // 备注
                   Row(
@@ -2599,6 +2734,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                   count: _productCount(product),
                   isDark: isDark,
                   showNum: SpUtil.getBool('ENABLE_PRODUCT_NUM', defValue: true) ?? true,
+                  // 沽清剩余基数（对齐 smdcapp GuQingBean.leftqty，来自 PC/云沽清接口）
+                  guQingLeft: _guQingLeftMap[product.productid],
                   onAdd: _getAddCallback(product),
                   onRemove: _getRemoveCallback(product),
                   onSpec: () => _openSpecSheet(product),
@@ -2882,6 +3019,7 @@ class _DishProductCard extends StatelessWidget {
     required this.onSpec,
     required this.onComb,
     required this.onTimePriceOrWeigh,
+    this.guQingLeft,
   });
 
   final DishProduct product;
@@ -2889,6 +3027,9 @@ class _DishProductCard extends StatelessWidget {
   final bool isDark;
   /// 是否显示数字角标（对齐 smdcapp ENABLE_PRODUCT_NUM）
   final bool showNum;
+
+  /// 沽清剩余基数（对齐 smdcapp GuQingBean.leftqty = warnqty - saleqty），null=未沽清
+  final double? guQingLeft;
   final VoidCallback onAdd;
   final VoidCallback onRemove;
   final VoidCallback onSpec;
@@ -2899,7 +3040,12 @@ class _DishProductCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bool soldOut = product.isSoldOut;
+    // 沽清剩余基数：优先沽清接口 leftqty，其次商品自带 sellclearflag/stockqty
+    final double? guQingBase = guQingLeft ??
+        (product.sellclearflag == 1 ? product.stockqty : null);
+    // 动态剩余 = 基数 - 购物车已点（对齐 smdcapp CartGoodsModel.syncDisplayStock）
+    final double leftQty = guQingBase == null ? 0 : math.max(0, guQingBase - count);
+    final bool soldOut = guQingBase == null ? product.isSoldOut : leftQty <= 0;
 
     return Container(
       height: _kProductHeight,
@@ -2917,8 +3063,10 @@ class _DishProductCard extends StatelessWidget {
           // 商品图（优先显示网络图片，无图时用渐变色块 + emoji 代替）
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: product.imageurl.isNotEmpty
-                ? CachedNetworkImage(
+            child: Stack(
+              children: <Widget>[
+                if (product.imageurl.isNotEmpty)
+                  CachedNetworkImage(
                     imageUrl: product.imageurl.startsWith('http')
                         ? product.imageurl
                         : '$_kImgAddress${product.imageurl}',
@@ -2929,7 +3077,28 @@ class _DishProductCard extends StatelessWidget {
                     placeholder: (_, __) => _buildPlaceholder(soldOut),
                     errorWidget: (_, __, dynamic error) => _buildPlaceholder(soldOut),
                   )
-                : _buildPlaceholder(soldOut),
+                else
+                  _buildPlaceholder(soldOut),
+                // 沽清剩余吸顶悬浮（对齐 smdcapp rl_stock_num：半透明黑底 + 白字居中）
+                if (guQingBase != null && !soldOut)
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      color: const Color(0x55000000),
+                      alignment: Alignment.center,
+                      child: Text(
+                        '剩余:${_fmtQty(leftQty)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 10, color: Colors.white),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
           const SizedBox(width: 10),
           // 中间信息
@@ -2992,15 +3161,6 @@ class _DishProductCard extends StatelessWidget {
                     ),
                   ],
                 ),
-                // 剩余库存（对齐 smdcapp: sellclearflag==1 且未售罄时显示）
-                if (product.sellclearflag == 1 && !soldOut)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(
-                      '剩余:${_fmtQty(product.stockqty)}',
-                      style: const TextStyle(fontSize: 11, color: Color(0xFFFF8800)),
-                    ),
-                  ),
               ],
             ),
           ),

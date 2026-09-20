@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_deer/db/base_data_dao.dart';
 import 'package:flutter_deer/db/cash_recon_dao.dart';
 import 'package:flutter_deer/db/handover_record_dao.dart';
+import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/res/constant.dart';
@@ -40,16 +41,30 @@ class CashReconService {
         String logouttime,
       })> loadHandoverData() async {
     if (isLocal) {
-      // 对齐 smdcapp HandWordActivity：本地 SQLite 为主数据源，云端仅回退
-      try {
-        final local = await _loadHandoverLocal();
-        if (local.list.isNotEmpty || local.sumdata.isNotEmpty) {
-          return local;
+      // 本地 t_sale_* 仅在主设备/离线场景写入；云服务模式下结算数据在服务端，
+      // 必须先取云端交班报表，否则本地为空/全 0 会导致交班页所有金额显示 0。
+      final bool preferLocal = ConnectionManager.pcAlive;
+      if (preferLocal) {
+        try {
+          final local = await _loadHandoverLocal();
+          if (local.list.isNotEmpty || local.sumdata.isNotEmpty) {
+            return local;
+          }
+        } catch (_) {
+          // 本地不可用时回退云端
         }
-      } catch (_) {
-        // 本地不可用时回退云端
+        return _loadHandoverCloud();
       }
-      return _loadHandoverCloud();
+      final cloud = await _loadHandoverCloud();
+      if (cloud.list.isNotEmpty || cloud.sumdata.isNotEmpty) {
+        return cloud;
+      }
+      // 云端无数据时回退本地汇总（离线/主设备补账场景）
+      try {
+        return await _loadHandoverLocal();
+      } catch (_) {
+        return cloud;
+      }
     }
     return _loadHandoverCloud();
   }

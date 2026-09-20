@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_deer/components/dish_operation_dialogs.dart';
+import 'package:flutter_deer/db/dao/table_type_dao.dart';
+import 'package:flutter_deer/db/entity/table_type_entity.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
@@ -12,8 +14,12 @@ import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
+import 'package:flutter_deer/util/params_sp_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:sp_util/sp_util.dart';
+
+/// 品牌红
+const Color _brandRed = Color(0xFFE63F31);
 
 /// 开台弹窗（对齐 smdcapp TableInfoActivity.openTable 流程）
 ///
@@ -30,15 +36,17 @@ class OpenTableDialog extends StatefulWidget {
 }
 
 class _OpenTableDialogState extends State<OpenTableDialog> {
-  /// 品牌红
-  static const Color _brandRed = Color(0xFFE63F31);
-
   late TextEditingController _personController;
   late TextEditingController _remarkController;
 
   /// 服务员信息（默认取当前登录用户）
   String _serverId = '';
   String _serverName = '系统管理员';
+
+  /// 附加费选项与当前选中项（对齐 smdcapp TableOpenBottomV2Dialog.getFjf）
+  List<_FjfOption> _fjfOptions = const <_FjfOption>[];
+  String _fjfId = '';
+  String _fjfName = '无';
 
   bool _submitting = false;
 
@@ -51,6 +59,58 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
     );
     _remarkController = TextEditingController();
     _loadCurrentUser();
+    _loadFjf();
+  }
+
+  /// 附加费开关：参数 OpenTableAmtFlag=1 才展示（对齐 smdcapp SpUtils.getOpenTableAmtFlag）
+  bool get _showFjf => ParamsSpUtils.getOpenTableAmtFlag() == '1';
+
+  /// 载入附加费选项并确定默认选中项（对齐 smdcapp getFjf：
+  /// 数据源为本地桌台类型表，首项“无”；默认取桌台绑定的 tabletypeid）
+  Future<void> _loadFjf() async {
+    try {
+      final List<TableTypeEntity> types = await TableTypeDao.instance.queryAll();
+      final List<_FjfOption> options = <_FjfOption>[
+        const _FjfOption(id: '', name: '无'),
+        for (final TableTypeEntity t in types)
+          if (t.tabletypeid.isNotEmpty)
+            _FjfOption(id: t.tabletypeid, name: t.name),
+      ];
+      _FjfOption selected = options.first;
+      final String bound = widget.table.tabletypeid;
+      if (bound.isNotEmpty) {
+        for (final _FjfOption o in options) {
+          if (o.id == bound) {
+            selected = o;
+            break;
+          }
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _fjfOptions = options;
+        _fjfId = selected.id;
+        _fjfName = selected.name;
+      });
+    } catch (_) {
+      // 本地表缺失时保持默认“无”
+    }
+  }
+
+  /// 选择附加费（对齐 smdcapp 点击 ll_fjf 切换选项列表）
+  Future<void> _onPickFjf() async {
+    if (_fjfOptions.isEmpty) return;
+    final _FjfOption? picked = await _FjfSelectSheet.show(
+      context,
+      options: _fjfOptions,
+      selectedId: _fjfId,
+    );
+    if (picked != null && mounted) {
+      setState(() {
+        _fjfId = picked.id;
+        _fjfName = picked.name;
+      });
+    }
   }
 
   void _loadCurrentUser() {
@@ -151,6 +211,7 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
             'tablename': widget.table.name,
             'billtype': 7,
             'localbillno': billNo,
+            'additionid': _fjfId,
           },
         };
         result = await requestForm(
@@ -172,6 +233,7 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
             'servername': _serverName,
             'remark': _remarkController.text.trim(),
             'localbillno': billNo,
+            'additionid': _fjfId,
           },
           masterDevice: false,
           showError: true,
@@ -342,6 +404,35 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
                 ),
               ),
             ),
+            if (_showFjf) ...<Widget>[
+              const SizedBox(height: 12),
+              // 附加费（对齐 smdcapp：OpenTableAmtFlag=1 时展示，可点击选择）
+              _buildRow(
+                label: '附加费：',
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: _onPickFjf,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Text(
+                        _fjfName,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF1D2129),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(
+                        Icons.chevron_right,
+                        size: 18,
+                        color: Color(0xFF86909C),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             // 备注
             _buildRow(
@@ -454,6 +545,147 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
         const SizedBox(width: 4),
         Flexible(child: child),
       ],
+    );
+  }
+}
+
+/// 附加费选项（对齐 smdcapp TableFjfBean）
+class _FjfOption {
+  const _FjfOption({required this.id, required this.name});
+
+  /// 桌台类型id（空串表示“无”）
+  final String id;
+
+  /// 展示名称
+  final String name;
+}
+
+/// 附加费选择弹层（对齐 smdcapp FjfRecycleView：两列网格，选中项红框）
+class _FjfSelectSheet extends StatelessWidget {
+  const _FjfSelectSheet({required this.options, required this.selectedId});
+
+  final List<_FjfOption> options;
+  final String selectedId;
+
+  static Future<_FjfOption?> show(
+    BuildContext context, {
+    required List<_FjfOption> options,
+    required String selectedId,
+  }) {
+    return showModalBottomSheet<_FjfOption>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _FjfSelectSheet(options: options, selectedId: selectedId),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(16),
+          topRight: Radius.circular(16),
+        ),
+      ),
+      padding: EdgeInsets.fromLTRB(
+        20,
+        0,
+        20,
+        MediaQuery.of(context).padding.bottom + 16,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          // 顶部拖拽指示条
+          Center(
+            child: Container(
+              margin: const EdgeInsets.only(top: 10, bottom: 14),
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: const Color(0xFFE5E6EB),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          // 标题 + 右上角关闭按钮
+          SizedBox(
+            width: double.infinity,
+            child: Stack(
+              alignment: Alignment.center,
+              children: <Widget>[
+                const Text(
+                  '选择附加费',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF1D2129),
+                  ),
+                ),
+                Positioned(
+                  right: 0,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => Navigator.of(context).pop(),
+                    child: const Padding(
+                      padding: EdgeInsets.all(6),
+                      child: Icon(
+                        Icons.close,
+                        size: 22,
+                        color: Color(0xFF86909C),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 300),
+            child: GridView.builder(
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                mainAxisSpacing: 10,
+                crossAxisSpacing: 10,
+                mainAxisExtent: 40,
+              ),
+              itemCount: options.length,
+              itemBuilder: (BuildContext context, int index) {
+                final _FjfOption option = options[index];
+                final bool selected = option.id == selectedId;
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => Navigator.of(context).pop(option),
+                  child: Container(
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: selected ? _brandRed : const Color(0xFFE5E6EB),
+                      ),
+                    ),
+                    child: Text(
+                      option.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        color: Color(0xFF1D2129),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

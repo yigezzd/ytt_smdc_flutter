@@ -824,6 +824,39 @@ class OrderRepository {
     return result;
   }
 
+  /// 读取本地分类的二级→一级映射（对齐 smdcapp ProductType.parenttypeid）
+  ///
+  /// 商品可能挂在二级分类下（t_bi_type level==2），而点菜页左侧栏只展示一级分类，
+  /// 若不向上归并，二级分类下的菜品不会出现在任何分类里（对齐 smdcapp formatType）。
+  static Future<Map<String, String>> fetchCategoryParentMap() async {
+    try {
+      final List<Map<String, dynamic>> rows =
+          await TableDownloadManager.readTableData('t_bi_type');
+      if (rows.isEmpty) return <String, String>{};
+      final Map<String, String> levelOne = <String, String>{};
+      for (final Map<String, dynamic> r in rows) {
+        final String id = r['typeid']?.toString() ?? '';
+        if (id.isNotEmpty && _toInt(r['level']) == 1) levelOne[id] = id;
+      }
+      final Map<String, String> map = <String, String>{};
+      for (final Map<String, dynamic> r in rows) {
+        final String id = r['typeid']?.toString() ?? '';
+        if (id.isEmpty) continue;
+        // 一级分类映射到自身
+        if (levelOne.containsKey(id)) {
+          map[id] = id;
+          continue;
+        }
+        // 二级分类向上找一级父级（父级缺失时退化为自身，避免商品被丢弃）
+        final String parent = r['parenttypeid']?.toString() ?? '';
+        map[id] = levelOne.containsKey(parent) ? parent : id;
+      }
+      return map;
+    } catch (_) {
+      return <String, String>{};
+    }
+  }
+
   /// 读取本地商品 productid → combflag 映射（对齐 smdcapp ProductHelper.getProductMin）
   ///
   /// 已下单明细接口（尤其主设备模式）可能不返回 combflag 等商品参数
@@ -850,8 +883,9 @@ class OrderRepository {
   /// 从本地缓存读取商品定价相关字段（对齐 smdcapp CartGoodsModel.initOrderInfo 回填逻辑）
   ///
   /// 主设备模式明细接口不返回 combflag/dscflag/mprice1~3 等商品参数，
-  /// 需按 productid 从本地商品库回填，供会员价/折扣计算使用。
-  /// 返回 productid → {combflag, dscflag, mprice1, mprice2, mprice3}。
+  /// 需按 productid 从本地商品库回填，供会员价/折扣计算使用；
+  /// 促销校验（checkPromotion123）同样依赖本地商品分类 typeid。
+  /// 返回 productid → {combflag, dscflag, mprice1, mprice2, mprice3, typeid}。
   static Future<Map<String, Map<String, dynamic>>> fetchLocalProductPriceFields() async {
     try {
       final List<Map<String, dynamic>> rows =
@@ -866,6 +900,7 @@ class OrderRepository {
             'mprice1': _toDouble(r['mprice1']),
             'mprice2': _toDouble(r['mprice2']),
             'mprice3': _toDouble(r['mprice3']),
+            'typeid': r['typeid']?.toString() ?? '',
           };
         }
       }
@@ -1152,7 +1187,9 @@ class OrderRepository {
 
   /// 获取服务员列表（对齐 smdcapp TableApi.getUserList /YttSvr/app/user/getList）
   ///
-  /// 参数对齐 smdcapp：is_page=1, page, pagesize, stopflag='0'（只查未停用）
+  /// 参数对齐 smdcapp TableOpenBottomV2Dialog：is_page=1、page、pagesize、
+  /// **type='asc' + field='code'（排序参数，必传）**、stopflag='0'（只查未停用），
+  /// 搜索关键字走 cond。type/field 传空串会导致服务端返回空列表（服务员列表空白）。
   static Future<List<Waiter>> fetchWaiters({
     int page = 1,
     int pagesize = 100,
@@ -1162,8 +1199,8 @@ class OrderRepository {
       'is_page': '1',
       'page': '$page',
       'pagesize': '$pagesize',
-      'type': '',
-      'field': '',
+      'type': 'asc',
+      'field': 'code',
       'stopflag': '0',
       'cond': cond,
     };
@@ -1526,9 +1563,22 @@ class OrderRepository {
       final bool useMaster = ConnectionManager.pcAlive;
       final Map<String, dynamic> resp;
       if (useMaster) {
+        // 主设备要求筛选条件放在 warnfind JSON 中，不能直接传分页字段。
+        final Map<String, dynamic> warnfind = <String, dynamic>{
+          'productid': '',
+          'specid': '',
+          'page': '1',
+          'pagesize': '5000',
+          'status': '1',
+          'createtime': '',
+          'updatetime': '',
+          'opertime': '',
+          'spid': int.tryParse(UserHelper.getSpidStr()) ?? 0,
+          'sid': int.tryParse(UserHelper.getSidStr()) ?? 0,
+        };
         resp = await requestForm(
           HttpApi.pcGetProductWarnList,
-          <String, dynamic>{'page': '1', 'pagesize': '1000'},
+          <String, dynamic>{'warnfind': jsonEncode(warnfind)},
           masterDevice: true,
           showError: false,
         );

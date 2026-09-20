@@ -41,6 +41,9 @@ class _DataExchangePageState extends State<DataExchangePage> {
   /// 重试弹窗是否正在展示（防止重复弹出）
   bool _retryDialogShowing = false;
 
+  /// 已重试次数（超过上限不再无限弹窗，避免卡死在数据交换页）
+  int _retryCount = 0;
+
   @override
   void initState() {
     super.initState();
@@ -114,25 +117,34 @@ class _DataExchangePageState extends State<DataExchangePage> {
   }
 
   /// 失败重试弹窗（对齐 smdcapp TipPop "部分数据交换失败,点击重试重新交换数据"）
+  ///
+  /// 弹窗带上失败表的业务名称，便于定位是哪类数据交换失败；
+  /// 连续两次重试仍失败时不再无限弹窗，提示后进入桌台页（避免卡死在数据交换页）。
   Future<void> _showRetryDialog() async {
     if (_retryDialogShowing || !mounted) {
       return;
     }
     _retryDialogShowing = true;
+    _retryCount++;
+    final List<String> failed = TableDownloadManager.failedTableRemarks();
+    final String detail = failed.isEmpty ? '' : '\n失败数据：${failed.join('、')}';
+    final bool overLimit = _retryCount > 2;
     final bool retry = await ConfirmDialog.show(
       context,
-      content: '部分数据交换失败,点击重试重新交换数据',
-      confirmText: '重试',
+      content: overLimit
+          ? '部分数据交换失败,已重试$_retryCount次仍失败$detail\n可先进入桌台页，稍后在【个人中心-数据交换】重试'
+          : '部分数据交换失败,点击重试重新交换数据$detail',
+      confirmText: overLimit ? '进入桌台页' : '重试',
       barrierDismissible: false,
     );
     _retryDialogShowing = false;
     if (!mounted) {
       return;
     }
-    if (retry) {
+    if (retry && !overLimit) {
       _startDownload(isRetry: true);
     } else {
-      // 取消也进入桌台页（对齐 smdcapp: 取消后仍跳转 TableInfoActivity）
+      // 取消/超过重试上限也进入桌台页（对齐 smdcapp: 取消后仍跳转 TableInfoActivity）
       TableDownloadManager.initInfo();
       NavigatorUtils.push(context, Routes.home, clearStack: true);
     }

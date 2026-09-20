@@ -34,6 +34,32 @@ class CookModifyResult {
   final double cookExtra;
 }
 
+/// 规格做法提交数据
+///
+/// 规格与做法需分开上传（对齐 smdcapp DetailListBean：spec 存规格、cooktext 存做法），
+/// 合并展示用的 [specText] 仅用于购物车行文案与合并键。
+class SpecCookSubmit {
+  const SpecCookSubmit({
+    required this.quantity,
+    required this.specName,
+    required this.cookText,
+    required this.unitPrice,
+    required this.wholeExtra,
+  });
+
+  final int quantity;
+  final String specName;
+  final String cookText;
+  final double unitPrice;
+  final double wholeExtra;
+
+  String get specText {
+    if (specName.isEmpty) return cookText;
+    if (cookText.isEmpty) return specName;
+    return '$specName、$cookText';
+  }
+}
+
 /// 规格做法统一弹窗（合并原 SpecCookSheet + DishCookModifySheet）
 ///
 /// 通过 [mode] 区分两种业务场景：
@@ -65,11 +91,11 @@ class SpecCookSheet extends StatefulWidget {
   /// 商品（加购模式必传）
   final DishProduct? product;
 
-  /// 加入购物车回调(数量, 规格做法描述, 单份销售价, 整份加价)
-  final void Function(int quantity, String specText, double unitPrice, double wholeExtra)? onAddToCart;
+  /// 加入购物车回调（规格与做法分开返回，便于按 smdcapp 字段分别上传）
+  final void Function(SpecCookSubmit data)? onAddToCart;
 
   /// 立即下单回调
-  final void Function(int quantity, String specText, double unitPrice, double wholeExtra)? onBuyNow;
+  final void Function(SpecCookSubmit data)? onBuyNow;
 
   // ── 修改模式参数 ──
 
@@ -87,8 +113,8 @@ class SpecCookSheet extends StatefulWidget {
     BuildContext context, {
     required DishProduct product,
     required DishSpecData specData,
-    required void Function(int quantity, String specText, double unitPrice, double wholeExtra) onAddToCart,
-    void Function(int quantity, String specText, double unitPrice, double wholeExtra)? onBuyNow,
+    required void Function(SpecCookSubmit data) onAddToCart,
+    void Function(SpecCookSubmit data)? onBuyNow,
   }) {
     return showModalBottomSheet<void>(
       context: context,
@@ -151,6 +177,10 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
     )..forward();
     _slideAnimation = CurvedAnimation(parent: _animController, curve: Curves.easeOutCubic);
     if (_isModify) {
+      // 对齐 smdcapp initCookTab 情况 C：私有做法为空、全局做法有效时固定显示全局做法
+      if (widget.specData.cookdata.isEmpty && widget.specData.publiccook.isNotEmpty) {
+        _cookTab = 1;
+      }
       _preselectCooks();
     } else {
       _initDefaultSelection();
@@ -280,14 +310,12 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
     return base * _quantity + _wholeExtraPrice + _qtyExtraPrice * _quantity;
   }
 
-  /// SKU 描述文本（对齐 smdcapp: 规格名、做法名(¥价格)xN、...）
-  /// 加购模式：规格名 + cookdata 做法；修改模式：cookdata + publiccook 做法（不含规格名）
-  String get _specText {
+  /// 已选规格名（加购模式；修改模式无规格）
+  String get _specName => _isModify ? '' : (_checkedSpec?.specname ?? '');
+
+  /// 已选做法描述（对齐 smdcapp: 做法名(¥价格)xN，修改模式含全局做法）
+  String get _cookText {
     final List<String> parts = <String>[];
-    if (!_isModify) {
-      final DishSpec? spec = _checkedSpec;
-      if (spec != null) parts.add(spec.specname);
-    }
     void collect(List<DishCookGroup> groups) {
       for (final DishCookGroup g in groups) {
         for (final DishCook c in g.cooklist) {
@@ -308,6 +336,15 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
     collect(widget.specData.cookdata);
     if (_isModify) collect(widget.specData.publiccook);
     return parts.join('、');
+  }
+
+  /// 规格做法合并文案（购物车行展示与合并键使用）
+  String get _specText {
+    final String spec = _specName;
+    final String cook = _cookText;
+    if (spec.isEmpty) return cook;
+    if (cook.isEmpty) return spec;
+    return '$spec、$cook';
   }
 
   // ==================== 做法 Tab（修改模式，对齐 smdcapp initCookTab） ====================
@@ -456,13 +493,20 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
         return;
       }
     }
+    final SpecCookSubmit data = SpecCookSubmit(
+      quantity: _quantity,
+      specName: _specName,
+      cookText: _cookText,
+      unitPrice: _unitPrice,
+      wholeExtra: _wholeExtraPrice,
+    );
     if (buyNow) {
       // 先关闭弹窗再回调跳转，否则回调推入的下单确认页会被随后的 pop 弹掉
       Navigator.of(context).pop();
-      widget.onBuyNow?.call(_quantity, _specText, _unitPrice, _wholeExtraPrice);
+      widget.onBuyNow?.call(data);
       return;
     }
-    widget.onAddToCart?.call(_quantity, _specText, _unitPrice, _wholeExtraPrice);
+    widget.onAddToCart?.call(data);
     Toast.show('已加入购物车');
     Navigator.of(context).pop();
   }
@@ -475,7 +519,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
       return;
     }
     Navigator.of(context).pop(
-      CookModifyResult(cookText: _specText, cookExtra: _wholeExtraPrice),
+      CookModifyResult(cookText: _cookText, cookExtra: _wholeExtraPrice),
     );
   }
 

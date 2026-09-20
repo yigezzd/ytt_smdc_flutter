@@ -138,6 +138,15 @@ class TableDownloadManager {
   /// 获取失败的表名列表（对齐 smdcapp getFailedTableList）
   static List<String> getFailedTableList() => _failedTables.toList();
 
+  /// 失败表的中文备注（用于失败提示，便于定位是哪类数据交换失败）
+  static List<String> failedTableRemarks() {
+    final List<String> remarks = _failedTables
+        .map((String t) => tableRemarkMap[t] ?? t)
+        .toSet()
+        .toList();
+    return remarks;
+  }
+
   // ==================== 全量/增量判定（对齐 smdcapp SpUtils.isAllUpdata） ====================
 
   /// 当前门店标识：spid-sid-云服务URL（对齐 smdcapp "${getSPID}-${getSID}-${NetHelpUtils.currentUrl}"）

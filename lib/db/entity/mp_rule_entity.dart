@@ -1,3 +1,5 @@
+import 'entity_map_utils.dart';
+
 /// 促销规则表（对齐 MPRule.kt）
 class MpRuleEntity {
   int id;
@@ -25,14 +27,14 @@ class MpRuleEntity {
   });
 
   factory MpRuleEntity.fromMap(Map<String, dynamic> m) => MpRuleEntity(
-        id: m['id'] as int? ?? 0,
-        spid: m['spid'] as int? ?? 0,
-        sid: m['sid'] as int? ?? 0,
-        discount: (m['discount'] as num?)?.toDouble() ?? 0.0,
-        qty: (m['qty'] as num?)?.toDouble() ?? 0.0,
-        giveqty: (m['giveqty'] as num?)?.toDouble() ?? 0.0,
-        reduceamt: (m['reduceamt'] as num?)?.toDouble() ?? 0.0,
-        amt: (m['amt'] as num?)?.toDouble() ?? 0.0,
+        id: readMapInt(m['id']),
+        spid: readMapInt(m['spid']),
+        sid: readMapInt(m['sid']),
+        discount: readMapDouble(m['discount']),
+        qty: readMapDouble(m['qty']),
+        giveqty: readMapDouble(m['giveqty']),
+        reduceamt: readMapDouble(m['reduceamt']),
+        amt: readMapDouble(m['amt']),
         billid: m['billid']?.toString() ?? '',
         ruleid: m['ruleid']?.toString() ?? '',
         productid: m['productid']?.toString() ?? '',

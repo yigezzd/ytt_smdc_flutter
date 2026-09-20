@@ -1,6 +1,9 @@
 import 'dart:math';
 
+import 'package:flutter_deer/db/dao/table_type_dao.dart';
+import 'package:flutter_deer/db/entity/table_type_entity.dart';
 import 'package:flutter_deer/util/params_sp_utils.dart';
+import 'package:flutter_deer/util/store_mode_utils.dart';
 
 /// 金额计算工具（对齐 smdcapp EraseAmountUtils + GetServiceAmountUtils + Arith）
 ///
@@ -272,6 +275,77 @@ class AmountCalcUtils {
     }
 
     return amt;
+  }
+
+  // ──────────── 台桌服务费计算（对齐 smdcapp GetServiceAmountUtils.calcTableServiceMoneyV2）─────────
+
+  /// 台桌服务费（按桌台类型/附加费配置计算）
+  ///
+  /// [tmp] 订单 tmp（提供 additionid / personnum / billdate / servicebegintime / serviceendtime）
+  /// [tableTypeId] 桌台 tabletypeid（未开附加费或无 additionid 时使用）
+  /// [saleMoney] 折后消费金额（servicetype=1 按其百分比计费）
+  ///
+  /// servicetype：1=按消费金额百分比 2=指定金额 3=按小时 4=按人
+  /// 5（起步递增）/6（时段区间）需附加费区间表，此处返回 0 由服务端结果兜底。
+  static Future<double> calcTableServiceFee({
+    required Map<String, dynamic>? tmp,
+    required String tableTypeId,
+    required double saleMoney,
+  }) async {
+    // 仅正餐模式收取服务费（对齐 smdcapp: getCurrentStoremodel() != 2 直接返回 0）
+    if (StoreModeUtils.getCurrentStoreModel() != StoreModeUtils.storeModelNormal) {
+      return 0;
+    }
+    // 开台费标志位：开则优先用 additionid，否则用 tabletypeid
+    final bool openAmt = ParamsSpUtils.getOpenTableAmtFlag() != '0';
+    final String additionId = tmp?['additionid']?.toString() ?? '';
+    final String id = (openAmt && additionId.isNotEmpty) ? additionId : tableTypeId;
+    if (id.isEmpty) return 0;
+
+    final TableTypeEntity? type = await TableTypeDao.instance.getByCreateid(id);
+    if (type == null || type.servicetype == 0) return 0;
+    final double serviceamt = type.serviceamt;
+
+    switch (type.servicetype) {
+      case 1:
+        return _round2By(mul(saleMoney, serviceamt / 100));
+      case 2:
+        return _round2By(serviceamt);
+      case 3:
+        // 按小时计费：手动模式未开始计费时返回 0
+        final bool auto = type.automaticflag == 1;
+        String begin = tmp?['servicebegintime']?.toString() ?? '';
+        if (!auto && begin.isEmpty) return 0;
+        if (begin.isEmpty) begin = tmp?['billdate']?.toString() ?? '';
+        final String end = tmp?['serviceendtime']?.toString() ?? '';
+        final DateTime? beginTime = _parseDateTime(begin);
+        final DateTime endTime = _parseDateTime(end) ?? DateTime.now();
+        if (beginTime == null) return 0;
+        final int intervalMs = endTime.difference(beginTime).inMilliseconds;
+        int hour = intervalMs ~/ (1000 * 60 * 60);
+        final int minu = (intervalMs % (1000 * 60 * 60)) ~/ (1000 * 60);
+        // 超过 excesstime 分钟算一小时
+        if (minu >= type.excesstime) hour++;
+        return _round2By(mul(hour.toDouble(), serviceamt));
+      case 4:
+        final int personNum =
+            int.tryParse(tmp?['personnum']?.toString() ?? '') ?? 0;
+        return _round2By(mul(serviceamt, personNum > 0 ? personNum.toDouble() : 1.0));
+      default:
+        // 5/6 起步递增与时段区间配置依赖附加费区间表，本地不计算，沿用服务端结果
+        return 0;
+    }
+  }
+
+  static double _round2By(double v) => (v * 100).roundToDouble() / 100;
+
+  static DateTime? _parseDateTime(String v) {
+    if (v.isEmpty) return null;
+    try {
+      return DateTime.parse(v.replaceFirst(' ', 'T'));
+    } catch (_) {
+      return null;
+    }
   }
 
   // ──────────── 折扣计算 ─────────────────────────────────────────

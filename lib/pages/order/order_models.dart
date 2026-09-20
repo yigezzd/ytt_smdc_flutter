@@ -1,5 +1,19 @@
 import 'package:flutter/material.dart';
 
+final RegExp _bagCookTokenPattern =
+    RegExp(r'^打包(?:\([￥¥][^)]*\))?$');
+
+/// 移除做法文本中的打包标识，避免取消打包后继续展示或上传旧标识。
+String stripBagCookText(String text) {
+  if (text.isEmpty) {
+    return text;
+  }
+  return text
+      .split('、')
+      .where((String part) => !_bagCookTokenPattern.hasMatch(part.trim()))
+      .join('、');
+}
+
 /// 商品标签(新/热/荐)
 enum ProductTag {
   isNew('新', Color(0xFF00B42A)),
@@ -106,7 +120,7 @@ class ProductCategory {
 /// 下单时按此生成套餐子行（combflag=0, combid=主行onlyid），
 /// 而非拼接进主行 spec（smdcapp 主行 spec 为空，见 OrderModel.productToDetailBean）
 class ComboSelectedItem {
-  const ComboSelectedItem({
+  ComboSelectedItem({
     required this.productid,
     required this.productname,
     required this.qty,
@@ -116,6 +130,8 @@ class ComboSelectedItem {
     this.specname = '',
     this.sellprice = 0,
     this.unit = '',
+    this.cookText = '',
+    this.cookExtra = 0,
   });
 
   /// 子商品ID（对齐 combproductid 之外的明细商品 productid）
@@ -144,6 +160,12 @@ class ComboSelectedItem {
 
   /// 单位
   final String unit;
+
+  /// 明细做法描述（对齐 smdcapp 明细 cooktext，如 "微辣、加葱"）
+  String cookText;
+
+  /// 明细做法加价（单份，对齐 smdcapp 明细 cookaddamt）
+  double cookExtra;
 }
 
 /// 购物车条目
@@ -166,6 +188,12 @@ class CartItem {
 
   /// 已选规格做法描述, 如 "中份、微辣、加肉"（做法修改时可更新）
   String specText;
+
+  /// 规格名（仅规格，不含做法；对齐 smdcapp DetailListBean.spec，下单时上传到 spec）
+  String specName = '';
+
+  /// 做法描述（仅做法，不含规格；对齐 smdcapp DetailListBean.cooktext，下单时上传到 cooktext）
+  String cookText = '';
 
   /// 套餐已选明细（仅套餐商品非空，对齐 smdcapp DetailListBean.itemList）
   /// 非 final：套餐修改操作需整体替换明细列表
@@ -200,14 +228,27 @@ class CartItem {
   /// 是否挂起（对齐 smdcapp hangflag）
   bool isSuspended = false;
 
-  /// 打包费，0=不打包（对齐 smdcapp bagPrice / isBag）
   double bagPrice = 0;
+
+  // 零元打包仍需保留打包状态。
+  bool isBag = false;
+
+  /// 取消打包并清除费用、状态及历史文本标识。
+  void cancelBag() {
+    isBag = false;
+    bagPrice = 0;
+    cookText = stripBagCookText(cookText);
+    specText = stripBagCookText(specText);
+  }
 
   /// 单品备注（对齐 smdcapp singleRemark）
   String remark = '';
 
   /// 服务员名称（对齐 smdcapp salesname）
   String waiterName = '';
+
+  /// 服务员ID（对齐 smdcapp salesid，空=沿用桌台服务员/当前登录人）
+  String waiterId = '';
 
   /// 会员优惠后单价（null=未录入会员，对齐 smdcapp getMemberPrice 计算结果）
   double? memberUnitPrice;
@@ -220,6 +261,28 @@ class CartItem {
 
   /// 是否退菜记录（对齐 smdcapp presentflag==2）
   bool isRefunded = false;
+
+  /// 是否已划菜（对齐 smdcapp cutflag==1）
+  bool isCut = false;
+
+  // ---- 基础促销字段（对齐 smdcapp DetailListBean jcmbillid/specpriceflag）----
+
+  /// 命中的基础促销活动ID（分类折扣/菜品折扣/特价菜）
+  String jcmbillid = '';
+
+  /// 特价标识：0=非特价 1=分类折扣 2=菜品折扣 3=特价菜（对齐 smdcapp specpriceflag）
+  int specpriceflag = 0;
+
+  /// 特价菜单价（specpriceflag==3 时生效，优先于原价）
+  double promoPrice = 0;
+
+  // ---- 场景促销赠品字段（对齐 smdcapp DetailListBean cxmbillid/bxxpxxflag）----
+
+  /// 赠品所属促销活动ID（对齐 smdcapp cxmbillid，空=非赠品）
+  String cxmbillid = '';
+
+  /// 促销赠品标记：1=买赠 4=满赠（对齐 smdcapp bxxpxxflag）
+  int bxxpxxflag = 0;
 
   // ---- 临时菜字段（对齐 smdcapp DetailListBean tpdish*）----
 
@@ -276,8 +339,19 @@ class CartItem {
   /// 计价数量（称重菜按重量计价，普通菜按数量计价，对齐 smdcapp 单价×重量逻辑）
   double get priceQty => isWeigh ? weighNum : quantity.toDouble();
 
-  /// 单份实际价格（改价 > 会员价 > 原价+规格加价）
-  double get unitPrice => customPrice ?? memberUnitPrice ?? (product.price + extraPrice);
+  /// 是否命中基础促销（对齐 smdcapp DishesTagHelper.isPromotion）
+  bool get isPromotion =>
+      !isCombo &&
+      (specpriceflag == 1 ||
+          specpriceflag == 2 ||
+          specpriceflag == 3 ||
+          jcmbillid.isNotEmpty);
+
+  /// 单份基础价（特价菜优先，其次原价）
+  double get baseUnitPrice => promoPrice > 0 ? promoPrice : product.price;
+
+  /// 单份实际价格（改价 > 会员价 > 基础价+规格加价）
+  double get unitPrice => customPrice ?? memberUnitPrice ?? (baseUnitPrice + extraPrice);
 
   /// 折扣后单价
   double get discountedUnitPrice =>
@@ -286,12 +360,13 @@ class CartItem {
   /// 是否打折
   bool get isDiscounted => discount < 100 && discount > 0;
 
-  /// 是否打包
-  bool get isBag => bagPrice > 0;
-
   /// 总价（对齐 smdcapp ShoppingCartUtil：赠送商品不计入合计金额；称重菜按单价×重量）
   /// 已下单商品直接使用服务端 rramt（对齐 smdcapp PriceUtil.formatPrice(bean.rramt)）
-  double get totalPrice => orderedAmt ?? (isGift ? 0 : discountedUnitPrice * priceQty);
+  ///
+  /// 打包费按行整份计入（对齐 smdcapp rramt = 现单价×数量 + cookaddamt(含打包)），
+  /// 不随数量翻倍；赠送商品仅计打包费（对齐 smdcapp isBag ? bagPrice : 0）
+  double get totalPrice => orderedAmt ??
+      (isGift ? bagPrice : discountedUnitPrice * priceQty + bagPrice);
 
   double get totalOriginalPrice => (product.originalPrice ?? product.price) * quantity;
 

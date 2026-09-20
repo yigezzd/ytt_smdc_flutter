@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_deer/components/dish_operation_dialogs.dart';
+import 'package:flutter_deer/db/dao/table_type_dao.dart';
+import 'package:flutter_deer/db/entity/table_type_entity.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
+import 'package:flutter_deer/util/params_sp_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 
 /// 品牌红
@@ -34,6 +37,7 @@ class EditTableInfoSheet extends StatefulWidget {
     required this.remark,
     required this.serverId,
     required this.serverName,
+    this.additionId = '',
     this.tableJson,
   });
 
@@ -45,6 +49,9 @@ class EditTableInfoSheet extends StatefulWidget {
   final String remark;
   final String serverId;
   final String serverName;
+
+  /// 开台附加费ID（对齐 smdcapp tmp.additionid，仅展示不可改）
+  final String additionId;
   final Map<String, dynamic>? tableJson;
 
   /// 显示弹窗并执行修改，返回是否成功
@@ -57,6 +64,7 @@ class EditTableInfoSheet extends StatefulWidget {
     required String remark,
     required String serverId,
     required String serverName,
+    String additionId = '',
     Map<String, dynamic>? tableJson,
   }) async {
     final bool? result = await showModalBottomSheet<bool>(
@@ -72,6 +80,7 @@ class EditTableInfoSheet extends StatefulWidget {
         remark: remark,
         serverId: serverId,
         serverName: serverName,
+        additionId: additionId,
         tableJson: tableJson,
       ),
     );
@@ -89,6 +98,15 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
   late String _serverName;
   bool _submitting = false;
 
+  /// 开台附加费名称（来自本地桌台类型表，有配置时展示且不可改）
+  String _additionName = '';
+
+  /// 附加费是否已就绪（避免加载中先闪“无”）
+  bool _additionReady = false;
+
+  /// 附加费展示开关（对齐 smdcapp：OpenTableAmtFlag=1 时展示且只读）
+  bool get _showAddition => ParamsSpUtils.getOpenTableAmtFlag() == '1';
+
   @override
   void initState() {
     super.initState();
@@ -97,6 +115,33 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
     _serverId = widget.serverId;
     _serverName =
         widget.serverName.isNotEmpty ? widget.serverName : '系统管理员';
+    _loadAddition();
+  }
+
+  /// 读取桌台类型名称（对齐 smdcapp TableOpenBottomV2Dialog 修改模式：
+  /// additionid 为空时展示“无”，非空时按 id 匹配本地桌台类型）
+  Future<void> _loadAddition() async {
+    if (!_showAddition) return;
+    if (widget.additionId.isEmpty) {
+      _additionName = '无';
+      _additionReady = true;
+      return;
+    }
+    try {
+      final TableTypeEntity? type =
+          await TableTypeDao.instance.getByCreateid(widget.additionId);
+      if (!mounted) return;
+      setState(() {
+        _additionName = type?.name ?? '无';
+        _additionReady = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _additionName = '无';
+        _additionReady = true;
+      });
+    }
   }
 
   @override
@@ -219,6 +264,33 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
             ],
           ),
           const SizedBox(height: 16),
+          // 附加费（对齐 smdcapp TableOpenBottomV2Dialog：OpenTableAmtFlag=1 时展示，只读）
+          if (_showAddition && _additionReady) ...<Widget>[
+            Row(
+              children: <Widget>[
+                const Text('附加费：',
+                    style: TextStyle(fontSize: 15, color: Color(0xFF4E5969))),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Container(
+                    height: 40,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    alignment: Alignment.centerLeft,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF7F8FA),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: const Color(0xFFE5E6EB)),
+                    ),
+                    child: Text(
+                      _additionName,
+                      style: const TextStyle(fontSize: 14, color: Color(0xFF86909C)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+          ],
           // 备注
           Row(
             children: <Widget>[

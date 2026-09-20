@@ -14,9 +14,11 @@ import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/net/pay_gateway.dart';
 import 'package:flutter_deer/net/table_event_bus.dart';
+import 'package:flutter_deer/pages/login/login_router.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/pages/order/pay_scan_page.dart';
 import 'package:flutter_deer/pages/order/scan_pay_dialog.dart';
+import 'package:flutter_deer/pages/order/widgets/coupon_pay_dialog.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
@@ -428,8 +430,16 @@ class _SettlePageState extends State<SettlePage> {
       await _submitSaleFlow();
       return;
     }
-    if (_payId == '02' && _member == null) {
+    // 会员卡(02)/优惠券(15)：必须先录入会员才能支付
+    // （对齐 smdcapp selectPay case "02"/"15"：memberBean == null 时引导登录会员）
+    if ((_payId == '02' || _payId == '15') && _member == null) {
       Toast.show('请先录入会员');
+      return;
+    }
+
+    // 优惠券(15)：弹出券号搜索弹窗（扫码/输入券号核销，对齐 smdcapp TicketNumSearchPopup）
+    if (_payId == '15') {
+      await _onCouponPay();
       return;
     }
   
@@ -501,6 +511,47 @@ class _SettlePageState extends State<SettlePage> {
     }
   }
   
+  /// 优惠券支付（对齐 smdcapp TicketNumSearchPopup）
+  ///
+  /// 弹窗内扫码/输入券号并完成券号核销（voucherVerify），
+  /// 核销成功后按券面额付款（面额大于待收时取待收）。
+  Future<void> _onCouponPay() async {
+    final String billdate = DateTime.now().toString().substring(0, 19);
+    final CouponPayResult? result = await CouponPayDialog.show(
+      context,
+      master: jsonEncode(_buildSaleMaster(billdate)),
+      projectlist: jsonEncode(_buildSaleDetail(billdate)),
+    );
+    if (result == null || !mounted) return;
+
+    // 券面额大于待收时只收待收金额（对齐 smdcapp：payamt < dsMoney 部分支付）
+    final double faceAmt = _toDouble(result.coupon['faceamt']);
+    final double payAmt = _rd2(faceAmt < _dsMoney ? faceAmt : _dsMoney);
+    _salePayWayList.add(<String, dynamic>{
+      'saleid': widget.saleid,
+      'payid': _payId,
+      'payname': _payName,
+      'payamt': payAmt,
+      'rate': 1.0,
+      'rramt': payAmt,
+      'changeamt': 0.0,
+      'faceamt': payAmt,
+      'voucher': result.code,
+      'vipid': _member?.vipid ?? '',
+      'vipno': _member?.vipno ?? '',
+      'vipname': _member?.vipname ?? '',
+    });
+    _hasMoney = AmountCalcUtils.add(_hasMoney, payAmt);
+    _dsMoney = AmountCalcUtils.sub(_dsMoney, payAmt);
+    if (_dsMoney <= 0.005) {
+      _dsMoney = 0;
+      setState(() {});
+      await _submitSaleFlow();
+    } else {
+      setState(() {});
+    }
+  }
+
   /// 会员挂账支付（对齐 smdcapp OverHangmemberPay + selectPay case "04"）
   Future<void> _onMemberOverPay() async {
     if (_member == null) {
@@ -814,6 +865,8 @@ class _SettlePageState extends State<SettlePage> {
       inputFormatters: <TextInputFormatter>[
         FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
       ],
+      // 输入大于应收时实时显示找零（对齐 smdcapp PricePopup tvChange）
+      changeBaseAmount: _dsMoney,
     );
     if (result == null || result.isEmpty) return null;
     return double.tryParse(result);
@@ -825,9 +878,14 @@ class _SettlePageState extends State<SettlePage> {
     try {
       // 获取服务器时间（对齐 smdcapp getTime）
       String billdate = '';
+      bool loginExpired = false;
       try {
         final Map<String, dynamic> timeResp =
             await requestForm(HttpApi.getTime, <String, dynamic>{});
+        // 对齐 smdcapp SettleActivity.toPay：retcode == -2 表示登录态失效，
+        // 继续结账会导致流水上传失败，必须先提示重新登录
+        final dynamic rc = timeResp['retcode'] ?? timeResp['RetCode'];
+        loginExpired = rc != null && int.tryParse(rc.toString()) == -2;
         final dynamic timeData = timeResp['data'] ?? timeResp['Data'];
         if (timeData is Map<String, dynamic>) {
           billdate = timeData['requesttime']?.toString() ?? '';
@@ -836,6 +894,19 @@ class _SettlePageState extends State<SettlePage> {
           billdate = timeResp['requesttime'].toString();
         }
       } catch (_) {}
+      if (loginExpired) {
+        if (!mounted) return;
+        setState(() => _submitting = false);
+        final bool relogin = await ConfirmDialog.show(
+          context,
+          content: '【登录信息失效】\n继续结账将导致上传流水失败，请重新登录',
+          confirmText: '重新登录',
+        );
+        if (relogin && mounted) {
+          NavigatorUtils.push(context, LoginRouter.loginPage, clearStack: true);
+        }
+        return;
+      }
       if (billdate.isEmpty) {
         billdate = DateTime.now().toString().substring(0, 19);
       }
@@ -1550,8 +1621,42 @@ class _SettlePageState extends State<SettlePage> {
     );
   }
 
+  /// 订单明细行（套餐主行后跟缩进明细，对齐 smdcapp OrderDetailsLayout/订单确认页）
+  List<Map<String, dynamic>> _orderDetailRows() {
+    final List<Map<String, dynamic>> mains = <Map<String, dynamic>>[];
+    final Map<String, List<Map<String, dynamic>>> children =
+        <String, List<Map<String, dynamic>>>{};
+    for (final Map<String, dynamic> d in widget.detailList) {
+      final String combid = d['combid']?.toString() ?? '';
+      final String onlyid = d['onlyid']?.toString() ?? '';
+      final bool isChild = (d['combproductid']?.toString() ?? '').isNotEmpty &&
+          combid.isNotEmpty &&
+          combid != onlyid;
+      if (isChild) {
+        children.putIfAbsent(combid, () => <Map<String, dynamic>>[]).add(d);
+      } else {
+        mains.add(d);
+      }
+    }
+    final List<Map<String, dynamic>> rows = <Map<String, dynamic>>[];
+    for (final Map<String, dynamic> m in mains) {
+      rows.add(m);
+      final List<Map<String, dynamic>>? kids =
+          children[m['onlyid']?.toString() ?? ''];
+      if (kids != null) rows.addAll(kids);
+    }
+    // 归组失败的明细兜底平铺，避免数据静默丢失
+    for (final MapEntry<String, List<Map<String, dynamic>>> e in children.entries) {
+      final bool grouped =
+          mains.any((Map<String, dynamic> m) => m['onlyid']?.toString() == e.key);
+      if (!grouped) rows.addAll(e.value);
+    }
+    return rows;
+  }
+
   /// 订单明细卡片（对齐 smdcapp OrderDetailsLayout）
   Widget _buildOrderDetailCard(bool isDark) {
+    final List<Map<String, dynamic>> rows = _orderDetailRows();
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -1564,49 +1669,68 @@ class _SettlePageState extends State<SettlePage> {
           _sectionTitle('订单明细', isDark),
           const SizedBox(height: 10),
           // 菜品列表（最多显示15条）
-          ...widget.detailList.take(15).map((Map<String, dynamic> item) {
+          ...rows.take(15).map((Map<String, dynamic> item) {
             final String name = item['productname']?.toString() ?? '';
             final double price = _toDouble(item['rrprice']);
             final double qty = _toDouble(item['qty']);
             final double rramt = _toDouble(item['rramt']);
+            // 套餐明细分行缩进展示（对齐 smdcapp dishes_item_set_meal_down）
+            final bool isChild =
+                (item['combproductid']?.toString() ?? '').isNotEmpty &&
+                    (item['combid']?.toString() ?? '') !=
+                        (item['onlyid']?.toString() ?? '');
             return Padding(
-              padding: const EdgeInsets.only(bottom: 6),
+              padding: EdgeInsets.only(bottom: 6, left: isChild ? 16 : 0),
               child: Row(
                 children: <Widget>[
                   Expanded(
                     child: Text(
                       name,
                       style: TextStyle(
-                        fontSize: 13,
-                        color: isDark ? Colors.white70 : const Color(0xFF4E5969),
+                        fontSize: isChild ? 12 : 13,
+                        color: isDark
+                            ? (isChild ? Colors.white60 : Colors.white70)
+                            : (isChild
+                                ? const Color(0xFF86909C)
+                                : const Color(0xFF4E5969)),
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  Text(
-                    '¥${_formatAmt(price)} ×${qty.toInt()}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isDark ? Colors.white54 : const Color(0xFF86909C),
+                  if (isChild)
+                    Text(
+                      '×${_formatAmt(qty)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? Colors.white54 : const Color(0xFF86909C),
+                      ),
+                    )
+                  else ...<Widget>[
+                    Text(
+                      '¥${_formatAmt(price)} ×${qty.toInt()}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? Colors.white54 : const Color(0xFF86909C),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    '¥${_formatAmt(rramt)}',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: isDark ? Colors.white : const Color(0xFF1D2129),
+                    const SizedBox(width: 12),
+                    Text(
+                      '¥${_formatAmt(rramt)}',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: isDark ? Colors.white : const Color(0xFF1D2129),
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             );
           }),
-          if (widget.detailList.length > 5)
+          if (rows.length > 5)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Text(
-                '...共${widget.detailList.length}项',
+                '...共${rows.length}项',
                 style: const TextStyle(fontSize: 12, color: Color(0xFF86909C)),
               ),
             ),
@@ -1942,9 +2066,42 @@ class _SettlePageState extends State<SettlePage> {
               ),
             ],
           ),
+          // 找零（对齐 smdcapp 结账找到零：收款大于应收时展示）
+          if (_totalChangeAmt > 0) ...<Widget>[
+            const SizedBox(height: 6),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: <Widget>[
+                Text(
+                  '找零',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: isDark ? Colors.white70 : const Color(0xFF86909C),
+                  ),
+                ),
+                Text(
+                  '¥${_formatAmt(_totalChangeAmt)}',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: _kBrandRed,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  /// 当前所有收款记录的找零合计
+  double get _totalChangeAmt {
+    double sum = 0;
+    for (final Map<String, dynamic> e in _salePayWayList) {
+      sum = AmountCalcUtils.add(sum, _toDouble(e['changeamt']));
+    }
+    return _rd2(sum);
   }
 
   /// 选项卡片：打印单据（对齐 smdcapp ll_dy）

@@ -231,22 +231,20 @@ void _handleForceLogout(String retmsg) {
   });
 }
 
-/// 登录失效统一处理：清除缓存 + 跳转登录页
-/// 注意：保留"记住账号密码"相关数据，不清除
 void _handleLoginExpired(String retmsg) {
   if (_isRedirectingToLogin) return;
   _isRedirectingToLogin = true;
 
   Toast.show(retmsg.isNotEmpty ? retmsg : '登录信息失效，请重新登录');
 
-  _clearCachePreservingRemember();
+  Future.delayed(const Duration(seconds: 2), () {
+    _clearCachePreservingRemember();
+    _navigateToLogin();
 
-  // 延迟重置标志，避免快速连续触发
-  Future.delayed(const Duration(seconds: 3), () {
-    _isRedirectingToLogin = false;
+    Future.delayed(const Duration(seconds: 3), () {
+      _isRedirectingToLogin = false;
+    });
   });
-
-  _navigateToLogin();
 }
 
 /// 清除缓存但保留"记住账号密码"相关数据
@@ -477,7 +475,9 @@ Future<Map<String, dynamic>> requestForm(
         _logApi(fullUrl, signedData, '接口成功 retcode=0');
         return jsonMap;
       }
-      if (showError && retmsg.isNotEmpty) {
+      if (retcode == -2 || retcode == -3) {
+        _handleLoginExpired(retmsg);
+      } else if (showError && retmsg.isNotEmpty) {
         Toast.show(retmsg);
       }
       _logApi(fullUrl, signedData, '接口失败 retcode=$retcode retmsg=$retmsg');
@@ -509,7 +509,11 @@ Future<Map<String, dynamic>> requestForm(
           final Map<String, dynamic> errMap = respData is String
               ? json.decode(respData) as Map<String, dynamic>
               : (respData as Map<String, dynamic>);
+          final dynamic retcode = errMap['retcode'];
           final String? retmsg = errMap['retmsg']?.toString();
+          if (retcode == -2 || retcode == -3) {
+            _handleLoginExpired(retmsg ?? '登录信息失效，请重新登录');
+          }
           if (retmsg != null && retmsg.isNotEmpty) {
             errorMsg = retmsg;
           }

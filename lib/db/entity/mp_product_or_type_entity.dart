@@ -1,3 +1,5 @@
+import 'entity_map_utils.dart';
+
 /// 促销商品或分类表（对齐 MPProductOrType.kt，含 @Ignore 字段）
 class MpProductOrTypeEntity {
   // ── 持久化字段 ──
@@ -29,11 +31,11 @@ class MpProductOrTypeEntity {
 
   factory MpProductOrTypeEntity.fromMap(Map<String, dynamic> m) =>
       MpProductOrTypeEntity(
-        id: m['id'] as int? ?? 0,
-        spid: m['spid'] as int? ?? 0,
-        sid: m['sid'] as int? ?? 0,
-        discount: (m['discount'] as num?)?.toDouble() ?? 0.0,
-        price: (m['price'] as num?)?.toDouble() ?? 0.0,
+        id: readMapInt(m['id']),
+        spid: readMapInt(m['spid']),
+        sid: readMapInt(m['sid']),
+        discount: readMapDouble(m['discount']),
+        price: readMapDouble(m['price']),
         billid: m['billid']?.toString() ?? '',
         ruleid: m['ruleid']?.toString() ?? '',
         productid: m['productid']?.toString() ?? '',

@@ -166,6 +166,7 @@ class TableDetail {
     this.serverid = '',
     this.servername = '',
     this.remark = '',
+    this.additionid = '',
   });
 
   factory TableDetail.fromJson(Map<String, dynamic> json) {
@@ -185,6 +186,7 @@ class TableDetail {
       serverid: json['serverid']?.toString() ?? '',
       servername: json['servername']?.toString() ?? '',
       remark: json['remark']?.toString() ?? '',
+      additionid: json['additionid']?.toString() ?? '',
     );
   }
 
@@ -228,6 +230,9 @@ class TableDetail {
   final String servername;
   final String remark;
 
+  /// 开台附加费id（对齐 smdcapp TableDetailBean.additionid）
+  final String additionid;
+
   /// 序列化为 JSON（对齐 smdcapp TableDetailBean 全字段，用于 PC 模式接口提交）
   Map<String, dynamic> toJson() => <String, dynamic>{
         'tablestatus': tablestatus,
@@ -245,6 +250,7 @@ class TableDetail {
         'serverid': serverid,
         'servername': servername,
         'remark': remark,
+        'additionid': additionid,
       };
 }
 
@@ -258,6 +264,7 @@ class TableInfo {
     this.areaname = '',
     this.person = 0,
     this.unicount = 0,
+    this.tabletypeid = '',
     this.tmp,
     this.selected = false,
     this.rawJson,
@@ -273,6 +280,7 @@ class TableInfo {
       areaname: json['areaname']?.toString() ?? '',
       person: _toInt(json['person']),
       unicount: _toInt(json['unicount']),
+      tabletypeid: json['tabletypeid']?.toString() ?? '',
       tmp: tmpJson is Map
           ? TableDetail.fromJson(tmpJson.cast<String, dynamic>())
           : null,
@@ -300,6 +308,9 @@ class TableInfo {
 
   /// 并台数量
   final int unicount;
+
+  /// 桌台类型id（开台附加费默认选中项，对齐 smdcapp TableInfoBean.tabletypeid）
+  final String tabletypeid;
 
   /// 开台详情（空闲时为 null）
   final TableDetail? tmp;
@@ -422,6 +433,7 @@ class TableInfo {
       'areaname': areaname,
       'person': person,
       'unicount': unicount,
+      'tabletypeid': tabletypeid,
       'tablestatus': '${tmp?.tablestatus ?? 0}',
       'tmp': tmp?.toJson(),
     };

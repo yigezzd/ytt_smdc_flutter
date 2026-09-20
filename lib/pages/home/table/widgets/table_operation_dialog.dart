@@ -240,6 +240,8 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
       remark: widget.table.tmp?.remark ?? '',
       serverId: widget.table.tmp?.serverid ?? '',
       serverName: widget.table.tmp?.servername ?? '',
+      // 附加费（对齐 smdcapp：tmp.additionid 关联桌台类型名称，只读展示）
+      additionId: widget.table.tmp?.additionid ?? '',
       tableJson: widget.table.toJson(),
     );
     if (success && mounted) {

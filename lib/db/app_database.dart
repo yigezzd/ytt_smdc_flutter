@@ -92,9 +92,10 @@ class AppDatabase {
   Future<int> insert(String table, Map<String, dynamic> values) async {
     final Database db = await database;
     final List<String> columns = await _tableColumns(db, table);
+    final Set<String> numericColumns = await _numericColumns(db, table);
     final Map<String, dynamic> row = <String, dynamic>{};
     for (final String col in columns) {
-      row[col] = _normalize(values[col]);
+      row[col] = _normalize(values[col], numeric: numericColumns.contains(col));
     }
     return db.insert(table, row);
   }
@@ -106,11 +107,12 @@ class AppDatabase {
   ) async {
     final Database db = await database;
     final List<String> columns = await _tableColumns(db, table);
+    final Set<String> numericColumns = await _numericColumns(db, table);
     final Batch batch = db.batch();
     for (final Map<String, dynamic> map in values) {
       final Map<String, dynamic> row = <String, dynamic>{};
       for (final String col in columns) {
-        row[col] = _normalize(map[col]);
+        row[col] = _normalize(map[col], numeric: numericColumns.contains(col));
       }
       batch.insert(table, row);
     }
@@ -124,6 +126,7 @@ class AppDatabase {
       await db.delete(table);
     }
     _columnCache.clear();
+    _numericColumnCache.clear();
   }
 
   /// 清空单表（基础表全量重写前调用）
@@ -143,6 +146,9 @@ class AppDatabase {
   /// 表列缓存（对齐 SqlActuatorUtils.getTableColumn）
   final Map<String, List<String>> _columnCache = <String, List<String>>{};
 
+  /// 表数值列缓存（INTEGER/REAL 等），用于空值规整
+  final Map<String, Set<String>> _numericColumnCache = <String, Set<String>>{};
+
   Future<List<String>> _tableColumns(Database db, String table) async {
     final List<String>? cached = _columnCache[table];
     if (cached != null) {
@@ -151,13 +157,40 @@ class AppDatabase {
     final List<Map<String, dynamic>> rows = await db.rawQuery('PRAGMA table_info($table)');
     final List<String> columns = rows.map((Map<String, dynamic> r) => r['name'] as String).toList();
     _columnCache[table] = columns;
+    _numericColumnCache[table] = rows
+        .where((Map<String, dynamic> r) => _isNumericType(r['type']?.toString() ?? ''))
+        .map((Map<String, dynamic> r) => r['name'] as String)
+        .toSet();
     return columns;
   }
 
+  /// 数值列判断（PRAGMA 声明的列类型）
+  static bool _isNumericType(String type) {
+    final String t = type.toUpperCase();
+    return t.contains('INT') ||
+        t.contains('REAL') ||
+        t.contains('FLOA') ||
+        t.contains('DOUB') ||
+        t.contains('NUM') ||
+        t.contains('DEC');
+  }
+
+  Future<Set<String>> _numericColumns(Database db, String table) async {
+    if (!_numericColumnCache.containsKey(table)) {
+      await _tableColumns(db, table);
+    }
+    return _numericColumnCache[table] ?? const <String>{};
+  }
+
   /// 值规整（对齐 SqlActuatorUtils.getObjectStr：null/空串 → ''、数字原样、其余转字符串）
-  dynamic _normalize(dynamic v) {
-    if (v == null) {
-      return '';
+  ///
+  /// [numeric] 为 true 时（列类型为 INTEGER/REAL 等），空值写 NULL：
+  /// 云端 tabledown 对空字段下发 null，若统一写成空串，SQLite 对数值列
+  /// 不做转换会按 TEXT 存储，实体 fromMap 的 `as int?` / `as num?` 强转
+  /// 会抛类型异常（曾导致促销表整表读取失败、促销不生效）。
+  dynamic _normalize(dynamic v, {bool numeric = false}) {
+    if (v == null || (v is String && v.isEmpty)) {
+      return numeric ? null : '';
     }
     if (v is String) {
       return v;

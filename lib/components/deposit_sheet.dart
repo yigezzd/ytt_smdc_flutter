@@ -243,8 +243,11 @@ class _DepositSheetState extends State<DepositSheet> {
       if (!mounted) return;
       Toast.show('交押金成功');
       Navigator.pop(context, true);
-    } catch (_) {
-      if (mounted) Toast.show('交押金失败');
+    } catch (e) {
+      // 透出服务端返回的失败原因，便于定位（此前统一显示"交押金失败"无法排查）
+      if (mounted) {
+        Toast.show('交押金失败：${e.toString().replaceFirst('Exception: ', '')}');
+      }
     } finally {
       if (mounted) setState(() => _submitting = false);
     }

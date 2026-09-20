@@ -97,8 +97,9 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
       SpUtil.putString('WeightTwoConfirm', newValue);
       setState(() => _reweigh = v);
       Toast.show('保存成功');
-    } catch (_) {
-      Toast.show('保存失败');
+    } catch (e) {
+      // 透出服务端返回的失败原因，便于定位（此前统一显示"保存失败"无法排查）
+      Toast.show('保存失败：${_apiErrorMsg(e)}');
     }
   }
 
@@ -164,6 +165,9 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
       showError: false,
     );
   }
+
+  /// 提取接口异常中的服务端提示（_ApiException.toString() 已是 retmsg）
+  String _apiErrorMsg(Object e) => e.toString().replaceFirst('Exception: ', '');
 
   // ==================== UI ====================
 
