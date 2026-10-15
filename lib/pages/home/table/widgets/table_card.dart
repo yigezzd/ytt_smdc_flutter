@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_deer/pages/home/table/table_models.dart';
 import 'package:flutter_deer/res/colors.dart';
+import 'package:flutter_deer/util/params_sp_utils.dart';
 import 'package:flutter_deer/util/theme_utils.dart';
 
 /// 桌台卡片
@@ -100,6 +101,8 @@ class _TableCardState extends State<TableCard> {
     final String? amountText = table.amountText;
     final (int, int, bool)? timeParts = table.timeParts;
     final Color hintColor = isDark ? Colours.dark_text_gray : const Color(0xFF86909C);
+    // 二次称重标识（仅二次称重开启时展示，对齐 smdcapp SpUtils.isReweigh）
+    final String _weighTag = ParamsSpUtils.isReweigh() ? (table.tmp?.weighText ?? '') : '';
 
     // 卡片背景：非空闲带状态色柔和渐变，空闲纯净白
     final Color cardBg = isDark ? Colours.dark_material_bg : Colors.white;
@@ -191,11 +194,15 @@ class _TableCardState extends State<TableCard> {
                     ),
                     const SizedBox(height: 1),
                     // 并台信息（对齐 smdcapp iv_other_table: 红底白字标签）
+                    // + 二次称重标识（对齐 smdcapp TableInfoAdapter：
+                    //   isReweigh() && tmp.containweight 1=未称 2=已称）
                     SizedBox(
                       height: 16,
-                      child: table.mergeNote == null
-                          ? null
-                          : Container(
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          if (table.mergeNote != null)
+                            Container(
                               padding: const EdgeInsets.symmetric(horizontal: 4),
                               decoration: BoxDecoration(
                                 color: const Color(0xFFE13426),
@@ -211,6 +218,27 @@ class _TableCardState extends State<TableCard> {
                                     color: Colors.white),
                               ),
                             ),
+                          if (_weighTag.isNotEmpty) ...<Widget>[
+                            if (table.mergeNote != null) const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              decoration: BoxDecoration(
+                                color: _weighTag == '未称'
+                                    ? const Color(0xFFE13426)
+                                    : const Color(0xFF00C15A),
+                                borderRadius: BorderRadius.circular(3),
+                              ),
+                              child: Text(
+                                _weighTag,
+                                style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
                     ),
                     const Spacer(),
                     // 人数 / 开台时长（分两行展示，窄卡片下更易读）

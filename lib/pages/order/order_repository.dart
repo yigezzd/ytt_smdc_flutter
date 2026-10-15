@@ -84,6 +84,7 @@ class DishProduct {
     this.datetype = 0,
     this.begindate = '',
     this.enddate = '',
+    this.labelflag = 0,
   });
 
   factory DishProduct.fromJson(Map<String, dynamic> json) {
@@ -127,6 +128,7 @@ class DishProduct {
       datetype: _toInt(json['datetype']),
       begindate: json['begindate']?.toString() ?? '',
       enddate: json['enddate']?.toString() ?? '',
+      labelflag: _toInt(json['labelflag']),
     );
   }
 
@@ -184,6 +186,9 @@ class DishProduct {
 
   /// 厨打标记（对齐 smdcapp printflag）：1=需要厨打 0=不厨打
   final int printflag;
+
+  /// 打印标签/杯贴标记（对齐 smdcapp labelflag）：1=打杯贴 0=不打
+  final int labelflag;
 
   /// 积分标识（对齐 smdcapp pointflag）：1=计积分 0=不计
   final int pointflag;
@@ -317,6 +322,9 @@ class DishCook {
     this.mandatoryflag = 0,
     this.mandatoryqty = 0,
     this.defrecommend = 0,
+    this.code = '',
+    this.cupstickercode = '',
+    this.sellclearflag = 0,
     this.isCheck = false,
     this.selectCookNum = 0,
   });
@@ -332,6 +340,9 @@ class DishCook {
       mandatoryflag: _toInt(json['mandatoryflag']),
       mandatoryqty: _toDouble(json['mandatoryqty']),
       defrecommend: _toInt(json['defrecommend']),
+      code: (json['cookcode'] ?? json['code'])?.toString() ?? '',
+      cupstickercode: json['cupstickercode']?.toString() ?? '',
+      sellclearflag: _toInt(json['sellclearflag']),
     );
   }
 
@@ -356,6 +367,16 @@ class DishCook {
 
   /// 1=默认推荐
   final int defrecommend;
+
+  /// 做法编码（对齐 smdcapp ProductCook.cookcode，下单时上传 cooklist）
+  final String code;
+
+  /// 杯贴码（对齐 smdcapp ProductCook.cupstickercode，杯贴打印用）
+  final String cupstickercode;
+
+  /// 是否沽清/售罄（对齐 smdcapp ProductCook.sellclearflag：
+  /// 由做法沽清列表按 cookcode 命中标记，非接口返回字段）
+  int sellclearflag;
 
   /// 是否选中（UI状态）
   bool isCheck;
@@ -501,6 +522,8 @@ class ComboItem {
     this.specname = '',
     this.specid = '',
     this.combsetproductid = '',
+    this.printflag = 0,
+    this.labelflag = 0,
   });
 
   factory ComboItem.fromJson(Map<String, dynamic> json) {
@@ -523,6 +546,8 @@ class ComboItem {
       specname: json['specname']?.toString() ?? '',
       specid: json['specid']?.toString() ?? '',
       combsetproductid: json['combsetproductid']?.toString() ?? '',
+      printflag: _toInt(json['printflag']),
+      labelflag: _toInt(json['labelflag']),
     );
   }
 
@@ -571,6 +596,17 @@ class ComboItem {
 
   /// 套餐明细配置ID（对齐 smdcapp ProductCombSet.combsetproductid）
   final String combsetproductid;
+
+  /// 厨打标记（对齐 smdcapp ProductCombSet.printflag）
+  ///
+  /// 套餐接口不返回该字段，需按商品档案（本地 t_bi_product）回填，
+  /// 见 [OrderRepository._fillComboItemFlags]（对齐 smdcapp ProductHelper.getCombInfo）
+  int printflag;
+
+  /// 打印标签/杯贴标记（对齐 smdcapp ProductCombSet.labelflag）
+  ///
+  /// 同上，来源为商品档案而非套餐接口（否则恒为 0，杯贴不打印）
+  int labelflag;
 
   // ===== UI 状态 =====
 
@@ -1149,15 +1185,22 @@ class OrderRepository {
       'cookstopflag': '0',
     };
 
+    // 做法沽清列表与规格做法并行拉取（对齐 smdcapp SpecCookValidator：弹窗前先取做法沽清缓存）
+    final Future<void> cookWarnFuture =
+        _cookWarnCodes == null ? refreshCookWarnCodes() : Future<void>.value();
+
     final Map<String, dynamic> resp = await requestForm(
       HttpApi.getProductCookSpec,
       params,
       showError: false,
     );
+    await cookWarnFuture;
 
     final dynamic data = resp['data'] ?? resp['Data'];
     if (data is Map) {
-      return DishSpecData.fromJson(data.cast<String, dynamic>());
+      final DishSpecData specData = DishSpecData.fromJson(data.cast<String, dynamic>());
+      markCookWarn(specData);
+      return specData;
     }
     return DishSpecData();
   }
@@ -1166,6 +1209,11 @@ class OrderRepository {
   ///
   /// 接口固定走云服务：POST /YttSvr/app/bi/comb/getInfo
   /// 参数：productid + sellclearflag=1
+  ///
+  /// 解析后按商品档案回填明细 printflag/labelflag（对齐 smdcapp
+  /// ProductHelper.getCombInfo/getCombInfo2：productDao.queryByProductIdComb →
+  /// i.printflag = p.printflag; i.labelflag = p.labelflag），
+  /// 套餐接口不返回这两个字段，不回填则恒为 0，套餐下单不出厨打/杯贴。
   static Future<ComboMealData?> fetchProductComb(String productid) async {
     final Map<String, dynamic> params = <String, dynamic>{
       'productid': productid,
@@ -1180,9 +1228,57 @@ class OrderRepository {
 
     final dynamic data = resp['data'] ?? resp['Data'];
     if (data is Map) {
-      return ComboMealData.fromJson(data.cast<String, dynamic>());
+      final ComboMealData combo =
+          ComboMealData.fromJson(data.cast<String, dynamic>());
+      await _fillComboItemFlags(combo);
+      return combo;
     }
     return null;
+  }
+
+  /// 回填套餐明细的厨打/杯贴标记（对齐 smdcapp ProductHelper.getCombInfo）
+  ///
+  /// 明细字段取自商品档案（本地 t_bi_product，登录/数据交换时同步），
+  /// 商品档案缺失的明细保留接口原值（对齐 smdcapp 查不到商品时不覆盖）。
+  static Future<void> _fillComboItemFlags(ComboMealData combo) async {
+    final Set<String> productids = <String>{};
+    for (final ComboGroup group in combo.prolist) {
+      for (final ComboItem item in group.list) {
+        if (item.productid.isNotEmpty) {
+          productids.add(item.productid);
+        }
+      }
+    }
+    if (productids.isEmpty) {
+      return;
+    }
+
+    final Map<String, Map<String, dynamic>> productMap =
+        <String, Map<String, dynamic>>{};
+    try {
+      final List<Map<String, dynamic>> rows =
+          await TableDownloadManager.readTableData('t_bi_product');
+      for (final Map<String, dynamic> row in rows) {
+        final String pid = row['productid']?.toString() ?? '';
+        if (productids.contains(pid)) {
+          productMap[pid] = row;
+        }
+      }
+    } catch (_) {}
+    if (productMap.isEmpty) {
+      return;
+    }
+
+    for (final ComboGroup group in combo.prolist) {
+      for (final ComboItem item in group.list) {
+        final Map<String, dynamic>? p = productMap[item.productid];
+        if (p == null) {
+          continue;
+        }
+        item.printflag = _toInt(p['printflag']);
+        item.labelflag = _toInt(p['labelflag']);
+      }
+    }
   }
 
   /// 获取服务员列表（对齐 smdcapp TableApi.getUserList /YttSvr/app/user/getList）
@@ -1237,6 +1333,8 @@ class OrderRepository {
     final List<Map<String, dynamic>> groups = await _tabledown('t_cook_group');
     final List<Map<String, dynamic>> infos = await _tabledown('t_cook_info');
     if (groups.isEmpty || infos.isEmpty) return <DishCookGroup>[];
+    // 全局做法同受做法沽清约束（对齐 smdcapp setCookWarn 同时作用于 publicCook）
+    if (_cookWarnCodes == null) await refreshCookWarnCodes();
 
     // 当前总部 id（全局做法为总部级：sid == spid，对齐 smdcapp queryCookAll(spid, spid)）
     String spid = '';
@@ -1290,10 +1388,13 @@ class OrderRepository {
                   price: _toDouble(i['price']),
                   ptype: _toInt(i['ptype']),
                   editqtyflag: editqtyflag,
+                  code: (i['code'] ?? i['cookcode'])?.toString() ?? '',
+                  cupstickercode: i['cupstickercode']?.toString() ?? '',
                 ))
             .toList(),
       ));
     }
+    markCookWarnGroups(result);
     return result;
   }
 
@@ -1602,6 +1703,81 @@ class OrderRepository {
     return <Map<String, dynamic>>[];
   }
 
+  /// 做法沽清编码缓存（对齐 smdcapp CartGoodsModel.cookWarnList）
+  static Set<String>? _cookWarnCodes;
+
+  /// 获取做法沽清列表并缓存编码集合（对齐 smdcapp DishesModel.getCookWarnList）
+  ///
+  /// 云服务：POST /YttSvr/app/warn/findCookWarnList（is_page=2、page=1、pagesize=5000）
+  /// 主设备：POST /api/cookwarn/GetCookWarnList（筛选条件放 warnfind JSON）
+  /// 失败时保留旧缓存（对齐 smdcapp：接口异常不清空已有沽清数据）。
+  static Future<void> refreshCookWarnCodes() async {
+    try {
+      final Map<String, dynamic> resp;
+      if (ConnectionManager.pcAlive) {
+        final Map<String, dynamic> warnfind = <String, dynamic>{
+          'productid': '',
+          'specid': '',
+          'page': '1',
+          'pagesize': '5000',
+          'status': '1',
+          'createtime': '',
+          'updatetime': '',
+          'opertime': '',
+          'spid': int.tryParse(UserHelper.getSpidStr()) ?? 0,
+          'sid': int.tryParse(UserHelper.getSidStr()) ?? 0,
+        };
+        resp = await requestForm(
+          HttpApi.pcGetCookWarnList,
+          <String, dynamic>{'warnfind': jsonEncode(warnfind)},
+          masterDevice: true,
+          showError: false,
+        );
+      } else {
+        resp = await requestForm(
+          HttpApi.findCookWarnList,
+          <String, dynamic>{'is_page': '2', 'page': '1', 'pagesize': '5000'},
+          showError: false,
+        );
+      }
+      final dynamic data = resp['data'] ?? resp['Data'];
+      final List<dynamic> list;
+      if (data is Map<String, dynamic> && data['list'] is List) {
+        list = data['list'] as List<dynamic>;
+      } else if (data is List) {
+        list = data;
+      } else {
+        list = <dynamic>[];
+      }
+      _cookWarnCodes = list
+          .whereType<Map<dynamic, dynamic>>()
+          .map((Map<dynamic, dynamic> e) => e['cookcode']?.toString() ?? '')
+          .where((String code) => code.isNotEmpty)
+          .toSet();
+    } catch (_) {
+      // 失败保留旧缓存，下次弹窗打开时重试
+    }
+  }
+
+  /// 应用做法沽清标记（对齐 smdcapp CartGoodsModel.setCookWarn）
+  ///
+  /// 私有做法与全局做法均按 cookcode 命中沽清列表记为售罄（sellclearflag=1）。
+  static void markCookWarn(DishSpecData data) {
+    markCookWarnGroups(data.cookdata);
+    markCookWarnGroups(data.publiccook);
+  }
+
+  /// 按做法沽清编码集合标记做法分组（对齐 smdcapp setCookWarn 的 updateCookList）
+  static void markCookWarnGroups(List<DishCookGroup> groups) {
+    final Set<String>? codes = _cookWarnCodes;
+    if (codes == null) return;
+    for (final DishCookGroup g in groups) {
+      for (final DishCook c in g.cooklist) {
+        c.sellclearflag = codes.contains(c.code) ? 1 : 0;
+      }
+    }
+  }
+
   /// 从本地缓存获取必点菜列表（对齐 smdcapp ProductHelper.getMustProduct +
   /// MustMasterDao.queryAreaZC/queryAreaZCALL）
   ///
@@ -1720,6 +1896,8 @@ class OrderRepository {
             'specid': specid,
             'specname': mp['specname']?.toString() ?? '',
             'combflag': _toInt(p['combflag']),
+            // 必点菜配置数量（对齐 smdcapp MustProduct.mustqty → MustBean.mustproductlist.mustqty）
+            'mustqty': _toDouble(mp['mustqty']),
           });
         }
         result.add(<String, dynamic>{

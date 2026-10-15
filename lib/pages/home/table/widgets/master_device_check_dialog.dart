@@ -3,11 +3,7 @@ import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 
-/// 无法连接主设备提示弹窗（对齐 smdcapp 桌台页的主设备连接校验弹窗）
-///
-/// 登录成功进入桌台页后，若探测主设备（直连PC）不可达则弹出本弹窗：
-/// - [连接云服务]：切换为云服务模式（serverType=2），关闭弹窗继续正常使用
-/// - [重连主设备]：重新调用探活接口（GetHostSyncTime），成功则关闭弹窗，失败则保留弹窗
+/// 无法连接主设备提示弹窗。
 class MasterDeviceCheckDialog extends StatefulWidget {
   const MasterDeviceCheckDialog({super.key});
 
@@ -65,13 +61,14 @@ class _MasterDeviceCheckDialogState extends State<MasterDeviceCheckDialog> {
             ),
           ),
         ),
-        GestureDetector(
-          onTap: _reconnecting ? null : () => Navigator.of(context).pop(),
-          child: const Padding(
-            padding: EdgeInsets.all(4),
-            child: Icon(Icons.close, size: 18, color: Color(0xFF999999)),
+        if (!ConnectionManager.isMasterOnly)
+          GestureDetector(
+            onTap: _reconnecting ? null : () => Navigator.of(context).pop(),
+            child: const Padding(
+              padding: EdgeInsets.all(4),
+              child: Icon(Icons.close, size: 18, color: Color(0xFF999999)),
+            ),
           ),
-        ),
       ],
     );
   }
@@ -150,18 +147,21 @@ class _MasterDeviceCheckDialogState extends State<MasterDeviceCheckDialog> {
     );
   }
 
-  /// 底部操作按钮：[连接云服务]（白底灰边） + [重连主设备]（红色填充，主操作）
   Widget _buildActions() {
+    final bool masterOnly = ConnectionManager.isMasterOnly;
     return Row(
       children: <Widget>[
-        // 连接云服务：切换为云服务模式
         Expanded(
           child: GestureDetector(
             onTap: _reconnecting
                 ? null
                 : () {
-                    ConnectionManager.setServerType('2');
-                    Navigator.of(context).pop();
+                    if (masterOnly) {
+                      Navigator.of(context).pop(false);
+                      return;
+                    }
+                    ConnectionManager.pcAlive = false;
+                    Navigator.of(context).pop(true);
                     Toast.show('已切换为云服务模式');
                   },
             child: Container(
@@ -171,10 +171,10 @@ class _MasterDeviceCheckDialogState extends State<MasterDeviceCheckDialog> {
                 borderRadius: BorderRadius.circular(21),
                 border: Border.all(color: const Color(0xFFDDDDDD)),
               ),
-              child: const Center(
+              child: Center(
                 child: Text(
-                  '连接云服务',
-                  style: TextStyle(fontSize: 14, color: Color(0xFF333333)),
+                  masterOnly ? '重新登录' : '连接云服务',
+                  style: const TextStyle(fontSize: 14, color: Color(0xFF333333)),
                 ),
               ),
             ),
@@ -228,7 +228,7 @@ class _MasterDeviceCheckDialogState extends State<MasterDeviceCheckDialog> {
       return;
     }
     if (alive) {
-      Navigator.of(context).pop();
+      Navigator.of(context).pop(true);
       Toast.show('已连接主设备');
     } else {
       setState(() => _reconnecting = false);

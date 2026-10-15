@@ -167,6 +167,7 @@ class TableDetail {
     this.servername = '',
     this.remark = '',
     this.additionid = '',
+    this.containweight = 0,
   });
 
   factory TableDetail.fromJson(Map<String, dynamic> json) {
@@ -187,6 +188,7 @@ class TableDetail {
       servername: json['servername']?.toString() ?? '',
       remark: json['remark']?.toString() ?? '',
       additionid: json['additionid']?.toString() ?? '',
+      containweight: _toInt(json['containweight']),
     );
   }
 
@@ -233,6 +235,16 @@ class TableDetail {
   /// 开台附加费id（对齐 smdcapp TableDetailBean.additionid）
   final String additionid;
 
+  /// 二次称重标识：0不显示 1未称重 2已称重（对齐 smdcapp TableDetailBean.containweight）
+  final int containweight;
+
+  /// 二次称重标签：0=不显示（对齐 smdcapp TableInfoAdapter 展示条件）
+  String get weighText {
+    if (containweight == 1) return '未称';
+    if (containweight == 2) return '已称';
+    return '';
+  }
+
   /// 序列化为 JSON（对齐 smdcapp TableDetailBean 全字段，用于 PC 模式接口提交）
   Map<String, dynamic> toJson() => <String, dynamic>{
         'tablestatus': tablestatus,
@@ -251,6 +263,7 @@ class TableDetail {
         'servername': servername,
         'remark': remark,
         'additionid': additionid,
+        'containweight': containweight,
       };
 }
 

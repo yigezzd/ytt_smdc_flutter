@@ -1,4 +1,5 @@
 import 'package:intl/intl.dart';
+import 'package:sqflite/sqflite.dart';
 
 import 'app_database.dart';
 
@@ -22,5 +23,18 @@ class DepositDao {
     row.putIfAbsent('createtime', () => now);
     row.putIfAbsent('updatetime', () => now);
     await _db.insert('t_deposit_flow', row);
+  }
+
+  /// 按 onlyid 更新押金流水（对齐 smdcapp SaleDepositService.update，押金退回后本地同步）
+  Future<void> updateDeposit(Map<String, dynamic> data) async {
+    final Map<String, dynamic> row = Map<String, dynamic>.from(data);
+    row.putIfAbsent(
+        'updatetime', () => DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now()));
+    final Object? onlyid = row.remove('onlyid');
+    if (onlyid == null || onlyid.toString().isEmpty) {
+      return;
+    }
+    final Database db = await _db.database;
+    await db.update('t_deposit_flow', row, where: 'onlyid = ?', whereArgs: <Object>[onlyid.toString()]);
   }
 }

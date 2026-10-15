@@ -4,34 +4,28 @@ import 'package:flutter/material.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
-import 'package:sp_util/sp_util.dart';
 
 /// 品牌红
 const Color _kBrandRed = Color(0xFFE13426);
 
 /// 桌台选择弹窗（对齐 smdcapp TableUnitBottomDialog/TableChangeBottomDialog 的桌台网格）
 ///
-/// 可复用于转台、并台、转菜等需要选择目标桌台的场景。
+/// 可复用于转台、并台等需要选择目标桌台的场景。
 class TableSelectSheet extends StatelessWidget {
   const TableSelectSheet({
     super.key,
     required this.tables,
     this.title = '选择桌台',
-    this.showZcPrintSwitch = false,
   });
 
   final List<Map<String, dynamic>> tables;
   final String title;
-
-  /// 是否显示"打印转菜单"开关（对齐 smdcapp ChangeDishesPopup.imgdy）
-  final bool showZcPrintSwitch;
 
   /// 显示桌台选择弹窗（单选），返回选中的桌台 JSON 或 null
   static Future<Map<String, dynamic>?> show(
     BuildContext context, {
     required List<Map<String, dynamic>> tables,
     String title = '选择桌台',
-    bool showZcPrintSwitch = false,
   }) {
     return showModalBottomSheet<Map<String, dynamic>>(
       context: context,
@@ -40,7 +34,6 @@ class TableSelectSheet extends StatelessWidget {
       builder: (_) => TableSelectSheet(
         tables: tables,
         title: title,
-        showZcPrintSwitch: showZcPrintSwitch,
       ),
     );
   }
@@ -117,61 +110,11 @@ class TableSelectSheet extends StatelessWidget {
               },
             ),
           ),
-          if (showZcPrintSwitch) const _ZcPrintSwitchRow(),
         ],
       ),
     );
   }
 }
-
-/// 转菜打印开关（对齐 smdcapp ChangeDishesPopup.imgdy，持久化到 DISHES_ZC）
-class _ZcPrintSwitchRow extends StatefulWidget {
-  const _ZcPrintSwitchRow();
-
-  @override
-  State<_ZcPrintSwitchRow> createState() => _ZcPrintSwitchRowState();
-}
-
-class _ZcPrintSwitchRowState extends State<_ZcPrintSwitchRow> {
-  late bool _on;
-
-  @override
-  void initState() {
-    super.initState();
-    _on = SpUtil.getBool(_kZcPrintKey) ?? false;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
-        child: Row(
-          children: <Widget>[
-            const Icon(Icons.print_outlined, size: 18, color: Color(0xFF86909C)),
-            const SizedBox(width: 6),
-            const Expanded(
-              child: Text('打印转菜单',
-                  style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
-            ),
-            Switch(
-              value: _on,
-              activeColor: const Color(0xFFE13426),
-              onChanged: (bool v) {
-                setState(() => _on = v);
-                SpUtil.putBool(_kZcPrintKey, v);
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 转菜打印开关的存储键（对齐 smdcapp Constant.DISHES_ZC）
-const String _kZcPrintKey = 'DISHES_ZC';
 
 /// 并台/拆台多选底部抽屉（对齐 smdcapp TableUnitBottomDialog）
 ///

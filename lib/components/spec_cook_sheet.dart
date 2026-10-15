@@ -1,5 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_deer/pages/order/order_models.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 
@@ -25,13 +26,21 @@ class CookModifyResult {
   const CookModifyResult({
     required this.cookText,
     required this.cookExtra,
+    this.unitExtra = 0,
+    this.cooks = const <SelectedCook>[],
   });
 
   /// 做法描述文本（不含规格名）
   final String cookText;
 
-  /// 做法整份加价（ptype=1）
+  /// 做法整份加价（ptype=1，不乘商品数量）
   final double cookExtra;
+
+  /// 做法数量加价合计（ptype=2，单份口径，做法数量已乘）
+  final double unitExtra;
+
+  /// 已选做法明细（下单时转 cooklist 上传）
+  final List<SelectedCook> cooks;
 }
 
 /// 规格做法提交数据
@@ -45,6 +54,7 @@ class SpecCookSubmit {
     required this.cookText,
     required this.unitPrice,
     required this.wholeExtra,
+    this.cooks = const <SelectedCook>[],
   });
 
   final int quantity;
@@ -52,6 +62,9 @@ class SpecCookSubmit {
   final String cookText;
   final double unitPrice;
   final double wholeExtra;
+
+  /// 已选做法明细（下单时转 cooklist 上传）
+  final List<SelectedCook> cooks;
 
   String get specText {
     if (specName.isEmpty) return cookText;
@@ -78,6 +91,8 @@ class SpecCookSheet extends StatefulWidget {
     this.dishName = '',
     this.unitPrice = 0,
     this.currentSpecText = '',
+    this.currentCooks = const <SelectedCook>[],
+    this.quantity = 1,
   });
 
   /// 弹窗模式
@@ -108,6 +123,12 @@ class SpecCookSheet extends StatefulWidget {
   /// 当前规格做法描述（修改模式，用于回显已选做法）
   final String currentSpecText;
 
+  /// 当前已选做法明细（修改模式，优先按 code 精确回显）
+  final List<SelectedCook> currentCooks;
+
+  /// 商品计价数量（修改模式，计算"做法加价"数量加价部分）
+  final double quantity;
+
   /// 加购模式显示弹窗
   static Future<void> show(
     BuildContext context, {
@@ -137,6 +158,8 @@ class SpecCookSheet extends StatefulWidget {
     required double unitPrice,
     required DishSpecData specData,
     String currentSpecText = '',
+    List<SelectedCook> currentCooks = const <SelectedCook>[],
+    double quantity = 1,
   }) {
     return showModalBottomSheet<CookModifyResult>(
       context: context,
@@ -148,6 +171,8 @@ class SpecCookSheet extends StatefulWidget {
         dishName: dishName,
         unitPrice: unitPrice,
         currentSpecText: currentSpecText,
+        currentCooks: currentCooks,
+        quantity: quantity,
       ),
     );
   }
@@ -220,10 +245,10 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
         }
       }
     }
-    // 做法默认选中推荐项
+    // 做法默认选中推荐项（对齐 smdcapp bindDefCheck：默认推荐且未售罄）
     for (final DishCookGroup group in widget.specData.cookdata) {
       for (final DishCook cook in group.cooklist) {
-        if (cook.defrecommend == 1) {
+        if (cook.defrecommend == 1 && cook.sellclearflag != 1) {
           cook.isCheck = true;
           cook.selectCookNum = 1;
         }
@@ -231,8 +256,37 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
     }
   }
 
-  /// 修改模式：回显已选做法（根据当前 specText 中的做法名匹配）
+  /// 修改模式：回显已选做法
+  ///
+  /// 优先按 [SpecCookSheet.currentCooks] 的 code 精确匹配（避免做法名互为子串时误选），
+  /// 无匹配时回退按当前文本中的做法名匹配
   void _preselectCooks() {
+    bool matched = false;
+    if (widget.currentCooks.isNotEmpty) {
+      final Map<String, int> qtyByCode = <String, int>{};
+      for (final SelectedCook c in widget.currentCooks) {
+        if (c.code.isNotEmpty) qtyByCode[c.code] = c.qty;
+      }
+      if (qtyByCode.isNotEmpty) {
+        void markByCode(List<DishCookGroup> groups) {
+          for (final DishCookGroup g in groups) {
+            for (final DishCook c in g.cooklist) {
+              if (qtyByCode.containsKey(c.code)) {
+                c.isCheck = true;
+                c.selectCookNum =
+                    c.editqtyflag == 1 ? (qtyByCode[c.code] ?? 1) : 1;
+                matched = true;
+              }
+            }
+          }
+        }
+
+        markByCode(widget.specData.cookdata);
+        markByCode(widget.specData.publiccook);
+      }
+    }
+    if (matched) return;
+
     final String cur = widget.currentSpecText;
     if (cur.isEmpty) return;
     void mark(List<DishCookGroup> groups) {
@@ -245,6 +299,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
         }
       }
     }
+
     mark(widget.specData.cookdata);
     mark(widget.specData.publiccook);
   }
@@ -284,21 +339,26 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
     return total;
   }
 
-  /// 数量加价合计（ptype=2，需乘商品数量，加购模式）
-  double get _qtyExtraPrice {
+  /// 数量加价合计（ptype=2，单份口径=做法数量已乘、商品数量未乘）
+  /// 加购模式：仅 cookdata；修改模式：cookdata + publiccook
+  double get _unitExtraPrice {
     double total = 0;
-    for (final DishCookGroup group in widget.specData.cookdata) {
-      for (final DishCook cook in group.cooklist) {
-        if (cook.isCheck && cook.ptype == 2) {
-          total += cook.editqtyflag == 1 ? cook.price * cook.selectCookNum : cook.price;
+    void sum(List<DishCookGroup> groups) {
+      for (final DishCookGroup g in groups) {
+        for (final DishCook c in g.cooklist) {
+          if (c.isCheck && c.ptype == 2) {
+            total += c.editqtyflag == 1 ? c.price * c.selectCookNum : c.price;
+          }
         }
       }
     }
+    sum(widget.specData.cookdata);
+    if (_isModify) sum(widget.specData.publiccook);
     return total;
   }
 
   /// 单份实际销售价 = 规格价 + 数量加价（加购模式）
-  double get _unitPrice => _basePrice + _qtyExtraPrice;
+  double get _unitPrice => _basePrice + _unitExtraPrice;
 
   /// 总价 = 单份价 × 数量 + 整份加价（加购模式）
   double get _totalPrice => _unitPrice * _quantity + _wholeExtraPrice;
@@ -307,7 +367,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
   double get _originalTotal {
     final DishSpec? spec = _checkedSpec;
     final double base = spec?.sellprice ?? widget.product?.sellprice ?? widget.unitPrice;
-    return base * _quantity + _wholeExtraPrice + _qtyExtraPrice * _quantity;
+    return base * _quantity + _wholeExtraPrice + _unitExtraPrice * _quantity;
   }
 
   /// 已选规格名（加购模式；修改模式无规格）
@@ -347,6 +407,33 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
     return '$spec、$cook';
   }
 
+  /// 已选做法明细（对齐 smdcapp CookHelper.bindCookInfo：加购取私有做法、修改含全局做法），
+  /// 供下单时转 cooklist 上传（含做法code/杯贴码）
+  List<SelectedCook> get _selectedCooks {
+    final List<SelectedCook> list = <SelectedCook>[];
+    void collect(List<DishCookGroup> groups) {
+      for (final DishCookGroup g in groups) {
+        for (final DishCook c in g.cooklist) {
+          if (!c.isCheck) continue;
+          list.add(SelectedCook(
+            name: c.cookname,
+            code: c.code,
+            cupstickercode: c.cupstickercode,
+            price: c.price,
+            ptype: c.ptype,
+            qty: c.editqtyflag == 1
+                ? (c.selectCookNum > 1 ? c.selectCookNum : 1)
+                : 1,
+          ));
+        }
+      }
+    }
+
+    collect(widget.specData.cookdata);
+    if (_isModify) collect(widget.specData.publiccook);
+    return list;
+  }
+
   // ==================== 做法 Tab（修改模式，对齐 smdcapp initCookTab） ====================
 
   /// 私有做法是否有效（对齐 smdcapp: cookdata 非空）
@@ -380,6 +467,11 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
 
   /// 点击做法项（对齐 SpecificationPopup3 的完整选择逻辑）
   void _onCookTap(DishCookGroup group, DishCook cook) {
+    // 做法沽清：售罄做法不可选（对齐 smdcapp SpecCookPopup2.onClickCook）
+    if (cook.sellclearflag == 1) {
+      Toast.show('已售罄');
+      return;
+    }
     setState(() {
       final List<DishCook> cooks = group.cooklist;
 
@@ -485,6 +577,16 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
       Toast.show('请选择规格');
       return;
     }
+    // 沽清数量校验（对齐 smdcapp SpecCookPopup2 数量加号：按选中规格粒度校验库存）
+    final DishSpec? checkSpec = _checkedSpec;
+    final int clearFlag =
+        checkSpec != null ? checkSpec.sellclearflag : product.sellclearflag;
+    final double stockQty =
+        checkSpec != null ? checkSpec.stockqty : product.stockqty;
+    if (clearFlag == 1 && _quantity > stockQty) {
+      Toast.show('沽清数量不足');
+      return;
+    }
     // 做法校验
     if (product.cookflag == 1) {
       final String error = _validateCooks();
@@ -499,6 +601,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
       cookText: _cookText,
       unitPrice: _unitPrice,
       wholeExtra: _wholeExtraPrice,
+      cooks: _selectedCooks,
     );
     if (buyNow) {
       // 先关闭弹窗再回调跳转，否则回调推入的下单确认页会被随后的 pop 弹掉
@@ -519,7 +622,12 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
       return;
     }
     Navigator.of(context).pop(
-      CookModifyResult(cookText: _cookText, cookExtra: _wholeExtraPrice),
+      CookModifyResult(
+        cookText: _cookText,
+        cookExtra: _wholeExtraPrice,
+        unitExtra: _unitExtraPrice,
+        cooks: _selectedCooks,
+      ),
     );
   }
 
@@ -1017,9 +1125,11 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
     );
   }
 
-  /// 做法选项（对齐 smdcapp: 选中红框/红底，可重复时显示加减号+右上角数量角标）
+  /// 做法选项（对齐 smdcapp: 选中红框/红底，可重复时显示加减号+右上角数量角标，
+  /// 售罄做法显示"售罄"角标并隐藏加减号）
   Widget _buildCookItem(DishCookGroup group, DishCook cook, bool isDark) {
     final bool checked = cook.isCheck;
+    final bool soldOut = cook.sellclearflag == 1;
     final bool isEditQty = cook.editqtyflag == 1;
     final String priceStr = cook.price == cook.price.roundToDouble()
         ? cook.price.toInt().toString()
@@ -1051,8 +1161,8 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: <Widget>[
-                // 减号（可重复模式）
-                if (isEditQty)
+                // 减号（可重复模式；售罄时隐藏，对齐 smdcapp llMinus.isVisible=false）
+                if (isEditQty && !soldOut)
                   GestureDetector(
                     onTap: () => _onCookMinus(cook),
                     child: SizedBox(
@@ -1088,8 +1198,8 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
                     ),
                   ),
                 ),
-                // 加号（可重复模式）
-                if (isEditQty)
+                // 加号（可重复模式；售罄时隐藏，对齐 smdcapp llAdd.isVisible=false）
+                if (isEditQty && !soldOut)
                   SizedBox(
                     width: 30,
                     height: 40,
@@ -1106,8 +1216,40 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
               ],
             ),
           ),
+          // 售罄角标（对齐 smdcapp tvStockNum：右上角红底白字"售罄"）
+          if (soldOut)
+            Positioned(
+              top: -6,
+              right: -4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: _kBrandRed,
+                  borderRadius: BorderRadius.circular(9),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.1),
+                      blurRadius: 3,
+                      offset: const Offset(0, 1),
+                    ),
+                  ],
+                ),
+                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                child: const Center(
+                  child: Text(
+                    '售罄',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                      height: 1.2,
+                    ),
+                  ),
+                ),
+              ),
+            )
           // 数量角标（可重复模式，右上角展示）
-          if (isEditQty && cook.selectCookNum > 0)
+          else if (isEditQty && cook.selectCookNum > 0)
             Positioned(
               top: -6,
               right: -4,
@@ -1398,7 +1540,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
                   ),
                 ),
                 Text(
-                  '¥${_formatPrice(_wholeExtraPrice)}',
+                  '¥${_formatPrice(_wholeExtraPrice + _unitExtraPrice * widget.quantity)}',
                   style: const TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.bold,

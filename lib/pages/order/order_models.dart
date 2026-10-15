@@ -26,6 +26,54 @@ enum ProductTag {
   final Color color;
 }
 
+/// 打包做法code（对齐 smdcapp CookHelper.BAG_CODE）
+const String kBagCookCode = '00000000000000000000';
+
+/// 已选做法快照（加购/修改时记录，下单时转为 DetailCookBean 上传到 cooklist，
+/// 对齐 smdcapp CookHelper.bindCookInfo → DetailCookBean）
+class SelectedCook {
+  const SelectedCook({
+    required this.name,
+    this.code = '',
+    this.cupstickercode = '',
+    this.price = 0,
+    this.ptype = 0,
+    this.qty = 1,
+  });
+
+  final String name;
+
+  /// 做法code（对齐 cookcode）
+  final String code;
+
+  /// 杯贴码（对齐 cupstickercode）
+  final String cupstickercode;
+
+  /// 做法加价
+  final double price;
+
+  /// 加价类型：0不加 1整份加 2数量加
+  final int ptype;
+
+  /// 做法数量（可重复做法 selectCookNum）
+  final int qty;
+
+  /// 做法描述文本（对齐 smdcapp buildCookDesc：名称(￥价)x数量）
+  String get desc {
+    final StringBuffer sb = StringBuffer(name);
+    if (ptype != 0 && price > 0) {
+      final String priceStr = price == price.roundToDouble()
+          ? price.toInt().toString()
+          : price.toStringAsFixed(2);
+      sb.write('(¥$priceStr)');
+    }
+    if (qty > 1) {
+      sb.write('x$qty');
+    }
+    return sb.toString();
+  }
+}
+
 /// 规格选项
 class SpecOption {
   const SpecOption({
@@ -56,7 +104,7 @@ class SpecGroup {
 
 /// 商品
 class Product {
-  const Product({
+  Product({
     required this.id,
     required this.name,
     required this.price,
@@ -71,11 +119,15 @@ class Product {
     this.mprice2 = 0,
     this.mprice3 = 0,
     this.dscflag = 1,
+    this.printflag = 0,
+    this.labelflag = 0,
   });
 
   final String id;
   final String name;
-  final double price;
+
+  /// 单价（含加购时已选做法的数量加价 ptype=2；做法修改后同步更新）
+  double price;
   final double? originalPrice;
   final String desc;
 
@@ -102,6 +154,12 @@ class Product {
 
   /// 是否可打折 1=可打折 0=不可打折（对齐 smdcapp dscflag）
   final int dscflag;
+
+  /// 厨打标记（对齐 smdcapp printflag）：1=需要厨打 0=不厨打
+  final int printflag;
+
+  /// 打印标签/杯贴标记（对齐 smdcapp labelflag）：1=打杯贴 0=不打
+  final int labelflag;
 
   bool get hasSpec => specGroups.isNotEmpty;
 }
@@ -132,8 +190,9 @@ class ComboSelectedItem {
     this.unit = '',
     this.cookText = '',
     this.cookExtra = 0,
+    this.printflag = 0,
+    this.labelflag = 0,
   });
-
   /// 子商品ID（对齐 combproductid 之外的明细商品 productid）
   final String productid;
 
@@ -166,6 +225,15 @@ class ComboSelectedItem {
 
   /// 明细做法加价（单份，对齐 smdcapp 明细 cookaddamt）
   double cookExtra;
+
+  /// 厨打标记（对齐 smdcapp 明细 printflag，下单上传驱动厨打）
+  int printflag;
+
+  /// 杯贴标记（对齐 smdcapp 明细 labelflag，下单上传驱动杯贴打印）
+  int labelflag;
+
+  /// 明细已选做法明细（下单时转 cooklist 上传，杯贴打印用）
+  List<SelectedCook> cooks = <SelectedCook>[];
 }
 
 /// 购物车条目
@@ -204,6 +272,21 @@ class CartItem {
 
   /// 规格做法加价合计(单份，做法修改时可更新)
   double extraPrice;
+
+  /// 已选做法明细（下单时转 cooklist 上传；打包费也按打包做法拼入，对齐 smdcapp CookHelper）
+  List<SelectedCook> cooks = <SelectedCook>[];
+
+  /// 做法修改后同步价格：单价剥离旧做法数量加价(ptype=2)后叠加新值，
+  /// [wholeExtra] 覆盖整份加价(ptype=1)。
+  /// 注意：需在更新 [cooks] 之前调用（依赖旧做法明细剥离旧单价加价）。
+  void applyCookModify({required double wholeExtra, required double unitExtra}) {
+    double oldUnitExtra = 0;
+    for (final SelectedCook c in cooks) {
+      if (c.ptype == 2) oldUnitExtra += c.price * c.qty;
+    }
+    product.price = product.price - oldUnitExtra + unitExtra;
+    extraPrice = wholeExtra;
+  }
 
   // ---- 菜品操作状态（对齐 smdcapp ProductBean 操作字段）----
 
@@ -264,6 +347,9 @@ class CartItem {
 
   /// 是否已划菜（对齐 smdcapp cutflag==1）
   bool isCut = false;
+
+  /// 二次称重已确认重量（对齐 smdcapp DetailListBean.confirmqty），0=未称
+  double confirmQty = 0;
 
   // ---- 基础促销字段（对齐 smdcapp DetailListBean jcmbillid/specpriceflag）----
 
@@ -374,11 +460,48 @@ class CartItem {
   String get uniqueKey => '${product.id}_$specText';
 }
 
+/// 解析服务端明细行的 cooklist 为已选做法快照（对齐 smdcapp DetailCookBean）
+///
+/// 打包做法由 [CartItem.bagPrice]/[CartItem.isBag] 单独表达，这里剔除避免重复计入。
+List<SelectedCook> parseSelectedCooks(dynamic cookList) {
+  final List<SelectedCook> list = <SelectedCook>[];
+  if (cookList is! List) {
+    return list;
+  }
+  for (final dynamic e in cookList) {
+    if (e is! Map) continue;
+    final String code = e['code']?.toString() ?? '';
+    final String name = e['name']?.toString() ?? '';
+    if (code == kBagCookCode || name == '打包') continue;
+    final int qty = _toInt(e['qty']);
+    list.add(SelectedCook(
+      name: name,
+      code: code,
+      cupstickercode: e['cupstickercode']?.toString() ?? '',
+      price: _toDouble(e['price']),
+      ptype: _toInt(e['ptype']),
+      qty: qty > 0 ? qty : 1,
+    ));
+  }
+  return list;
+}
+
+int _toInt(dynamic v) {
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  return int.tryParse(v?.toString() ?? '') ?? 0;
+}
+
+double _toDouble(dynamic v) {
+  if (v is num) return v.toDouble();
+  return double.tryParse(v?.toString() ?? '') ?? 0;
+}
+
 /// 模拟数据源(后续可替换为后端接口)
 class OrderMockData {
   OrderMockData._();
 
-  static const List<ProductCategory> categories = <ProductCategory>[
+  static final List<ProductCategory> categories = <ProductCategory>[
     ProductCategory(
       id: 'recommend',
       name: '店长推荐',

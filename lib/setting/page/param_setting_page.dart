@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
@@ -17,6 +18,8 @@ class ParamSettingPage extends StatefulWidget {
 }
 
 class _ParamSettingPageState extends State<ParamSettingPage> {
+  String _serverType = '0';
+
   // ==================== 开关状态（对齐 smdcapp ConstantSetKey + SpUtils） ====================
   bool _printBill = false;       // 打印账单（MMKV print_bill）
   bool _fullPayment = true;      // 默认全款付（MMKV full_payment）
@@ -41,6 +44,7 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
   }
 
   void _loadSettings() {
+    _serverType = ConnectionManager.getServerType();
     _printBill = SpUtil.getBool('print_bill') ?? false;
     _fullPayment = SpUtil.getBool('full_payment', defValue: true) ?? true;
     _enableNfc = SpUtil.getBool('ENABLE_NFC') ?? false;
@@ -59,6 +63,15 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
     _showPublicCook = SpUtil.getBool('setting_show_public_cook', defValue: true) ?? true;
     _checkDownGoods = SpUtil.getBool('setting_check_down_goods') ?? false;
     _singleCook = SpUtil.getBool('setting_single_cook', defValue: true) ?? true;
+  }
+
+  void _selectServerType(String type) {
+    if (!ConnectionManager.setServerType(type)) {
+      Toast.show('当前连接模式后台统一管理，不可以修改');
+      return;
+    }
+    setState(() => _serverType = type);
+    Toast.show('已保存，重新登录后生效');
   }
 
   // ==================== 开关切换事件 ====================
@@ -191,6 +204,10 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
       body: ListView(
         padding: const EdgeInsets.all(12),
         children: <Widget>[
+          _buildSection('连接设置', [
+            _buildServerTypeItem(),
+          ]),
+          const SizedBox(height: 12),
           _buildSection('结账设置', [
             _buildSwitchItem('打印账单', _printBill, _togglePrintBill),
             _buildSwitchItem('默认全款付', _fullPayment, _toggleFullPayment),
@@ -246,6 +263,58 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildServerTypeItem() {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const Text(
+            '服务连接方式',
+            style: TextStyle(fontSize: 15, color: Color(0xFF333333)),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            ConnectionManager.isServerTypeManaged
+                ? '后台统一管理，不可修改'
+                : '修改后重新登录生效',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF999999)),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: <Widget>[
+              _buildServerTypeOption('不限', '0'),
+              _buildServerTypeOption('仅限主设备', '1'),
+              _buildServerTypeOption('仅限云服务', '2'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildServerTypeOption(String title, String type) {
+    final bool selected = _serverType == type;
+    return ChoiceChip(
+      label: Text(title),
+      selected: selected,
+      onSelected: (_) => _selectServerType(type),
+      showCheckmark: false,
+      selectedColor: const Color(0xFFE13426),
+      backgroundColor: Colors.white,
+      labelStyle: TextStyle(
+        fontSize: 14,
+        color: selected ? Colors.white : const Color(0xFF333333),
+      ),
+      side: BorderSide(
+        color: selected ? const Color(0xFFE13426) : const Color(0xFFE5E5E5),
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
     );
   }
 

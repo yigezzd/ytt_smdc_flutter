@@ -7,11 +7,12 @@ class MustProductEntity {
   String specid;
   String billid;
   String specname;
+  double mustqty;
 
   MustProductEntity({
     this.id = 0, this.spid = 0, this.sid = 0,
     this.productid = '', this.specid = '',
-    this.billid = '', this.specname = '',
+    this.billid = '', this.specname = '', this.mustqty = 1.0,
   });
 
   factory MustProductEntity.fromMap(Map<String, dynamic> m) => MustProductEntity(
@@ -22,11 +23,13 @@ class MustProductEntity {
         specid: m['specid']?.toString() ?? '',
         billid: m['billid']?.toString() ?? '',
         specname: m['specname']?.toString() ?? '',
+        mustqty: (m['mustqty'] as num?)?.toDouble() ?? 1.0,
       );
 
   Map<String, dynamic> toMap() => {
         'id': id, 'spid': spid, 'sid': sid,
         'productid': productid, 'specid': specid,
         'billid': billid, 'specname': specname,
+        'mustqty': mustqty,
       };
 }

@@ -46,7 +46,7 @@ class _ConnectionStatusSheetState extends State<ConnectionStatusSheet> {
   /// 检测主设备连接（对齐 smdcapp PCTableHttpUtil.getHostSyncTime）
   Future<bool> _checkPc() async {
     try {
-      return await checkMasterDeviceAlive();
+      return await checkMasterDeviceAlive(updateConnection: false);
     } catch (_) {
       return false;
     }

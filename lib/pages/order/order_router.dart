@@ -129,6 +129,10 @@ class OrderRouter implements IRouterProvider {
         changeAmt: (args['changeAmt'] as num?)?.toDouble() ?? 0,
         payName: args['payName'] as String? ?? '',
         takecode: args['takecode'] as String? ?? '',
+        billno: args['billno'] as String? ?? '',
+        billdate: args['billdate'] as String? ?? '',
+        detailCount: (args['detailCount'] as num?)?.toInt() ?? 0,
+        cashierName: args['cashierName'] as String? ?? '',
       );
     }));
 

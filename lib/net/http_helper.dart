@@ -161,12 +161,12 @@ Future<Map<String, dynamic>> request(
   // 构建外层请求体（公共参数 + params）
   // 仅当 params 为 Map 时注入 client 字段；字符串等原始值直接透传（如 getSupplierInfo 传 id）
   if (params is Map<String, dynamic>) {
-    params['client'] = "WEBAPP";
+    params['client'] = 'IOS';
   }
   final Map<String, dynamic> requestData = <String, dynamic>{
     'sid': sid.isNotEmpty ? sid : '0',
     'spid': spid.isNotEmpty ? spid : '0',
-    'client': 'WEBAPP',
+    'client': 'IOS',
     'token': token,
     'sign': '83690002',
     'requestId': DateTime.now().millisecondsSinceEpoch,
@@ -442,7 +442,7 @@ Future<Map<String, dynamic>> _buildSignedParams(
   final String machno = SpUtil.getString(Constant.machNo) ?? '';
   all['machno'] = machno.isNotEmpty ? machno : '0';
   all['opername'] = opername;
-  all['client'] = 'APP';
+  all['client'] = 'IOS';
   all['token'] = SpUtil.getString(Constant.token) ?? '';
   all['sid'] = sid;
   all['spid'] = spid;
@@ -597,75 +597,57 @@ Future<Map<String, dynamic>> requestForm(
   }
 }
 
-/// 探测主设备是否可达（对齐 smdcapp 登录后的 checkPC/getStatus 逻辑）
-///
-/// 调用主设备 GetHostSyncTime 接口，并核对返回的 sid/spid 与当前登录门店是否一致，
-/// 一致才认为主设备可达。结果写入 [ConnectionManager.pcAlive]。
-Future<bool> checkMasterDeviceAlive() async {
-  final String localhost = ConnectionManager.getLocalhost();
-  if (localhost.isEmpty || !localhost.startsWith('http')) {
-    _logApi(HttpApi.pcGetHostSyncTime, null, '登录响应未返回主设备地址，跳过探测');
-    ConnectionManager.pcAlive = false;
+Future<bool> checkMasterDeviceAlive({bool updateConnection = true}) async {
+  if (ConnectionManager.isCloudOnly) {
     return false;
   }
 
+  bool alive = false;
+  final String localhost = ConnectionManager.getLocalhost();
   final String fullUrl = '$localhost${HttpApi.pcGetHostSyncTime}';
   final Stopwatch stopwatch = Stopwatch()..start();
   try {
+    if (localhost.isEmpty || !localhost.startsWith('http')) {
+      _logApi(HttpApi.pcGetHostSyncTime, null, '登录响应未返回主设备地址，跳过探测');
+      return false;
+    }
     final Map<String, dynamic> signedData =
         await _buildSignedParams(<String, dynamic>{'data': ''}, fullUrl);
     final Response<String> response = await DioUtils.instance.dio.post<String>(
       fullUrl,
       data: signedData,
-      options: Options(
-        contentType: Headers.formUrlEncodedContentType,
-      ),
+      options: Options(contentType: Headers.formUrlEncodedContentType),
     );
     stopwatch.stop();
-    final int elapsed = stopwatch.elapsedMilliseconds;
     final String content = response.data.toString();
     final Map<String, dynamic> jsonMap =
         json.decode(content) as Map<String, dynamic>;
-
-    if (jsonMap['Success'] != true) {
-      _logApi(fullUrl, signedData, 'Success != true',
-          elapsedMs: elapsed, response: content);
-      ConnectionManager.pcAlive = false;
+    final dynamic data = jsonMap['Data'];
+    if (jsonMap['Success'] != true || data is! Map) {
+      _logApi(fullUrl, signedData, '主设备响应失败或缺少门店信息',
+          elapsedMs: stopwatch.elapsedMilliseconds, response: content);
       return false;
     }
 
-    // 核对主设备 sid/spid 与当前登录门店是否一致
-    final dynamic data = jsonMap['Data'];
-    if (data is Map) {
-      final String pcSid = data['sid']?.toString() ?? '';
-      final String pcSpid = data['spid']?.toString() ?? '';
-      String sid = '';
-      String spid = '';
-      try {
-        final String storeStr = SpUtil.getString(Constant.store) ?? '';
-        if (storeStr.isNotEmpty) {
-          final Map<String, dynamic> storeMap =
-              jsonDecode(storeStr) as Map<String, dynamic>;
-          sid = storeMap['id']?.toString() ?? '';
-          spid = storeMap['spid']?.toString() ?? '';
-        }
-      } catch (_) {}
-      final bool match = pcSid.isNotEmpty && pcSid == sid && pcSpid == spid;
-      _logApi(fullUrl, signedData, '可达=$match (主设备sid=$pcSid 门店sid=$sid)',
-          success: match, elapsedMs: elapsed, response: content);
-      ConnectionManager.pcAlive = match;
-      return match;
-    }
-
-    ConnectionManager.pcAlive = true;
-    _logApi(fullUrl, signedData, 'Success=true',
-        success: true, elapsedMs: elapsed, response: content);
-    return true;
+    final String pcSid = data['sid']?.toString() ?? '';
+    final String pcSpid = data['spid']?.toString() ?? '';
+    final Map<String, dynamic> store = jsonDecode(
+      SpUtil.getString(Constant.store, defValue: '{}') ?? '{}',
+    ) as Map<String, dynamic>;
+    final String sid = store['id']?.toString() ?? '';
+    final String spid = store['spid']?.toString() ?? '';
+    alive = pcSid.isNotEmpty && pcSpid.isNotEmpty && pcSid == sid && pcSpid == spid;
+    _logApi(fullUrl, signedData, '可达=$alive (主设备sid=$pcSid 门店sid=$sid)',
+        success: alive, elapsedMs: stopwatch.elapsedMilliseconds, response: content);
+    return alive;
   } catch (e) {
     _logApi(fullUrl, <String, dynamic>{'data': ''}, '异常: $e',
         elapsedMs: stopwatch.elapsedMilliseconds);
-    ConnectionManager.pcAlive = false;
     return false;
+  } finally {
+    if (updateConnection) {
+      ConnectionManager.pcAlive = alive;
+    }
   }
 }
 

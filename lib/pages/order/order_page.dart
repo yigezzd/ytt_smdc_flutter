@@ -20,6 +20,7 @@ import 'package:flutter_deer/pages/order/order_models.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/pages/order/promotion_manager.dart';
 import 'package:flutter_deer/pages/order/widgets/cart_panel_sheet.dart';
+import 'package:flutter_deer/pages/order/widgets/must_select_sheet.dart';
 import 'package:flutter_deer/pages/order/widgets/set_meal_sheet.dart';
 import 'package:flutter_deer/pages/order/widgets/time_price_sheet.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
@@ -45,6 +46,12 @@ const double _kProductHeight = 100.0;
 
 /// 分类 header 高度
 const double _kHeaderHeight = 40.0;
+
+/// 推荐菜虚拟分类 ID（对齐 smdcapp ProductHelper.getDisType，非后台分类数据）
+const String _kRecommendTypeId = '000000';
+
+/// 底部购物车栏内容高度（不含 SafeArea，供列表底部预留）
+const double _kCartBarHeight = 58.0;
 
 /// 点菜页（对齐 smdcapp 正餐点餐界面）
 ///
@@ -196,6 +203,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         OrderRepository.fetchCategories(),
         OrderRepository.fetchAllProducts(),
         OrderRepository.fetchWarnList(),
+        // 做法沽清（对齐 smdcapp getDataProductWarnList：商品沽清与做法沽清同时拉取）
+        OrderRepository.refreshCookWarnCodes(),
       ]);
 
       final List<DishCategory> categories = results[0] as List<DishCategory>;
@@ -225,10 +234,22 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         _productTypeIdMap[p.productid] = typeId;
       }
 
+      // 推荐菜虚拟分类（对齐 smdcapp ProductHelper.getDisType / ProductScrollViewModel：
+      // 存在 recommendflag=1 的商品时，在分类列表头部插入 typeid='000000' 的“推荐菜”分类；
+      // 推荐商品仍保留在原分类分组中，实现“推荐菜 + 原分类”双份展示）
+      final List<DishProduct> recommendProducts =
+          products.where((DishProduct p) => p.recommendflag == 1).toList();
+      if (recommendProducts.isNotEmpty) {
+        grouped[_kRecommendTypeId] = recommendProducts;
+      }
+
       // 过滤掉没有商品的分类
-      final List<DishCategory> validCategories = categories
-          .where((DishCategory c) => grouped.containsKey(c.typeid) && grouped[c.typeid]!.isNotEmpty)
-          .toList();
+      final List<DishCategory> validCategories = <DishCategory>[
+        if (recommendProducts.isNotEmpty)
+          DishCategory(typeid: _kRecommendTypeId, name: '推荐菜'),
+        ...categories.where((DishCategory c) =>
+            grouped.containsKey(c.typeid) && grouped[c.typeid]!.isNotEmpty),
+      ];
 
       if (!mounted) return;
       setState(() {
@@ -362,7 +383,10 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   }
 
   /// 必点菜条目转购物车条目（对齐 smdcapp ShoppingCartUtil.mustToProduct + toDetalListBean）
-  CartItem _mustProductToCartItem(Map<String, dynamic> raw, double qty) {
+  ///
+  /// [mustType] 0=固定必点（getFixedMandatoryItems）、1=可选必点（MustPopup2 选中项）。
+  CartItem _mustProductToCartItem(Map<String, dynamic> raw, double qty,
+      {int mustType = 0}) {
     final String pid = raw['productid']?.toString() ?? '';
     final DishProduct? dish = _findDishProduct(pid);
     final bool isComb = _mustToInt(raw['combflag']) == 1 ||
@@ -382,6 +406,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
             mprice2: dish.mprice2,
             mprice3: dish.mprice3,
             dscflag: dish.dscflag,
+            printflag: dish.printflag,
+            labelflag: dish.labelflag,
           )
         : Product(
             id: pid,
@@ -393,10 +419,10 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                 ? const <Color>[Color(0xFFE8EAF6), Color(0xFFC5CAE9)]
                 : const <Color>[Color(0xFFFFF1F0), Color(0xFFFFE7E3)],
           );
-    // 对齐 smdcapp getFixedMandatoryItems：必点菜行 mustflag=1、mustType=0（固定必点）
+    // 必点菜行 mustflag=1；mustType 由调用方指定（0=固定必点 / 1=可选必点）
     final CartItem item = CartItem(product: product, quantity: qty.toInt() < 1 ? 1 : qty.toInt());
     item.mustflag = 1;
-    item.mustType = 0;
+    item.mustType = mustType;
     return item;
   }
 
@@ -644,6 +670,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
             id: d['productid']?.toString() ?? '',
             name: d['productname']?.toString() ?? '',
             price: sellprice,
+            printflag: _mustToInt(d['printflag']),
+            labelflag: _mustToInt(d['labelflag']),
           );
 
     // 对齐 smdcapp：specname + cooktext 用“、”拼接作为规格做法描述
@@ -673,7 +701,12 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           specname: c['specname']?.toString() ?? c['spec']?.toString() ?? '',
           sellprice: _mustToDouble(c['sellprice']),
           unit: c['unit']?.toString() ?? '',
-        ));
+          cookText: c['cooktext']?.toString() ?? '',
+          cookExtra: _mustToDouble(c['cookaddamt']) / mainQty,
+          printflag: _mustToInt(c['printflag']),
+          labelflag: _mustToInt(c['labelflag']),
+        )
+          ..cooks = parseSelectedCooks(c['cooklist'] ?? c['cookList']));
       }
       specText = combItems
           .map((ComboSelectedItem c) => '${c.productname}x${_fmtQty(c.qty)}')
@@ -704,6 +737,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     item.isSuspended = _mustToInt(d['hangflag']) == 1;
     item.bagPrice = bagPrice;
     item.isBag = _mustToInt(d['bagstatus']) == 1 || item.bagPrice > 0;
+    // 恢复做法明细（下单/再次保存时转 cooklist 上传，杯贴打印用）
+    item.cooks = parseSelectedCooks(d['cooklist'] ?? d['cookList']);
     final double discount = _mustToDouble(d['discount']);
     if (discount > 0 && discount < 100) {
       item.discount = discount;
@@ -928,6 +963,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       mprice2: dish.mprice2,
       mprice3: dish.mprice3,
       dscflag: dish.dscflag,
+      printflag: dish.printflag,
+      labelflag: dish.labelflag,
     );
     setState(() {
       final String key = '${product.id}_$specText';
@@ -946,6 +983,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         // 规格与做法分列存储，下单时按 smdcapp 字段分别上传
         item.specName = data.specName;
         item.cookText = data.cookText;
+        item.cooks = List<SelectedCook>.from(data.cooks);
         PromotionManager.instance.applyToCartItem(item);
         _cartItems.add(item);
       }
@@ -1175,6 +1213,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       mprice2: dish.mprice2,
       mprice3: dish.mprice3,
       dscflag: dish.dscflag,
+      printflag: dish.printflag,
+      labelflag: dish.labelflag,
     );
     setState(() {
       final String key = '${product.id}_${result.specText}';
@@ -1301,6 +1341,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       mprice2: dish.mprice2,
       mprice3: dish.mprice3,
       dscflag: dish.dscflag,
+      printflag: dish.printflag,
+      labelflag: dish.labelflag,
     );
   }
 
@@ -1310,16 +1352,10 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       Toast.show('购物车还是空的，先选几个菜吧');
       return;
     }
-    // 可选必点菜校验（对齐 smdcapp CartGoodsModel.addMust(isCheckOptional=true)）
-    final String? mustHint = _checkOptionalMust();
-    if (mustHint != null) {
-      final bool go = await ConfirmDialog.show(
-        context,
-        content: '$mustHint\n是否继续下单？',
-        confirmText: '继续下单',
-      );
-      if (!go || !mounted) return;
-    }
+    // 可选必点菜校验（对齐 smdcapp goDownActivity → CartGoodsModel.addMust(true) →
+    // ProductMustValidator(isCheckOptional=true)：不满足时弹可选必点菜弹窗）
+    final bool mustOk = await _ensureOptionalMustSelected();
+    if (!mustOk || !mounted) return;
     NavigatorUtils.push(
       context,
       Routes.orderConfirmPage,
@@ -1340,18 +1376,72 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     );
   }
 
-  /// 校验可选必点菜（对齐 smdcapp MustHelper.checkOptionalMandatory）
+  /// 可选必点菜校验与选择（对齐 smdcapp MustHelper.checkOptionalMandatory +
+  /// ProductMustValidator → MustPopup2）
   ///
-  /// 可选方案 mustrule==1：按「已点数量 / 每份必点数量」累加，总项数需 ≥ 人数
-  /// （musttype==0 每人必点取人数，否则取 1）。返回未满足提示，满足时返回 null。
-  String? _checkOptionalMust() {
-    if (_mustGroups.isEmpty) return null;
+  /// 已满足返回 true 直接下单；未满足时弹出可选必点菜弹窗：
+  /// - 用户选好点"加入购物车"→ 选中项加入购物车（mustflag=1、mustType=1、
+  ///   数量 = 选项数×每份必点数量，对齐 processMustProduct），返回 true 继续下单
+  /// - 关闭弹窗取消 → 提示"可选必点菜未选择"，返回 false 拦截本次下单
+  Future<bool> _ensureOptionalMustSelected() async {
+    final List<Map<String, dynamic>> optionalGroups = _mustGroups
+        .where((Map<String, dynamic> g) =>
+            _mustToInt(g['mustrule']) == 1 &&
+            g['mustproductlist'] is List &&
+            (g['mustproductlist'] as List).isNotEmpty)
+        .toList();
+    if (optionalGroups.isEmpty) return true;
+    if (_isOptionalMustSatisfied(optionalGroups)) return true;
+
+    // 回显购物车已有的可选必点菜（对齐 MustPopup2：可选必点行 qty>0 按 productid 匹配）
+    final Map<String, double> preselected = <String, double>{};
+    for (final CartItem item in _cartItems) {
+      if (item.mustflag == 1 &&
+          item.mustType == 1 &&
+          !item.isRefunded &&
+          item.quantity > 0) {
+        preselected[item.product.id] =
+            (preselected[item.product.id] ?? 0) + item.quantity;
+      }
+    }
+
+    final List<MustSelectResult>? selected = await MustSelectSheet.show(
+      context,
+      groups: optionalGroups,
+      personNum: _currentPersonNum(),
+      preselected: preselected,
+    );
+    if (selected == null) {
+      // 取消选择 → 拦截本次下单（对齐 smdcapp Interrupted"可选必点菜未选择"）
+      Toast.show('可选必点菜未选择');
+      return false;
+    }
+    if (selected.isEmpty || !mounted) return true;
+    setState(() {
+      for (final MustSelectResult result in selected) {
+        _cartItems.add(_mustProductToCartItem(result.raw, result.qty, mustType: 1));
+      }
+      _rebuildCountMap();
+    });
+    _cartBadgeController.forward(from: 0);
+    return true;
+  }
+
+  /// 当前桌台人数（优先 tmp.personnum，回退开台人数）
+  int _currentPersonNum() {
     final Map<String, dynamic>? tmp =
         widget.tableJson?['tmp'] as Map<String, dynamic>?;
     final int tmpPerson = _mustToInt(tmp?['personnum']);
-    final int personNum = tmpPerson > 0 ? tmpPerson : _persons;
-    for (final Map<String, dynamic> group in _mustGroups) {
-      if (_mustToInt(group['mustrule']) != 1) continue;
+    return tmpPerson > 0 ? tmpPerson : _persons;
+  }
+
+  /// 可选必点菜是否已满足（对齐 smdcapp MustHelper.checkOptionalMandatory）
+  ///
+  /// 每组按「已点数量 / 每份必点数量」累加选项数，总选项数需 ≥ 要求项数
+  /// （musttype==0 每人必点取人数，否则取 1）。
+  bool _isOptionalMustSatisfied(List<Map<String, dynamic>> optionalGroups) {
+    final int personNum = _currentPersonNum();
+    for (final Map<String, dynamic> group in optionalGroups) {
       final dynamic rawList = group['mustproductlist'];
       if (rawList is! List || rawList.isEmpty) continue;
       final double required = _mustToInt(group['musttype']) == 0
@@ -1362,19 +1452,16 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         if (raw is! Map<String, dynamic>) continue;
         final String pid = raw['productid']?.toString() ?? '';
         if (pid.isEmpty) continue;
-        final double baseQty =
-            double.tryParse(raw['mustqty']?.toString() ?? '') ?? 0;
+        final double baseQty = _mustToDouble(raw['mustqty']);
         final double per = baseQty > 0 ? baseQty : 1.0;
         final double inCartQty = _cartItems
             .where((CartItem c) => c.product.id == pid && !c.isRefunded)
             .fold(0.0, (double s, CartItem c) => s + c.quantity);
         totalSelections += inCartQty / per;
       }
-      if (totalSelections < required) {
-        return '可选必点菜未选择\n方案：${group['name']?.toString() ?? ''}';
-      }
+      if (totalSelections < required) return false;
     }
-    return null;
+    return true;
   }
 
   // ==================== 搜索与扫码 ====================
@@ -1566,7 +1653,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           // 临时菜固定商品ID（对齐 smdcapp OrderModel.getTempProductID）
           id: '00000000000000000000',
           name: r.name,
-          price: r.price,
+          // 做法数量加价(ptype=2)并入单价，整份加价走 extraPrice（与规格商品口径一致）
+          price: r.price + r.cookUnitExtra,
           desc: r.typename.isNotEmpty ? r.typename : '临时菜',
           dscflag: r.tpdscflag,
         ),
@@ -2565,7 +2653,14 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         builder: (BuildContext context, int activeIndex, Widget? child) {
           return ListView.builder(
             controller: _categoryScrollController,
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            // 底部预留购物车栏高度，否则最后几个分类会被购物车栏遮住、无法滚动到可见区域
+            padding: EdgeInsets.only(
+              top: 8,
+              bottom: 8 +
+                  _kCartBarHeight +
+                  MediaQuery.of(context).padding.bottom +
+                  12,
+            ),
             itemCount: _categories.length,
             itemBuilder: (BuildContext context, int index) {
               final bool selected = activeIndex == index;
@@ -2802,7 +2897,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         child: SafeArea(
           top: false,
           child: SizedBox(
-            height: 58,
+            height: _kCartBarHeight,
             child: Row(
               children: <Widget>[
                 const SizedBox(width: 12),
@@ -3045,7 +3140,14 @@ class _DishProductCard extends StatelessWidget {
         (product.sellclearflag == 1 ? product.stockqty : null);
     // 动态剩余 = 基数 - 购物车已点（对齐 smdcapp CartGoodsModel.syncDisplayStock）
     final double leftQty = guQingBase == null ? 0 : math.max(0, guQingBase - count);
-    final bool soldOut = guQingBase == null ? product.isSoldOut : leftQty <= 0;
+    // 对齐 smdcapp DishesHomeAct2 情况 A：多规格商品即使商品级沽清也不在卡片上拦截，
+    // 仍显示"选规格"入口，售罄判定下放到规格弹窗内按规格粒度校验，
+    // 否则一个规格无库存导致商品级库存耗尽时，其它有库存规格也无法再下单
+    final bool soldOut = product.specflag == 1
+        ? false
+        : (guQingBase == null ? product.isSoldOut : leftQty <= 0);
+    // 商品级沽清已耗尽（多规格商品隐藏剩余角标，对齐 smdcapp rlStockNum.toGone）
+    final bool stockExhausted = guQingBase != null && leftQty <= 0;
 
     return Container(
       height: _kProductHeight,
@@ -3080,7 +3182,7 @@ class _DishProductCard extends StatelessWidget {
                 else
                   _buildPlaceholder(soldOut),
                 // 沽清剩余吸顶悬浮（对齐 smdcapp rl_stock_num：半透明黑底 + 白字居中）
-                if (guQingBase != null && !soldOut)
+                if (guQingBase != null && !soldOut && !stockExhausted)
                   Positioned(
                     top: 0,
                     left: 0,

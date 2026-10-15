@@ -18,6 +18,7 @@ import 'package:flutter_deer/pages/home/table/widgets/open_table_dialog.dart';
 import 'package:flutter_deer/pages/home/table/widgets/status_filter_bar.dart';
 import 'package:flutter_deer/pages/home/table/widgets/table_card.dart';
 import 'package:flutter_deer/pages/home/table/widgets/table_operation_dialog.dart';
+import 'package:flutter_deer/pages/login/login_router.dart';
 import 'package:flutter_deer/res/colors.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
@@ -70,6 +71,7 @@ class _TablePageState extends State<TablePage>
 
   /// 是否正在加载
   bool _loading = false;
+  bool _connectionReady = false;
 
   /// 弹窗是否正在展示（防止重复弹出）
   bool _pcCheckDialogShowing = false;
@@ -141,36 +143,36 @@ class _TablePageState extends State<TablePage>
     }
   }
 
-  /// 页面初始化流程（对齐 smdcapp LoginActivity.checkPC → downTable → initData 的时序）
-  ///
-  /// 1. 先探活主设备，确定 pcAlive
-  /// 2. 按最终模式加载数据（只调一套接口）
-  /// 3. 探活失败则弹出提示弹窗
   Future<void> _initPage() async {
-    final String localhost = ConnectionManager.getLocalhost();
-    final bool hasLocalhost =
-        localhost.isNotEmpty && localhost.startsWith('http');
+    if (!ConnectionManager.sessionInitialized) {
+      ConnectionManager.beginSession();
+      if (!ConnectionManager.isCloudOnly) {
+        await checkMasterDeviceAlive();
+      }
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() => _pcAlive = ConnectionManager.masterDeviceReachable);
 
-    // 有主设备地址时先探活，确定连接模式（对齐 smdcapp checkPC 阻塞等待结果）
-    if (hasLocalhost) {
-      final bool alive = await checkMasterDeviceAlive();
-      if (!mounted) {
+    if (ConnectionManager.isMasterOnly && !_pcAlive) {
+      await _showMasterDeviceCheckDialog();
+      if (!mounted || !ConnectionManager.masterDeviceReachable) {
         return;
       }
-      setState(() => _pcAlive = alive);
     }
 
-    // 按确定的模式加载数据（仅调用一套接口）
-    _loadData();
-
-    // 数据加载后启动定时轮询（对齐 smdcapp：桌台状态实时更新）
-    // _startPolling(); // TODO: 暂时屏蔽定时轮询，待MQ稳定后再恢复
-
-    // 连接 RabbitMQ 推送服务（对齐 smdcapp App.initMqTasks，登录成功后连接）
+    _connectionReady = true;
+    await _loadData();
+    if (!mounted) {
+      return;
+    }
     MqService.instance.connect();
 
-    // 主设备不可达时弹出提示弹窗（对齐 smdcapp NetWorkChangeDialog）
-    if (hasLocalhost && !_pcAlive) {
+    final String localhost = ConnectionManager.getLocalhost();
+    if (!ConnectionManager.isCloudOnly &&
+        localhost.startsWith('http') &&
+        !ConnectionManager.masterDeviceReachable) {
       await _showMasterDeviceCheckDialog();
     }
   }
@@ -179,18 +181,25 @@ class _TablePageState extends State<TablePage>
   ///
   /// 弹窗关闭后刷新连接状态（可能已切换云服务或重连成功）并按最新模式重载数据
   Future<void> _showMasterDeviceCheckDialog() async {
-    if (!mounted || _pcCheckDialogShowing) {
+    if (!mounted || _pcCheckDialogShowing || ConnectionManager.isCloudOnly) {
       return;
     }
     _pcCheckDialogShowing = true;
-    await showDialog<void>(
+    final bool? connected = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (_) => const MasterDeviceCheckDialog(),
     );
     _pcCheckDialogShowing = false;
-    if (mounted) {
-      setState(() => _pcAlive = ConnectionManager.pcAlive);
+    if (!mounted) {
+      return;
+    }
+    if (connected == false) {
+      NavigatorUtils.push(context, LoginRouter.loginPage, clearStack: true);
+      return;
+    }
+    setState(() => _pcAlive = ConnectionManager.masterDeviceReachable);
+    if (_connectionReady) {
       _loadData();
     }
   }
@@ -226,7 +235,7 @@ class _TablePageState extends State<TablePage>
   /// 用于轮询和回到前台时的自动刷新，用户无感知地更新桌台状态
   /// （锁台、开台、清台等变更会在下一次轮询时自动反映到 UI）
   Future<void> _silentRefresh() async {
-    if (!mounted) {
+    if (!mounted || !_connectionReady || _pcCheckDialogShowing) {
       return;
     }
     if (_silentRefreshing) {
@@ -294,6 +303,9 @@ class _TablePageState extends State<TablePage>
 
   /// 加载区域列表 + 桌台列表（对齐 smdcapp updataTableInfo：同时刷新区域与桌台）
   Future<void> _loadData() async {
+    if (!_connectionReady || _pcCheckDialogShowing) {
+      return;
+    }
     final bool useMaster = ConnectionManager.pcAlive;
     if (mounted) {
       setState(() => _loading = true);
@@ -408,24 +420,27 @@ class _TablePageState extends State<TablePage>
   /// 主设备可达 → PC 成功图标；主设备连不上、实际走云服务 → 云服务图标
   String get _connectionIconAsset {
     if (_pcAlive) {
-      // 主设备模式且已连接
       return 'assets/images/ic_pc_success.png';
     }
-    // 主设备未连通，netMode 回退为云服务（对齐 smdcapp：netMode==2 → ic_yun_success）
+    if (ConnectionManager.isMasterOnly) {
+      return 'assets/images/ic_pc_error.png';
+    }
     return 'assets/images/ic_yun_success.png';
   }
 
   /// 弹出连接状态弹窗（对齐 smdcapp ibConnection.onClick → ConnectionTypeDialog）
   void _showConnectionStatusSheet() {
+    if (ConnectionManager.isCloudOnly || ConnectionManager.isMasterOnly) {
+      return;
+    }
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => const ConnectionStatusSheet(),
     ).then((_) {
-      // 弹窗关闭后刷新连接状态（检测过程中可能更新了 pcAlive）
       if (mounted) {
-        setState(() => _pcAlive = ConnectionManager.pcAlive);
+        setState(() => _pcAlive = ConnectionManager.masterDeviceReachable);
       }
     });
   }
@@ -527,23 +542,64 @@ class _TablePageState extends State<TablePage>
           'tableJson': table.toJson(),
         },
       );
-    } else {
-      // 其它状态（待清台）→ 直接进入点菜页
-      NavigatorUtils.push(
-        context,
-        Routes.orderPage,
-        arguments: <String, dynamic>{
-          'tableId': table.tableid,
-          'tableName': table.name,
-          'tableCode': table.code,
-          'persons': table.tmp?.personnum ?? table.person,
-          'serverId': table.tmp?.serverid ?? '',
-          'serverName': table.tmp?.servername ?? '',
-          'remark': table.tmp?.remark ?? '',
-          'saleid': table.tmp?.saleid ?? '',
-          'tableJson': table.toJson(),
-        },
-      );
+    } else if (table.status == TableStatus.waitingClear) {
+      // 待清台 → 清台确认弹窗（对齐 smdcapp operateTable case "4" → TableClearBottomDialog）
+      _showClearTableConfirmDialog(table);
+    }
+  }
+
+  /// 待清台桌台点击确认弹窗（对齐 smdcapp TableClearBottomDialog："确定要对XX进行清台吗？"）
+  Future<void> _showClearTableConfirmDialog(TableInfo table) async {
+    final bool confirmed = await ConfirmDialog.show(
+      context,
+      content: '确定要对${table.name}进行清台吗？',
+    );
+    if (confirmed && mounted) {
+      await _clearTable(table);
+    }
+  }
+
+  /// 清台（对齐 smdcapp TableDao.clearTable → 云服务 /sale/clearTable、主设备 /api/table/TableClear）
+  Future<void> _clearTable(TableInfo table) async {
+    final String saleid = table.tmp?.saleid ?? '';
+    if (saleid.isEmpty) {
+      Toast.show('该桌台不能清台！');
+      return;
+    }
+    try {
+      if (ConnectionManager.pcAlive) {
+        // 主设备模式：整桌台对象序列化上传（对齐 PCTableHttpUtil.clearTable）
+        final Map<String, dynamic> tableBean = TableDataUtils.buildFullTableBean(
+          rawJson: table.rawJson,
+          fallback: <String, dynamic>{
+            'tableid': table.tableid,
+            'name': table.name,
+            'code': table.code,
+          },
+        );
+        await requestForm(
+          HttpApi.pcClearTable,
+          <String, dynamic>{'tablemaster': jsonEncode(tableBean)},
+          masterDevice: true,
+        );
+      } else {
+        // 云服务模式：对齐 TableHttpUtil.clearTable(saleid, tableid, tableno)
+        await requestForm(HttpApi.clearTable, <String, dynamic>{
+          'saleid': saleid,
+          'tableid': table.tableid,
+          'tableno': table.code,
+        });
+      }
+      if (!mounted) {
+        return;
+      }
+      Toast.show('清台成功！');
+      TableEventBus.fireTableChanged();
+      _loadData();
+    } catch (_) {
+      if (mounted) {
+        Toast.show('清台失败，请重试！');
+      }
     }
   }
 

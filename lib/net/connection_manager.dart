@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:sp_util/sp_util.dart';
@@ -10,8 +11,8 @@ import 'package:sp_util/sp_util.dart';
 /// - 主设备模式（直连PC）：请求发往登录返回的 localhost 地址（如 http://192.168.8.47:9094）
 ///
 /// 模式判定（对齐 smdcapp SpUtils.getNetMode / getServerType）：
-/// - pcAlive：主设备是否可达，登录后由探活接口（GetHostSyncTime）核对 sid/spid 后置位
-/// - serverType：连接模式配置，0=不限（按 pcAlive 自动）1=仅主设备 2=仅云服务
+/// - pcAlive：业务是否走主设备，综合连接策略与探活结果判定
+/// - serverType：连接模式配置，0=不限 1=仅主设备 2=仅云服务
 class ConnectionManager {
   ConnectionManager._();
 
@@ -20,8 +21,26 @@ class ConnectionManager {
   //static const String debugLocalhostOverride = 'http://192.168.8.53:9094'; //林荣辉
   static const String debugLocalhostOverride = '';
 
-  /// 主设备是否可达（内存态，登录后由探活接口设置）
-  static bool pcAlive = false;
+  static bool _masterDeviceReachable = false;
+  static String? _activeServerType;
+
+  // 业务调用以 pcAlive 选路；仅主设备断线时仍须保留 PC 路由，禁止降级到云端。
+  static bool get pcAlive =>
+      isMasterOnly || (!isCloudOnly && _masterDeviceReachable);
+
+  static set pcAlive(bool alive) {
+    _masterDeviceReachable = alive;
+  }
+
+  static bool get masterDeviceReachable => _masterDeviceReachable;
+  static bool get sessionInitialized => _activeServerType != null;
+  static bool get isMasterOnly => _activeServerType == '1';
+  static bool get isCloudOnly => _activeServerType == '2';
+
+  static void beginSession() {
+    _activeServerType = getServerType();
+    _masterDeviceReachable = false;
+  }
 
   static final StreamController<void> _masterDeviceLostController =
       StreamController<void>.broadcast();
@@ -31,28 +50,38 @@ class ConnectionManager {
   /// 运行期间主设备接口请求发生网络层失败时广播，桌台页订阅后弹出连接失败提示弹窗。
   static Stream<void> get onMasterDeviceLost => _masterDeviceLostController.stream;
 
-  /// 标记主设备连接丢失（对齐 smdcapp GlobalEventListener.callFailed → post NetModeEvent）
-  ///
-  /// 仅当 [pcAlive] 由 true 翻转为 false 时广播一次，避免并发请求重复触发。
   static void notifyMasterDeviceLost() {
-    if (!pcAlive) {
+    if (!_masterDeviceReachable) {
       return;
     }
-    pcAlive = false;
+    _masterDeviceReachable = false;
     if (!_masterDeviceLostController.isClosed) {
       _masterDeviceLostController.add(null);
     }
   }
 
-  /// 网络连接模式：1=直连主设备 2=云服务
-  /// （暂不检测离线状态，后续可结合 connectivity_plus 返回 0=离线）
   static int getNetMode() => pcAlive ? 1 : 2;
 
-  /// 连接模式配置：0=不限 1=仅主设备 2=仅云服务
-  static String getServerType() => SpUtil.getString(Constant.serverType) ?? '0';
+  static bool get isServerTypeManaged =>
+      !kDebugMode && SpUtil.getString('ClientLinkModel') == '1';
 
-  static void setServerType(String type) {
+  static String getServerType() {
+    final String value = isServerTypeManaged
+        ? SpUtil.getString('ClientLinkModelValue') ?? '0'
+        : SpUtil.getString(Constant.serverType) ?? '0';
+    final String type = const <String>['0', '1', '2'].contains(value) ? value : '0';
+    if (isServerTypeManaged) {
+      SpUtil.putString(Constant.serverType, type);
+    }
+    return type;
+  }
+
+  static bool setServerType(String type) {
+    if (isServerTypeManaged) {
+      return false;
+    }
     SpUtil.putString(Constant.serverType, type);
+    return true;
   }
 
   /// 主设备地址（登录响应的 localhost 字段）
@@ -69,16 +98,16 @@ class ConnectionManager {
     SpUtil.putString(Constant.localhost, host);
   }
 
-  /// 解析业务请求的 base URL
-  ///
-  /// [masterDevice] 为 true 时优先返回主设备地址（需 pcAlive 且 localhost 有效），
-  /// 否则回退到云服务地址。登录类接口应始终走云服务（传 false）。
   static String resolveBaseUrl({bool masterDevice = false}) {
-    if (masterDevice && pcAlive) {
-      final String host = getLocalhost();
-      if (host.isNotEmpty && host.startsWith('http')) {
-        return host;
+    if (masterDevice) {
+      if (isCloudOnly) {
+        throw StateError('当前仅限云服务，不允许连接主设备');
       }
+      final String host = getLocalhost();
+      if (host.isEmpty || !host.startsWith('http')) {
+        throw StateError('主设备ip地址获取失败，请检查主设备');
+      }
+      return host;
     }
     return HttpApi.baseUrlYtt;
   }

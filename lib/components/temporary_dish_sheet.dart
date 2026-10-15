@@ -26,6 +26,7 @@ class TemporaryDishResult {
     required this.tpdscflag,
     required this.cookText,
     required this.cookExtra,
+    this.cookUnitExtra = 0,
     required this.remark,
     required this.goOrder,
   });
@@ -60,8 +61,11 @@ class TemporaryDishResult {
   /// 做法描述文本
   final String cookText;
 
-  /// 做法加价
+  /// 做法加价（整份加价 ptype=1）
   final double cookExtra;
+
+  /// 做法数量加价合计（ptype=2，单份口径，并入商品单价）
+  final double cookUnitExtra;
 
   /// 备注（自定义备注 + 快捷备注拼接，对齐 smdcapp etMark + remark）
   final String remark;
@@ -124,6 +128,7 @@ class _TemporaryDishSheetState extends State<TemporaryDishSheet> {
   /// 做法描述（对齐 smdcapp tv_cook）
   String _cookText = '';
   double _cookExtra = 0;
+  double _cookUnitExtra = 0;
 
   bool _submitting = false;
 
@@ -297,11 +302,13 @@ class _TemporaryDishSheetState extends State<TemporaryDishSheet> {
       unitPrice: price,
       specData: DishSpecData(cookdata: publicCooks),
       currentSpecText: _cookText,
+      quantity: double.tryParse(_numCtrl.text) ?? 1,
     );
     if (result != null && mounted) {
       setState(() {
         _cookText = result.cookText;
         _cookExtra = result.cookExtra;
+        _cookUnitExtra = result.unitExtra;
       });
     }
   }
@@ -554,6 +561,7 @@ class _TemporaryDishSheetState extends State<TemporaryDishSheet> {
       tpdscflag: _canDiscount ? 1 : 0,
       cookText: _cookText,
       cookExtra: _cookExtra,
+      cookUnitExtra: _cookUnitExtra,
       remark: remark,
       goOrder: type == 1,
     ));

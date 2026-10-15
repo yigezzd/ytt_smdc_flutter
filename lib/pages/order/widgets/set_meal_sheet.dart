@@ -386,6 +386,9 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
             specname: item.specid.isNotEmpty ? item.specname : '',
             sellprice: item.price,
             unit: item.unit,
+            // 厨打/杯贴标记（对齐 smdcapp CombHelper item.printflag/labelflag）
+            printflag: item.printflag,
+            labelflag: item.labelflag,
           ));
         }
       }

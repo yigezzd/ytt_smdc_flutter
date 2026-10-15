@@ -108,10 +108,13 @@ class PrintService {
   /// 下单后触发出品单/厨打（对齐 smdcapp upSaleMasterTmp printtype 参数）
   ///
   /// [printtype] 对应 printalltype: 3=出品单
+  /// [withLabel] 本批含杯贴商品（明细 labelflag==1）时，云打印模式随出品单
+  ///   补发杯贴(14)通知（对齐 smdcapp createPrintInfo 下单成功后默认附带杯贴票据）
   /// 在 order_confirm_page 下单成功后调用
   Future<bool> triggerCookPrint({
     required String saleid,
     required String billno,
+    bool withLabel = false,
   }) async {
     if (isPcPrint) {
       // PC模式：下单时 printtype 参数已传给主设备，主设备自动处理厨打
@@ -119,7 +122,12 @@ class PrintService {
       return true;
     }
     if (isCloudPrint) {
-      return cloudPrintNotice(saleid: saleid, billno: billno, opertype: '3');
+      final bool ok =
+          await cloudPrintNotice(saleid: saleid, billno: billno, opertype: '3');
+      if (withLabel) {
+        await cloudPrintNotice(saleid: saleid, billno: billno, opertype: '14');
+      }
+      return ok;
     }
     return false;
   }
@@ -204,6 +212,25 @@ class PrintService {
       return _pcPrintTempPayInfo(data);
     }
     return false;
+  }
+
+  /// 押金单打印/补打（对齐 smdcapp JYJPopup.PcSendPrint / YJOrderActivity：
+  /// PC 模式 POST /api/print/PrintDepositInfo，data=押金单 JSON）
+  Future<bool> printDeposit(String data) async {
+    if (!ConnectionManager.pcAlive) {
+      return false;
+    }
+    try {
+      await requestForm(
+        HttpApi.pcPrintDepositInfo,
+        <String, dynamic>{'data': data},
+        masterDevice: true,
+      );
+      return true;
+    } catch (e) {
+      Log.e('PrintService.printDeposit error: $e');
+      return false;
+    }
   }
 
   /// 交班打印（对齐 smdcapp PCSetApi /api/print/PrintHandOver）

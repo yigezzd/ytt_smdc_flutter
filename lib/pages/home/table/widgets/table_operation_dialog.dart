@@ -220,7 +220,14 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
       Toast.show('该桌台未开台，无押金记录');
       return;
     }
-    DepositSheet.showRecords(context, saleid: saleid);
+    DepositSheet.showRecords(
+      context,
+      saleid: saleid,
+      tableId: widget.table.tableid,
+      tableName: widget.table.name,
+      serverId: widget.table.tmp?.serverid ?? '',
+      serverName: widget.table.tmp?.servername ?? '',
+    );
   }
 
   /// 修改台桌信息（对齐 smdcapp TableOpenBottomDialog 修改模式）

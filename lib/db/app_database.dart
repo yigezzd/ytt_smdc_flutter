@@ -8,7 +8,7 @@ import 'package:sqflite/sqflite.dart';
 /// 仅 iOS/Android 使用：Web 平台通过 CashReconService 的 kIsWeb 分支隔离，
 /// 本类在 Web 上不执行任何操作（sqflite 仅 import 不会崩溃）。
 ///
-/// - 库名 catering.db（对齐 YttPhone DB_NAME），version 1，onCreate 建全部 15 张表
+/// - 库名 catering.db（对齐 YttPhone DB_NAME），version 2，onCreate 建全部 15 张表
 /// - 通用执行器对齐 SqlActuatorUtils：queryList/queryOne/insert/batchInsert
 ///   （insert 按表 PRAGMA 列名动态取值，多余键忽略；null/空串 → ''、数字原样）
 /// - 退出登录时 clearAll() 清空全部业务表
@@ -20,7 +20,7 @@ class AppDatabase {
   /// 数据库文件名（对齐 YttPhone DB_NAME）
   static const String dbName = 'catering.db';
 
-  static const int dbVersion = 1;
+  static const int dbVersion = 3;
 
   Database? _db;
 
@@ -57,6 +57,7 @@ class AppDatabase {
       path,
       version: dbVersion,
       onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
     );
     return _db!;
   }
@@ -64,6 +65,31 @@ class AppDatabase {
   Future<void> _onCreate(Database db, int version) async {
     for (final String sql in _createTableSqls) {
       await db.execute(sql);
+    }
+  }
+
+  /// 版本升级：v1 → v2 补齐 t_must_product 的 smdcapp MustProduct 字段
+  /// （specid/specname/mustqty，旧数据在下次全量下载后填充）
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      const List<String> columns = <String>[
+        'specid TEXT',
+        'specname TEXT',
+        'mustqty REAL',
+      ];
+      for (final String column in columns) {
+        try {
+          await db.execute('ALTER TABLE t_must_product ADD COLUMN $column');
+        } catch (_) {
+          // 列已存在时忽略
+        }
+      }
+    }
+    if (oldVersion < 3) {
+      // v2 → v3 补建 t_table_type
+      // （此前 _createTableSqls 漏建该表，数据交换写入与附加费查询均报 no such table
+      //  → 开台弹窗附加费选项为空、点击无响应；升级后由数据交换补充数据）
+      await db.execute(_tTableTypeSql);
     }
   }
 
@@ -120,10 +146,17 @@ class AppDatabase {
   }
 
   /// 清空全部业务表（退出登录时调用）
+  ///
+  /// 逐表 try/catch：个别未建表的表（如 sys_machine/sys_auth）跳过，
+  /// 避免单表 "no such table" 异常中断其后所有表的清空。
   Future<void> clearAll() async {
     final Database db = await database;
     for (final String table in tables) {
-      await db.delete(table);
+      try {
+        await db.delete(table);
+      } catch (e) {
+        debugPrint('清空表失败($table): $e');
+      }
     }
     _columnCache.clear();
     _numericColumnCache.clear();
@@ -200,6 +233,27 @@ class AppDatabase {
     }
     return v.toString();
   }
+
+  /// 桌台类型表・附加费建表 SQL（对齐 smdcapp TableType.kt，字段与 [TableTypeEntity] 一致）
+  ///
+  /// 该表注册在 [DbTableName.backendTables] 中由数据交换下载，但曾漏建于此，
+  /// 导致 "no such table: t_table_type"：附加费选项查询失败 → 开台弹窗附加费点不动、
+  /// 修改开台信息附加费恒显示"无"。onCreate 与 v3 升级共用此 SQL（IF NOT EXISTS 幂等）。
+  static const String _tTableTypeSql = '''
+    CREATE TABLE IF NOT EXISTS t_table_type (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT, createid TEXT, createname TEXT, createtime TEXT,
+      excesstime REAL, isort INTEGER, lowamt REAL, lowtype INTEGER, minsalesamtflag INTEGER,
+      name TEXT, operid TEXT, opername TEXT, reservationflag INTEGER,
+      serviceamt REAL, servicetype INTEGER, sid INTEGER, spid INTEGER,
+      status INTEGER, stopflag INTEGER, tabletypeid TEXT, trueflag INTEGER, updatetime TEXT,
+      starthour REAL, startamt REAL, overhour REAL, overamt REAL,
+      begintime TEXT, endtime TEXT, addhour REAL, addamt REAL, maxhour REAL, maxamt REAL,
+      remark TEXT, starthourtype INTEGER, overhourtype INTEGER, addhourtype INTEGER,
+      maxhourtype INTEGER, exceedtype INTEGER, freemin REAL, exceedmin1 REAL, exceedmin2 REAL,
+      calculatemin1 REAL, calculatemin2 REAL, automaticflag INTEGER, serviceamtflag INTEGER
+    )
+    ''';
 
   /// 建表 SQL（字段对齐 YttPhone room/entity，全部小写）
   static const List<String> _createTableSqls = <String>[
@@ -492,6 +546,8 @@ class AppDatabase {
       updatetime TEXT, operid TEXT, opername TEXT, isalltype INTEGER
     )
     ''',
+    // ──────────── 桌台类型表・附加费（对齐 TableType.kt）────────────
+    _tTableTypeSql,
     // ──────────── 附加费区间表（对齐 TablePricingModeTime.kt）────────────
     '''
     CREATE TABLE t_table_pricingmode_time (
@@ -627,6 +683,7 @@ class AppDatabase {
     CREATE TABLE t_must_product (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       spid INTEGER, sid INTEGER, billid TEXT, productid TEXT,
+      specid TEXT, specname TEXT, mustqty REAL,
       createtime TEXT, updatetime TEXT
     )
     ''',

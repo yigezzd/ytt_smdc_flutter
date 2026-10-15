@@ -6,6 +6,7 @@ import 'package:flutter_deer/components/spec_cook_sheet.dart';
 import 'package:flutter_deer/pages/order/order_models.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/pages/order/widgets/set_meal_sheet.dart';
+import 'package:flutter_deer/util/params_sp_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:sp_util/sp_util.dart';
 
@@ -266,7 +267,14 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
                         ),
                       ),
                       // 操作状态标记（对齐 smdcapp tvHang/tvBag 角标）
-                      if (item.isWeigh) _buildTag('称', const Color(0xFF722ED1)),
+                      // 二次称重（对齐 smdcapp ShoppingCartPopup2/DishesTagHelper：开启时
+                      // 称重菜显示 未称(红)/已称(绿)，未开启保留"称"标）
+                      if (ParamsSpUtils.isReweigh() && item.isWeigh)
+                        item.confirmQty > 0
+                            ? _buildTag('已称', const Color(0xFF00C15A))
+                            : _buildTag('未称', _kBrandRed)
+                      else if (item.isWeigh)
+                        _buildTag('称', const Color(0xFF722ED1)),
                       if (item.isSuspended) _buildTag('挂', const Color(0xFFFF8547)),
                       if (item.isGift) _buildTag('赠', const Color(0xFF00B42A)),
                       if (item.isDiscounted) _buildTag('折', _kBrandRed),
@@ -716,6 +724,8 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
       unitPrice: item.unitPrice,
       specData: specData,
       currentSpecText: item.specText,
+      currentCooks: item.cooks,
+      quantity: item.priceQty,
     );
     if (result == null || !mounted) return;
 
@@ -724,7 +734,8 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
     item.specText = specPrefix.isEmpty
         ? result.cookText
         : (result.cookText.isEmpty ? specPrefix : '$specPrefix、${result.cookText}');
-    item.extraPrice = result.cookExtra;
+    item.applyCookModify(wholeExtra: result.cookExtra, unitExtra: result.unitExtra);
+    item.cooks = List<SelectedCook>.from(result.cooks);
     _notifyChanged(item);
   }
 

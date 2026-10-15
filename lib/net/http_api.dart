@@ -207,6 +207,13 @@ class HttpApi {
   /// 主设备-更新沽清数据（对齐 smdcapp /api/productwarn/ReplaceProductWarnList）
   static const String pcReplaceProductWarnList = '/api/productwarn/ReplaceProductWarnList';
 
+  /// 云服务-获取做法沽清列表（对齐 smdcapp DishesApi /YttSvr/app/warn/findCookWarnList）
+  /// 参数：is_page=2, page=1, pagesize=5000
+  static const String findCookWarnList = '/warn/findCookWarnList';
+
+  /// 主设备-获取做法沽清列表（对齐 smdcapp DishesApi /api/cookwarn/GetCookWarnList）
+  static const String pcGetCookWarnList = '/api/cookwarn/GetCookWarnList';
+
   /// 云服务-必点菜（对齐 smdcapp /YttSvr/app/must/yxMust）
   static const String yxMust = '/must/yxMust';
 

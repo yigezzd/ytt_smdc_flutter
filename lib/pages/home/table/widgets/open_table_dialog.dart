@@ -43,8 +43,10 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
   String _serverId = '';
   String _serverName = '系统管理员';
 
-  /// 附加费选项与当前选中项（对齐 smdcapp TableOpenBottomV2Dialog.getFjf）
-  List<_FjfOption> _fjfOptions = const <_FjfOption>[];
+  /// 附加费选项与当前选中项（对齐 smdcapp TableOpenBottomV2Dialog.getFjf：
+  /// 列表恒含首项"无"，点击 tv_fjf 总是展开选项列表）
+  List<_FjfOption> _fjfOptions =
+      const <_FjfOption>[_FjfOption(id: '', name: '无')];
   String _fjfId = '';
   String _fjfName = '无';
 
@@ -92,14 +94,14 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
         _fjfId = selected.id;
         _fjfName = selected.name;
       });
-    } catch (_) {
-      // 本地表缺失时保持默认“无”
+    } catch (e) {
+      // 加载失败时保持默认"无"，但点击仍展开列表（对齐 smdcapp 点击总是响应）
+      debugPrint('附加费选项加载失败: $e');
     }
   }
 
   /// 选择附加费（对齐 smdcapp 点击 ll_fjf 切换选项列表）
   Future<void> _onPickFjf() async {
-    if (_fjfOptions.isEmpty) return;
     final _FjfOption? picked = await _FjfSelectSheet.show(
       context,
       options: _fjfOptions,

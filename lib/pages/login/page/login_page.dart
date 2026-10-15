@@ -230,11 +230,10 @@ class _LoginPageState extends State<LoginPage> {
       }
       // 保存参数配置（对齐 smdcapp LoginModel.handleResponse params 处理：
       // 清除旧参数 → 保存完整 JSON → 逐项存储 code→value，供业务按 code 直接读取）
-      if (data['params'] is List) {
-        final List<dynamic> paramsList = data['params'] as List<dynamic>;
-        SpUtil.putString(Constant.loginParamResp, json.encode(paramsList));
-        ParamsSpUtils.saveParams(paramsList);
-      }
+      final List<dynamic> paramsList =
+          data['params'] is List ? data['params'] as List<dynamic> : <dynamic>[];
+      SpUtil.putString(Constant.loginParamResp, json.encode(paramsList));
+      ParamsSpUtils.saveParams(paramsList);
 
       // 保存 verservicelist 及 615/612 标志（对齐 smdcapp: putVerService615/612）
       SpUtil.putBool(Constant.verservice615, false);
@@ -328,6 +327,22 @@ class _LoginPageState extends State<LoginPage> {
             mach['masterflag']?.toString() ?? '');
         SpUtil.putString(Constant.machClienttype,
             mach['clienttype']?.toString() ?? '');
+      }
+
+      ConnectionManager.beginSession();
+      if (!ConnectionManager.isCloudOnly) {
+        final bool alive = await checkMasterDeviceAlive();
+        if (ConnectionManager.isMasterOnly && !alive) {
+          await SpUtil.remove(Constant.token);
+          await SpUtil.remove(Constant.accessToken);
+          if (mounted) {
+            final String host = ConnectionManager.getLocalhost();
+            Toast.show(host.isEmpty || !host.startsWith('http')
+                ? '主设备ip地址获取失败，请检查主设备'
+                : '主设备连接失败，请重试');
+          }
+          return;
+        }
       }
 
       if (mounted) {
