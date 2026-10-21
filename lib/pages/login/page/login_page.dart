@@ -197,6 +197,7 @@ class _LoginPageState extends State<LoginPage> {
         'code': _employeeController.text,
         'pwd': _pwdController.text,
         'vcode': _buildNumber,
+        'newclient': 'IOS',
       };
     } else {
       // 快捷登录(手机号)：mobile=手机号, userid=多商户选择时传入, pwd=密码
@@ -205,6 +206,7 @@ class _LoginPageState extends State<LoginPage> {
         'userid': userid,
         'pwd': _phonePwdController.text,
         'vcode': _buildNumber,
+        'newclient': 'IOS',
       };
     }
 

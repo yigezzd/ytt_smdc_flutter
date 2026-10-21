@@ -160,7 +160,7 @@ class PromotionHelper {
         <String, dynamic>{
           'details': jsonEncode(details),
           'vipid': vipid,
-          'client': 'IOS',
+          'client': 'APP',
         },
         showError: false,
       );
@@ -253,7 +253,7 @@ class PromotionHelper {
           'details': jsonEncode(details),
           'billid': billid,
           'vipid': vipid,
-          'client': 'IOS',
+          'client': 'APP',
         },
         showError: false,
       );

@@ -161,12 +161,12 @@ Future<Map<String, dynamic>> request(
   // 构建外层请求体（公共参数 + params）
   // 仅当 params 为 Map 时注入 client 字段；字符串等原始值直接透传（如 getSupplierInfo 传 id）
   if (params is Map<String, dynamic>) {
-    params['client'] = 'IOS';
+    params['client'] = "WEBAPP";
   }
   final Map<String, dynamic> requestData = <String, dynamic>{
     'sid': sid.isNotEmpty ? sid : '0',
     'spid': spid.isNotEmpty ? spid : '0',
-    'client': 'IOS',
+    'client': 'WEBAPP',
     'token': token,
     'sign': '83690002',
     'requestId': DateTime.now().millisecondsSinceEpoch,
@@ -442,7 +442,7 @@ Future<Map<String, dynamic>> _buildSignedParams(
   final String machno = SpUtil.getString(Constant.machNo) ?? '';
   all['machno'] = machno.isNotEmpty ? machno : '0';
   all['opername'] = opername;
-  all['client'] = 'IOS';
+  all['client'] = 'APP';
   all['token'] = SpUtil.getString(Constant.token) ?? '';
   all['sid'] = sid;
   all['spid'] = spid;
@@ -451,7 +451,9 @@ Future<Map<String, dynamic>> _buildSignedParams(
   all['ip'] = ConnectionManager.getLocalhost();
   all['app_v_name'] = appVerName;
   all['temp_request_time'] = _formatNow();
-  all['newclient'] = 'YG';
+  // 业务参数可显式传 newclient 覆盖默认值（iOS 登录接口传 IOS）
+  final String newClient = formData['newclient']?.toString() ?? '';
+  all['newclient'] = newClient.isNotEmpty ? newClient : 'YG';
   all['uuid'] = DateTime.now().millisecondsSinceEpoch.toString();
 
   // key 字典序排序后拼接为 key=valuekey=value...（无分隔符）

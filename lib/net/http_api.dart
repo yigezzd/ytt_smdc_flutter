@@ -4,13 +4,15 @@ class HttpApi {
   static const String subscriptions = 'users/simplezhli/subscriptions';
   static const String upload = 'uuc/upload-inco';
 
-  /// 基础域名（正式环境）
-  static const String baseUrlYtt = 'https://yun.bypos.net/YttSvr/app';
-  // static const String baseUrlYtt = 'http://dev.bypos.net/YttSvr/app';
+  /// 基础域名（临时联调环境）
+  //static const String baseUrlYtt = 'http://192.168.8.52:9096/YttSvr/app';
+  // static const String baseUrlYtt = 'https://yun.bypos.net/YttSvr/app';
+   static const String baseUrlYtt = 'http://dev.bypos.net/YttSvr/app';
 
   /// 基础域名-根路径（不含 /app 前缀，用于 deposit/save、deposit/update 等接口）
-  static const String baseUrlYttRoot = 'https://yun.bypos.net/YttSvr';
-  // static const String baseUrlYttRoot = 'http://dev.bypos.net/YttSvr';
+  //static const String baseUrlYttRoot = 'http://192.168.8.52:9096/YttSvr';
+  // static const String baseUrlYttRoot = 'https://yun.bypos.net/YttSvr';
+   static const String baseUrlYttRoot = 'http://dev.bypos.net/YttSvr';
   
   /// 登录接口（表单编码 POST）
   static const String yttLogin = '/yttlogin';
