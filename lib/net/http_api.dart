@@ -4,15 +4,15 @@ class HttpApi {
   static const String subscriptions = 'users/simplezhli/subscriptions';
   static const String upload = 'uuc/upload-inco';
 
-  /// 基础域名（临时联调环境）
-  //static const String baseUrlYtt = 'http://192.168.8.52:9096/YttSvr/app';
-  // static const String baseUrlYtt = 'https://yun.bypos.net/YttSvr/app';
-   static const String baseUrlYtt = 'http://dev.bypos.net/YttSvr/app';
-
   /// 基础域名-根路径（不含 /app 前缀，用于 deposit/save、deposit/update 等接口）
-  //static const String baseUrlYttRoot = 'http://192.168.8.52:9096/YttSvr';
-  // static const String baseUrlYttRoot = 'https://yun.bypos.net/YttSvr';
-   static const String baseUrlYttRoot = 'http://dev.bypos.net/YttSvr';
+  /// 切换环境只需修改此常量：
+  /// - 本地联调：'http://192.168.8.52:9096/YttSvr'
+  /// - 生产环境：'https://yun.bypos.net/YttSvr'
+  /// - 测试环境：'http://dev.bypos.net/YttSvr'
+  static const String baseUrlYttRoot = 'http://dev.bypos.net/YttSvr';
+
+  /// 基础域名（含 /app 前缀，由 [baseUrlYttRoot] 拼接而来，无需单独修改）
+  static const String baseUrlYtt = '$baseUrlYttRoot/app';
   
   /// 登录接口（表单编码 POST）
   static const String yttLogin = '/yttlogin';
@@ -245,6 +245,9 @@ class HttpApi {
 
   /// 云服务-获取可并台桌台（对齐 smdcapp /YttSvr/app/sale/getCanUniTables）
   static const String getCanUniTables = '/sale/getCanUniTables';
+
+  /// 云服务-获取并台桌台明细（对齐 smdcapp /YttSvr/app/table/info/getUniTables）
+  static const String getUniTables = '/table/info/getUniTables';
 
   /// 主设备-获取可并台桌台（对齐 smdcapp /api/table/GetCanUniTables）
   static const String pcGetCanUniTables = '/api/table/GetCanUniTables';

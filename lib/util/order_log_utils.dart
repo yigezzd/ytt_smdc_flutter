@@ -86,7 +86,7 @@ class OrderLogUtils {
       final userStr = SpUtil.getString(Constant.user) ?? '';
       if (userStr.isNotEmpty) {
         final userMap = json.decode(userStr) as Map<String, dynamic>;
-        operid = userMap['userid']?.toString() ?? '';
+        operid = userMap['userid']?.toString() ?? userMap['id']?.toString() ?? '';
         opername = userMap['name']?.toString() ?? '';
       }
     } catch (_) {}
@@ -137,14 +137,14 @@ class OrderLogUtils {
     if (toUpload.isEmpty) return;
 
     try {
-      // POST /YttSvr/app/salelog/setLog，参数 data = JSON数组字符串
+      // POST /YttSvr/app/salelog/setLog，表单字段 data = JSON数组字符串
+      // 必须走 requestForm（表单编码 + 公共参数 + sign）：该接口为 YttSvr 表单协议，
+      // 用 JSON 封装时服务端取不到 sid/spid/token，会误报 retcode=-2 登录失效并踢回登录页
       final dataJson = json.encode(toUpload);
-      final result = await request(
+      final result = await requestForm(
         HttpApi.saleLogSetLog,
-        null,
-        false,
-        false,
-        dataJson,
+        <String, dynamic>{'data': dataJson},
+        showError: false,
       );
 
       final retcode = result['retcode'];

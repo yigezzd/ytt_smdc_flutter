@@ -10,8 +10,10 @@ import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/net/table_event_bus.dart';
 import 'package:flutter_deer/pages/home/table/table_models.dart';
+import 'package:flutter_deer/pages/home/table/table_repository.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
+import 'package:flutter_deer/util/permission_utils.dart';
 import 'package:flutter_deer/util/table_data_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:sp_util/sp_util.dart';
@@ -49,6 +51,18 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
   /// 开始点菜（对齐 smdcapp OperationPopup2.ll_dishes:
   /// 若 ClockTableFlag=="1" 则先锁台再进入点菜页）
   Future<void> _onStartOrder() async {
+    // R55：进入点菜前校验桌台是否已被其他设备操作（锁台/状态已变化）
+    if (await _checkTableConflict()) {
+      if (!mounted) return;
+      await ConfirmDialog.show(
+        context,
+        content: '桌台已被其他设备操作，请刷新桌台后重试',
+        singleButton: true,
+      );
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
+    if (!mounted) return;
     // 对齐 smdcapp: val qy_st = decodeString(QY_ST, "0"); if (qy_st == "1") st(1)
     final String clockFlag = SpUtil.getString('ClockTableFlag') ?? '0';
     if (clockFlag == '1') {
@@ -82,6 +96,34 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
         'tableJson': widget.table.toJson(),
       },
     );
+  }
+
+  /// 桌台冲突检测（R55）：主设备模式下取最新桌台状态，
+  /// 若已被锁或被其他设备改成其它状态，则提示后禁止进入。
+  Future<bool> _checkTableConflict() async {
+    if (!ConnectionManager.pcAlive) return false;
+    try {
+      final List<TableInfo> list = await TableRepository.fetchTableInfoList(
+        masterDevice: true,
+        areaid: widget.table.areaid,
+        tablestatus: '',
+      );
+      TableInfo? latest;
+      for (final TableInfo t in list) {
+        if (t.tableid == widget.table.tableid) {
+          latest = t;
+          break;
+        }
+      }
+      if (latest == null) return false;
+      final int latestLock = latest.tmp?.lockflag ?? 0;
+      final int localLock = widget.table.tmp?.lockflag ?? 0;
+      if (latestLock == 1 && localLock != 1) return true;
+      final int latestStatus = latest.tmp?.tablestatus ?? 0;
+      final int localStatus = widget.table.tmp?.tablestatus ?? 0;
+      if (latestStatus != localStatus) return true;
+    } catch (_) {}
+    return false;
   }
 
   /// 消台（对齐 smdcapp OperationPopup2.xt → TableCancelBottomDialog → TableDao.cancelTable）
@@ -292,6 +334,12 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
   ///
   /// 流程：获取可并台桌台列表 → 用户选择 → 调用 uniTable/TableUnion API
   Future<void> _onUniTable() async {
+    // R12：已有下单/开台记录的桌台不支持并台
+    final int srcStatus = widget.table.tmp?.tablestatus ?? 0;
+    if (srcStatus != 0) {
+      Toast.show('该桌台已开台/下单，不支持并台');
+      return;
+    }
     setState(() => _operating = true);
     try {
       final bool useMaster = ConnectionManager.pcAlive;
@@ -342,6 +390,18 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
 
       if (tables.isEmpty) {
         Toast.show('没有可并台的桌台');
+        return;
+      }
+      // R12：只允许与空闲桌台并台，已有下单记录的桌台过滤掉
+      tables = tables.where((Map<String, dynamic> t) {
+        final dynamic tmp = t['tmp'];
+        final int status = tmp is Map
+            ? int.tryParse(tmp['tablestatus']?.toString() ?? '0') ?? 0
+            : int.tryParse(t['tablestatus']?.toString() ?? '0') ?? 0;
+        return status == 0;
+      }).toList();
+      if (tables.isEmpty) {
+        Toast.show('没有可并台的空闲桌台');
         return;
       }
 
@@ -418,6 +478,8 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
   ///
   /// 流程：获取空闲桌台（排除当前桌台） → 用户选择目标桌 → 调用转台 API
   Future<void> _onChangeTable() async {
+    // R37：无转台权限禁止操作
+    if (!PermissionUtils.check(PermissionUtils.appTransferTable, '转台')) return;
     setState(() => _operating = true);
     try {
       final bool useMaster = ConnectionManager.pcAlive;

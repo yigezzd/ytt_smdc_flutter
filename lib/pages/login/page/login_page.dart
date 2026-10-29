@@ -14,6 +14,7 @@ import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/service/cash_recon_service.dart';
 import 'package:flutter_deer/util/params_sp_utils.dart';
 import 'package:flutter_deer/util/file_log_writer.dart';
+import 'package:flutter_deer/util/store_mode_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sp_util/sp_util.dart';
@@ -223,6 +224,8 @@ class _LoginPageState extends State<LoginPage> {
       SpUtil.putString(Constant.rolemap, json.encode(data['rolemap'] ?? {}));
       SpUtil.putString(Constant.allLoginData, json.encode(data));
 
+      // R29 对齐 smdcapp：登录只保存 rolemap，不在客户端用 rolemap 拒绝登录；
+      // 无权限场景由各操作入口的 PermissionUtils.check 拦截（R30-R40）。
       // 保存 store 信息
       if (data['store'] != null) {
         SpUtil.putString(Constant.store, json.encode(data['store']));
@@ -304,6 +307,17 @@ class _LoginPageState extends State<LoginPage> {
             0;
         SpUtil.putInt('spid', savedSpid);
         SpUtil.putInt('sid', savedSid);
+        // 商业模式（对齐 smdcapp saveStoreData: miniverflag 1=快餐 2=正餐）
+        final int miniverflag = int.tryParse(store['miniverflag']?.toString() ?? '') ?? 0;
+        if (miniverflag == 1 || miniverflag == 2) {
+          // 后台商业模式单独保存（对齐 smdcapp putStoremodel）：快餐商户无模式切换入口
+          StoreModeUtils.putBusinessStoreModel(miniverflag);
+        }
+        if (miniverflag == 1) {
+          StoreModeUtils.putCurrentStoreModel(StoreModeUtils.storeModelFast);
+        } else if (miniverflag == 2) {
+          StoreModeUtils.putCurrentStoreModel(StoreModeUtils.storeModelNormal);
+        }
       }
 
       // 保存 pstore（总店）功能标志（对齐 smdcapp LoginBean.pstore）
@@ -507,23 +521,39 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: ColoredBox(
-        color: Colours.app_main,
-        child: SafeArea(
-          child: Column(
-            children: [
-              // 顶部红色区域
-              _buildHeader(),
-              // 白色卡片登录区域（自适应内容高度，不延伸到底部）
-              _buildLoginCard(),
-            ],
+      body: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          // R4：登录背景改为备注2的菜品背景图
+          Image.asset(
+            'assets/images/login/login_bg_food.jpg',
+            fit: BoxFit.cover,
           ),
-        ),
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: <Color>[Color(0x99000000), Color(0x44000000)],
+              ),
+            ),
+          ),
+          SafeArea(
+            child: Column(
+              children: [
+                // 顶部区域
+                _buildHeader(),
+                // 白色卡片登录区域（自适应内容高度，不延伸到底部）
+                _buildLoginCard(),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  /// 顶部红色区域：欢迎语 + 应用名 + 版本号 + 右侧插画
+  /// 顶部区域：欢迎语 + 应用名 + 版本号
   Widget _buildHeader() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24.0, 40.0, 24.0, 24.0),
@@ -561,12 +591,6 @@ class _LoginPageState extends State<LoginPage> {
                 ),
               ],
             ),
-          ),
-          // 右侧插画区：与 smdcapp 一致的登录图片
-          Image.asset(
-            'assets/images/login/bg_login.png',
-            width: 110.0,
-            height: 110.0,
           ),
         ],
       ),
@@ -811,7 +835,7 @@ class _LoginPageState extends State<LoginPage> {
         setState(() {
           _rememberPwd = !_rememberPwd;
           if (!_rememberPwd) {
-            _clearCredentials();
+            _clearPasswords();
           }
         });
       },
@@ -943,46 +967,55 @@ class _LoginPageState extends State<LoginPage> {
   // ========== 记住密码相关 ==========
 
   void _saveCredentials() {
+    // 账号信息始终保留（对齐 smdcapp：取消记住密码只清除密码，不清空商户号/工号/手机号）
     if (_loginType == 1) {
       SpUtil.putString(Constant.rememberMerchantCode, _merchantController.text);
       SpUtil.putString(Constant.rememberMerchantAccount, _employeeController.text);
-      SpUtil.putString(Constant.rememberMerchantPwd, _pwdController.text);
+      if (_rememberPwd) {
+        SpUtil.putString(Constant.rememberMerchantPwd, _pwdController.text);
+      } else {
+        SpUtil.remove(Constant.rememberMerchantPwd);
+      }
     } else {
       SpUtil.putString(Constant.rememberPhone, _phoneController.text);
-      SpUtil.putString(Constant.rememberPhonePwd, _phonePwdController.text);
+      if (_rememberPwd) {
+        SpUtil.putString(Constant.rememberPhonePwd, _phonePwdController.text);
+      } else {
+        SpUtil.remove(Constant.rememberPhonePwd);
+      }
     }
     SpUtil.putString(Constant.rememberLoginType, _loginType.toString());
   }
 
   void _restoreCredentials() {
+    // 账号始终回填；密码仅在勾选"记住密码"时回填
     if (_loginType == 1) {
       _merchantController.text = SpUtil.getString(Constant.rememberMerchantCode) ?? '';
       _employeeController.text = SpUtil.getString(Constant.rememberMerchantAccount) ?? '';
-      _pwdController.text = SpUtil.getString(Constant.rememberMerchantPwd) ?? '';
+      _pwdController.text = _rememberPwd
+          ? (SpUtil.getString(Constant.rememberMerchantPwd) ?? '')
+          : '';
     } else {
       _phoneController.text = SpUtil.getString(Constant.rememberPhone) ?? '';
-      _phonePwdController.text = SpUtil.getString(Constant.rememberPhonePwd) ?? '';
+      _phonePwdController.text = _rememberPwd
+          ? (SpUtil.getString(Constant.rememberPhonePwd) ?? '')
+          : '';
     }
   }
 
-  void _clearCredentials() {
+  /// 取消"记住密码"时只清除密码，保留账号（商户号/工号/手机号）
+  void _clearPasswords() {
     if (_loginType == 1) {
-      SpUtil.remove(Constant.rememberMerchantCode);
-      SpUtil.remove(Constant.rememberMerchantAccount);
       SpUtil.remove(Constant.rememberMerchantPwd);
     } else {
-      SpUtil.remove(Constant.rememberPhone);
       SpUtil.remove(Constant.rememberPhonePwd);
     }
   }
 
   void _saveOrClearCredentials() {
     SpUtil.putBool(Constant.rememberPwdEnabled, _rememberPwd);
-    if (_rememberPwd) {
-      _saveCredentials();
-    } else {
-      _clearCredentials();
-    }
+    // 无论是否记住密码都保存账号，密码是否保存由 _saveCredentials 内部判断
+    _saveCredentials();
   }
 
   /// 动态加载版本号

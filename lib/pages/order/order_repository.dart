@@ -62,6 +62,8 @@ class DishProduct {
     this.sellclearflag = 0,
     this.recommendflag = 0,
     this.stockqty = 0,
+    this.stopflag = 0,
+    this.status = 1,
     this.isort = 0,
     this.typeproisort = 0,
     this.mprice1 = 0,
@@ -73,6 +75,7 @@ class DishProduct {
     this.pointflag = 0,
     this.minsaleflag = 1,
     this.presentflag = 0,
+    this.chooseqtyflag = 0,
     this.stockflag = 0,
     this.inprice = 0,
     this.startsellqty = 0,
@@ -106,6 +109,8 @@ class DishProduct {
       sellclearflag: _toInt(json['sellclearflag']),
       recommendflag: _toInt(json['recommendflag']),
       stockqty: _toDouble(json['stockqty']),
+      stopflag: _toInt(json['stopflag']),
+      status: json['status'] == null ? 1 : _toInt(json['status']),
       isort: _toInt(json['isort']),
       typeproisort: _toInt(json['typeproisort']),
       mprice1: _toDouble(json['mprice1']),
@@ -117,6 +122,7 @@ class DishProduct {
       pointflag: _toInt(json['pointflag']),
       minsaleflag: _toInt(json['minsaleflag']) == 0 ? 0 : 1,
       presentflag: _toInt(json['presentflag']),
+      chooseqtyflag: _toInt(json['chooseqtyflag']),
       stockflag: _toInt(json['stockflag']),
       inprice: _toDouble(json['inprice']),
       startsellqty: _toDouble(json['startsellqty']),
@@ -166,6 +172,21 @@ class DishProduct {
   /// 沽清库存数量
   final double stockqty;
 
+  /// 停用标识（对齐 smdcapp ProductBean.stopflag）：1=停用
+  final int stopflag;
+
+  /// 启用状态（对齐 smdcapp ProductBean.status）：0=停用
+  final int status;
+
+  /// 是否已停用/下架，实时校验用
+  bool get isDisabled => stopflag == 1 || status == 0;
+
+  /// 当前是否在售卖时段内（R69/R70：不在时段内仍展示，点菜时提示）
+  bool saleTimeValid = true;
+
+  /// 不可售原因（空=可售）
+  String saleTimeText = '';
+
   final int isort;
   final int typeproisort;
 
@@ -198,6 +219,9 @@ class DishProduct {
 
   /// 可赠送标志（对齐 smdcapp presentflag）：1=可赠送
   final int presentflag;
+
+  /// 点菜时选择数量（对齐 smdcapp chooseqtyflag）：1=下单前需输入数量
+  final int chooseqtyflag;
 
   /// 库存管理标志（对齐 smdcapp stockflag）：1=管库存
   final int stockflag;
@@ -955,16 +979,23 @@ class OrderRepository {
     if (rows.isEmpty) {
       return <DishProduct>[];
     }
-    final List<DishProduct> result = rows
-        .where((Map<String, dynamic> r) =>
-            _toInt(r['stopflag']) == 0 &&
-            _toInt(r['status']) == 1 &&
-            _toInt(r['mobileshowflag']) == 1 &&
-            _isProductSaleTimeValid(r))
-        .map((Map<String, dynamic> r) => DishProduct.fromJson(r))
-        .toList()
-      ..sort((DishProduct a, DishProduct b) =>
-          a.typeproisort.compareTo(b.typeproisort));
+    final List<DishProduct> result = <DishProduct>[];
+    for (final Map<String, dynamic> r in rows) {
+      if (_toInt(r['stopflag']) != 0 ||
+          _toInt(r['status']) != 1 ||
+          _toInt(r['mobileshowflag']) != 1) {
+        continue;
+      }
+      // R69/R70：非售卖时段商品仍展示（smdcapp 会直接过滤，QA 要求展示并提示），
+      // 由点菜页在点选时给出不可售原因
+      final DishProduct p = DishProduct.fromJson(r);
+      final String? err = _productSaleTimeError(r);
+      p.saleTimeValid = err == null;
+      p.saleTimeText = err ?? '';
+      result.add(p);
+    }
+    result.sort((DishProduct a, DishProduct b) =>
+        a.typeproisort.compareTo(b.typeproisort));
     return result;
   }
 
@@ -975,73 +1006,69 @@ class OrderRepository {
   /// 2. 周期 cycletype：2=每周（saleweek 按位标识，1=周一..7=周日），3=每月（salemonth 逗号分隔日期）
   /// 3. 日期 datetype==2：当天在 begindate~enddate 之内
   /// 4. 时段 timetype==2：当前 HH:mm 命中 saletime “10:00-16:30|17:30-18:29” 任一段
-  static bool _isProductSaleTimeValid(Map<String, dynamic> p) {
-    // 1. 基础状态校验
+  /// 返回 null 表示可售，否则返回不可售原因
+  static String? _productSaleTimeError(Map<String, dynamic> p) {
     if (_toInt(p['stopflag']) == 1 || _toInt(p['status']) == 0) {
-      return false;
+      return '商品已停售';
     }
     final DateTime now = DateTime.now();
 
-    // 2. 周期校验
     final int cycletype = _toInt(p['cycletype']);
     if (cycletype == 2) {
-      // 每周：saleweek 为 7 位标识串，下标 = weekday-1（DateTime.weekday: 1=周一..7=周日）
       final String saleweek = p['saleweek']?.toString() ?? '';
       if (saleweek.isNotEmpty) {
         final int idx = now.weekday - 1;
         if (idx >= saleweek.length || saleweek[idx] != '1') {
-          return false;
+          return '今天不可售';
         }
       }
     } else if (cycletype == 3) {
-      // 每月：salemonth 逗号分隔日期，如 "9,15,19"
       final String salemonth = p['salemonth']?.toString() ?? '';
       if (salemonth.isNotEmpty) {
-        final int currentDay = now.day;
         final bool match = salemonth
             .split(',')
-            .any((String d) => int.tryParse(d.trim()) == currentDay);
+            .any((String d) => int.tryParse(d.trim()) == now.day);
         if (!match) {
-          return false;
+          return '今天不可售';
         }
       }
     }
 
-    // 3. 日期区间校验（datetype==2 指定日期）
     if (_toInt(p['datetype']) == 2) {
       final String begin = _datePart(p['begindate']);
       final String end = _datePart(p['enddate']);
       final String currentDay = _formatDay(now);
-      if (begin.isNotEmpty && end.isNotEmpty &&
+      if (begin.isNotEmpty &&
+          end.isNotEmpty &&
           (currentDay.compareTo(begin) < 0 || currentDay.compareTo(end) > 0)) {
-        return false;
+        return '不在可售日期内';
       }
     }
 
-    // 4. 时段区间校验（timetype==2 指定时段）
     if (_toInt(p['timetype']) == 2) {
       final String saletime = p['saletime']?.toString() ?? '';
       if (saletime.isNotEmpty) {
         final int currentMinutes = now.hour * 60 + now.minute;
         final bool inRange = saletime.split('|').any((String slot) {
+          if (slot.trim().isEmpty || slot.contains('undefined')) return false;
           final List<String> range = slot.split('-');
-          if (range.length != 2) {
-            return false;
-          }
+          if (range.length != 2) return false;
           final int? start = _parseHHmm(range[0]);
           final int? end = _parseHHmm(range[1]);
-          if (start == null || end == null) {
-            return false;
-          }
+          if (start == null || end == null) return false;
           return currentMinutes >= start && currentMinutes <= end;
         });
         if (!inRange) {
-          return false;
+          return '不在可售时段（$saletime）';
         }
       }
     }
-    return true;
+    return null;
   }
+
+  /// 兼容旧调用：是否在售卖时段内
+  static bool _isProductSaleTimeValid(Map<String, dynamic> p) =>
+      _productSaleTimeError(p) == null;
 
   /// 取日期字符串的日期部分（yyyy-MM-dd），兼容空值与带时间部分的值
   static String _datePart(dynamic v) {
@@ -1058,14 +1085,14 @@ class OrderRepository {
     return '${d.year}-${two(d.month)}-${two(d.day)}';
   }
 
-  /// 解析 "HH:mm" 为分钟数，失败返回 null
+  /// 解析 "HH:mm"/"HH:mm:ss" 为分钟数，失败返回 null
   static int? _parseHHmm(String s) {
     final List<String> parts = s.trim().split(':');
-    if (parts.length != 2) {
+    if (parts.length < 2) {
       return null;
     }
-    final int? h = int.tryParse(parts[0]);
-    final int? m = int.tryParse(parts[1]);
+    final int? h = int.tryParse(parts[0].trim());
+    final int? m = int.tryParse(parts[1].trim());
     if (h == null || m == null) {
       return null;
     }
@@ -1169,6 +1196,83 @@ class OrderRepository {
       }
     }
     return <DishProduct>[];
+  }
+
+  /// 实时校验用：强制走云服务实时接口，包含已停用/隐藏商品。
+  ///
+  /// 点菜/下单前用于校验「Web 端刚停用或改价」的菜品：
+  /// - stopflag 传空取全部（含停用），避免停用商品被过滤后无法识别；
+  /// - 主设备模式也强制走实时接口，不能用本地 t_bi_product 旧缓存。
+  static Future<List<DishProduct>> fetchProductsForValidation({
+    String typeid = '',
+    String areaid = '',
+  }) async {
+    final Map<String, dynamic> params = <String, dynamic>{
+      'typeid': typeid,
+      'multicontent': '',
+      'proandcomb': '1',
+      'stopflag': '',
+      'page': '1',
+      'pagesize': '9999',
+      'scansearchflag': '1',
+      'smdcflag': '1',
+      'prosepcflag': '1',
+      'recommendflag': '',
+      'sellclearflag': '1',
+      'mobileshowflag': '',
+      'field': 'typeproisort',
+      'type': 'ASC',
+      'areaid': areaid,
+    };
+
+    final Map<String, dynamic> resp = await requestForm(
+      HttpApi.getProductList,
+      params,
+      showError: false,
+    );
+
+    final dynamic data = resp['data'] ?? resp['Data'];
+    if (data is Map) {
+      final dynamic list = data['list'];
+      if (list is List) {
+        return list
+            .whereType<Map<dynamic, dynamic>>()
+            .map((Map<dynamic, dynamic> e) =>
+                DishProduct.fromJson(e.cast<String, dynamic>()))
+            .toList();
+      }
+    }
+    return <DishProduct>[];
+  }
+
+  /// 实时库存校验（对齐 smdcapp /YttSvr/app/sale/checkOrderStock）
+  ///
+  /// [details] 为待下单明细（_buildDetailList 结果）。
+  /// 返回库存不足的明细 errlist；接口失败返回 null（不阻断下单，对齐 smdcapp fail-open）。
+  static Future<List<Map<String, dynamic>>?> checkOrderStock(
+    List<Map<String, dynamic>> details,
+  ) async {
+    if (details.isEmpty) return <Map<String, dynamic>>[];
+    try {
+      final Map<String, dynamic> resp = await requestForm(
+        HttpApi.checkOrderStock,
+        <String, dynamic>{'saledetail': jsonEncode(details)},
+        showError: false,
+      );
+      final dynamic data = resp['data'] ?? resp['Data'];
+      if (data is Map) {
+        final dynamic errlist = data['errlist'];
+        if (errlist is List) {
+          return errlist.whereType<Map<dynamic, dynamic>>().map((Map<dynamic, dynamic> e) {
+            return e.cast<String, dynamic>();
+          }).toList();
+        }
+        return <Map<String, dynamic>>[];
+      }
+      return <Map<String, dynamic>>[];
+    } catch (_) {
+      return null;
+    }
   }
 
   /// 获取商品规格和做法（对齐 smdcapp ProductModel.getProductCookSpec）
@@ -1531,12 +1635,22 @@ class OrderRepository {
   /// 查询会员列表（对齐 smdcapp SettleApi /YttSvr/app/vip/getList）
   ///
   /// [cond] 搜索条件（卡号/姓名/手机号）
+  /// [vipid] 会员ID（对齐 smdcapp VipListRequest.vipid：独立查询参数，
+  /// 不能塞进 cond，否则按 vipid 查询会返回空列表）
   /// 返回会员列表，失败时返回空列表
-  static Future<List<VipMember>> fetchVipList(String cond) async {
+  static Future<List<VipMember>> fetchVipList(
+    String cond, {
+    String vipid = '',
+  }) async {
     final Map<String, dynamic> params = <String, dynamic>{
       'cardstatus': '1',
       'cond': cond,
       'sids': '0',
+      'spid': _currentSidSpid()[1],
+      'sid': _currentSidSpid()[0],
+      'page': '1',
+      'pagesize': '20',
+      if (vipid.isNotEmpty) 'vipid': vipid,
     };
 
     final Map<String, dynamic> resp = await requestForm(
@@ -1557,6 +1671,18 @@ class OrderRepository {
       }
     }
     return <VipMember>[];
+  }
+
+  /// 按 vipid 查询完整会员信息（含 prefetype/discount 等定价字段）
+  ///
+  /// 桌台 tmp 只存 vipid/vipname 基础信息，会员价计算前必须回查完整信息。
+  static Future<VipMember?> fetchVipByVipid(String vipid) async {
+    if (vipid.isEmpty) return null;
+    final List<VipMember> list = await fetchVipList('', vipid: vipid);
+    for (final VipMember m in list) {
+      if (m.vipid == vipid) return m;
+    }
+    return list.isNotEmpty ? list.first : null;
   }
 
   /// 更新桌台会员信息（对齐 smdcapp OrderModel.updateMasterTmp）
@@ -1609,11 +1735,16 @@ class OrderRepository {
         masterDevice: true,
       );
     } else {
-      // 云服务模式：对齐 smdcapp DishesApi /YttSvr/app/sale/updateMasterTmp
+      // 云服务模式：对齐 smdcapp TableApi.updateMasterTmp
+      // 必须带 tablename/unitableid/printtype，否则服务端更新整单备注不生效（R43）
+      final Map<String, dynamic> tmp =
+          tableJson?['tmp'] as Map<String, dynamic>? ?? <String, dynamic>{};
       final Map<String, dynamic> params = <String, dynamic>{
         'saleid': saleid,
         'tableid': tableid,
         'tablecode': tablecode,
+        'tablename': tableJson?['name']?.toString() ?? '',
+        'unitableid': tmp['unitableid']?.toString() ?? '',
         'remark': remark,
         'personnum': personnum,
         'serverid': serverid,
@@ -1622,6 +1753,7 @@ class OrderRepository {
         'vipno': vipno,
         'vipname': vipname,
         'vipmobile': vipmobile,
+        'printtype': '-1',
         'ywtype': '2',
       };
       return requestForm(
@@ -1889,6 +2021,9 @@ class OrderRepository {
               }
             }
           }
+          double mustQty = _toDouble(mp['mustqty']);
+          if (mustQty <= 0) mustQty = _toDouble(mp['mustnum']);
+          if (mustQty <= 0) mustQty = _toDouble(mp['qty']);
           infoList.add(<String, dynamic>{
             'productid': pid,
             'name': p['name']?.toString() ?? '',
@@ -1897,7 +2032,7 @@ class OrderRepository {
             'specname': mp['specname']?.toString() ?? '',
             'combflag': _toInt(p['combflag']),
             // 必点菜配置数量（对齐 smdcapp MustProduct.mustqty → MustBean.mustproductlist.mustqty）
-            'mustqty': _toDouble(mp['mustqty']),
+            'mustqty': mustQty > 0 ? mustQty : 1.0,
           });
         }
         result.add(<String, dynamic>{
@@ -1962,15 +2097,39 @@ class OrderRepository {
       );
       final dynamic data = resp['data'] ?? resp['Data'];
       if (data is List) {
-        return data.whereType<Map<String, dynamic>>().toList();
+        return data
+            .whereType<Map<String, dynamic>>()
+            .map(_normalizeMustGroup)
+            .toList();
       } else if (data is Map<String, dynamic>) {
         final dynamic list = data['list'];
         if (list is List) {
-          return list.whereType<Map<String, dynamic>>().toList();
+          return list
+              .whereType<Map<String, dynamic>>()
+              .map(_normalizeMustGroup)
+              .toList();
         }
       }
     } catch (_) {}
     return <Map<String, dynamic>>[];
+  }
+
+  /// 归一化云接口必点菜商品数量字段（mustqty/mustnum/qty 兼容，缺省 1）
+  static Map<String, dynamic> _normalizeMustGroup(Map<String, dynamic> group) {
+    final dynamic rawList = group['mustproductlist'];
+    if (rawList is! List) return group;
+    final List<Map<String, dynamic>> list = <Map<String, dynamic>>[];
+    for (final dynamic raw in rawList) {
+      if (raw is! Map) continue;
+      final Map<String, dynamic> item = raw.cast<String, dynamic>();
+      double qty = _toDouble(item['mustqty']);
+      if (qty <= 0) qty = _toDouble(item['mustnum']);
+      if (qty <= 0) qty = _toDouble(item['qty']);
+      item['mustqty'] = qty > 0 ? qty : 1.0;
+      list.add(item);
+    }
+    group['mustproductlist'] = list;
+    return group;
   }
 
   /// 获取桌台保存的未落单菜品（对齐 smdcapp DishesHttpUtilPC.getSaveProductList）

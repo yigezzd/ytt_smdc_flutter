@@ -115,6 +115,8 @@ class OrderRouter implements IRouterProvider {
         memberArrearages: (args['memberArrearages'] as num?)?.toDouble() ?? 0,
         memberNowmoney: (args['memberNowmoney'] as num?)?.toDouble() ?? 0,
         memberPrefetype: (args['memberPrefetype'] as num?)?.toInt() ?? 0,
+        memberDiscount: (args['memberDiscount'] as num?)?.toInt() ?? 100,
+        autoZanjie: args['autoZanjie'] as bool? ?? false,
       );
     }));
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -16,6 +17,8 @@ import 'package:flutter_deer/db/entity/table_type_entity.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
+import 'package:flutter_deer/net/table_event_bus.dart';
+import 'package:flutter_deer/pages/order/nth_discount_manager.dart';
 import 'package:flutter_deer/pages/order/order_models.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/pages/order/promotion_manager.dart';
@@ -25,9 +28,13 @@ import 'package:flutter_deer/pages/order/widgets/set_meal_sheet.dart';
 import 'package:flutter_deer/pages/order/widgets/time_price_sheet.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
+import 'package:flutter_deer/setting/setting_router.dart';
 import 'package:flutter_deer/util/device_utils.dart';
+import 'package:flutter_deer/util/member_price_utils.dart';
 import 'package:flutter_deer/util/params_sp_utils.dart';
+import 'package:flutter_deer/util/permission_utils.dart';
 import 'package:flutter_deer/util/store_mode_utils.dart';
+import 'package:flutter_deer/util/table_concurrency_guard.dart';
 import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:flutter_deer/util/user_helper.dart';
@@ -52,6 +59,14 @@ const String _kRecommendTypeId = '000000';
 
 /// 底部购物车栏内容高度（不含 SafeArea，供列表底部预留）
 const double _kCartBarHeight = 58.0;
+
+/// 商品实时快照（加购前校验停用/改价，2 秒内复用同一分类结果）
+class _RealtimeProductSnapshot {
+  _RealtimeProductSnapshot(this.at, this.products);
+
+  final DateTime at;
+  final Map<String, DishProduct> products;
+}
 
 /// 点菜页（对齐 smdcapp 正餐点餐界面）
 ///
@@ -119,6 +134,9 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   /// 购物车
   final List<CartItem> _cartItems = <CartItem>[];
 
+  /// 桌台绑定会员（用于会员价计算，R11/R26/R49）
+  VipMember? _member;
+
   /// 商品数量缓存 Map（productid → 数量），O(1) 查询代替 O(n) 遍历
   final Map<String, int> _productCountMap = <String, int>{};
 
@@ -161,6 +179,22 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   /// 必点菜规则缓存（对齐 smdcapp mustBean，修改人数后 checkMust 复用）
   List<Map<String, dynamic>> _mustGroups = <Map<String, dynamic>>[];
 
+  /// 商品实时快照（R4/R6：按分类缓存最新商品状态与价格，2 秒内复用）
+  final Map<String, _RealtimeProductSnapshot> _realtimeSnapshots =
+      <String, _RealtimeProductSnapshot>{};
+
+  /// 沽清实时快照时间（R5）
+  DateTime? _warnSnapshotAt;
+
+  /// 锁台事件订阅（R2）
+  StreamSubscription<Map<String, dynamic>>? _lockSubscription;
+
+  String get _currentSaleid {
+    final String tmpSaleid =
+        widget.tableJson?['tmp']?['saleid']?.toString() ?? '';
+    return tmpSaleid.isNotEmpty ? tmpSaleid : widget.saleid;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -173,11 +207,27 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       duration: const Duration(milliseconds: 300),
     );
     _listScrollController.addListener(_onListScroll);
+    // R30：无点菜权限不允许进入点菜页
+    if (!PermissionUtils.check(PermissionUtils.appDishes, '点菜')) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.of(context).pop();
+      });
+      return;
+    }
+    _autoLockTable();
+    _lockSubscription = TableConcurrencyGuard.listenLockEvent(
+      context: context,
+      saleid: _currentSaleid,
+      tableName: widget.tableName,
+      onExit: _onLockedByOtherExit,
+    );
     _loadData();
   }
 
   @override
   void dispose() {
+    _lockSubscription?.cancel();
+    _releaseTableLock();
     _listScrollController.removeListener(_onListScroll);
     _listScrollController.dispose();
     _categoryScrollController.dispose();
@@ -185,6 +235,43 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     _activeCategoryIndex.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// 进入点菜页自动锁台（对齐 smdcapp DishesHomeAct2：tmp.lockflag==0 时 postTableLock(1)）
+  Future<void> _autoLockTable() async {
+    if (widget.fastMode || widget.tableId.isEmpty) return;
+    if (!TableConcurrencyGuard.lockEnabled) return;
+    final dynamic tmp = widget.tableJson?['tmp'];
+    final int lockflag =
+        tmp is Map ? int.tryParse(tmp['lockflag']?.toString() ?? '') ?? 0 : 0;
+    if (lockflag == 1) return;
+    final bool ok = await TableConcurrencyGuard.postTableLock(
+      tableId: widget.tableId,
+      lock: true,
+      tableJson: widget.tableJson,
+      autoflag: 1,
+    );
+    if (!ok || !mounted) return;
+    if (tmp is Map) tmp['lockflag'] = 1;
+    TableEventBus.fireTableChanged();
+  }
+
+  /// 退出点菜页自动解锁（对齐 smdcapp finishView：postTableLock(0)）
+  void _releaseTableLock() {
+    if (widget.fastMode || widget.tableId.isEmpty) return;
+    if (!TableConcurrencyGuard.lockEnabled) return;
+    TableConcurrencyGuard.postTableLock(
+      tableId: widget.tableId,
+      lock: false,
+      tableJson: widget.tableJson,
+      autoflag: 1,
+    );
+  }
+
+  void _onLockedByOtherExit() {
+    if (!mounted) return;
+    Navigator.of(context).popUntil((Route<dynamic> route) => route.isFirst);
+    TableEventBus.fireTableChanged();
   }
 
   // ==================== 数据加载 ====================
@@ -243,12 +330,12 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         grouped[_kRecommendTypeId] = recommendProducts;
       }
 
-      // 过滤掉没有商品的分类
+      // R5：保留后台全部分类（含暂无菜品的分类，仅展示分类标题不展示占位区），
+      // 避免分类被过滤后看起来"菜不见了"
       final List<DishCategory> validCategories = <DishCategory>[
         if (recommendProducts.isNotEmpty)
           DishCategory(typeid: _kRecommendTypeId, name: '推荐菜'),
-        ...categories.where((DishCategory c) =>
-            grouped.containsKey(c.typeid) && grouped[c.typeid]!.isNotEmpty),
+        ...categories,
       ];
 
       if (!mounted) return;
@@ -293,6 +380,28 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     await _initMustDishes();
     await _restoreSavedCart();
     _applyPromotionsToCart();
+    await _loadMemberAndApply();
+    _applyNthDiscount();
+  }
+
+  /// 加载桌台会员并按会员价重算购物车（R11/R26/R49）
+  Future<void> _loadMemberAndApply() async {
+    final Map<String, dynamic>? tmp =
+        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final String vipid = tmp?['vipid']?.toString() ?? '';
+    if (vipid.isEmpty) return;
+    try {
+      _member = await OrderRepository.fetchVipByVipid(vipid);
+      if (mounted) {
+        MemberPriceUtils.applyToItems(_cartItems, _member);
+        setState(() {});
+      }
+    } catch (_) {}
+  }
+
+  /// 重算第N份促销（对齐 smdcapp：每次购物车变更后 applyNthDiscount）
+  void _applyNthDiscount() {
+    NthDiscountManager.instance.apply(_cartItems);
   }
 
   /// 为购物车条目套用基础促销（对齐 smdcapp PriceEngine.isPromotion 分支）
@@ -345,7 +454,6 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       // 人数：优先取 tmp.personnum（对齐 smdcapp order.personnum）
       final int tmpPerson = _mustToInt(tmp?['personnum']);
       final int personNum = tmpPerson > 0 ? tmpPerson : _persons;
-      final int storemodel = StoreModeUtils.getCurrentStoreModel();
 
       final List<CartItem> addItems = <CartItem>[];
       for (final Map<String, dynamic> group in mustGroups) {
@@ -353,19 +461,21 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         if (_mustToInt(group['mustrule']) != 0) continue;
         final dynamic rawList = group['mustproductlist'];
         if (rawList is! List || rawList.isEmpty) continue;
-        // 对齐 smdcapp MustHelper.getFixedMandatoryItems：正餐且每人必点 → 人数，否则 1
-        final double requiredQty =
-            (storemodel == StoreModeUtils.storeModelNormal && _mustToInt(group['musttype']) == 0)
-                ? (personNum < 1 ? 1 : personNum).toDouble()
-                : 1.0;
+        // 对齐 smdcapp MustHelper：musttype==0 每人必点 → mustqty×人数；每单必点 → mustqty
+        final bool perPerson = _mustToInt(group['musttype']) == 0;
         for (final dynamic raw in rawList) {
           if (raw is! Map<String, dynamic>) continue;
           final String pid = raw['productid']?.toString() ?? '';
           if (pid.isEmpty) continue;
+          final double baseQty = _mustToDouble(raw['mustqty']) < 1
+              ? 1.0
+              : _mustToDouble(raw['mustqty']);
+          final double requiredQty =
+              perPerson ? baseQty * (personNum < 1 ? 1 : personNum) : baseQty;
           // 扣除购物车已有数量（对齐 smdcapp ProductMustValidator：退菜不计入）
           final double inCartQty = _cartItems
               .where((CartItem c) => c.product.id == pid && !c.isRefunded)
-              .fold(0.0, (double s, CartItem c) => s + c.quantity);
+              .fold(0.0, (double s, CartItem c) => s + c.qtyValue);
           final double gapQty = requiredQty - inCartQty;
           if (gapQty <= 0) continue;
           addItems.add(_mustProductToCartItem(raw, gapQty));
@@ -406,6 +516,9 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
             mprice2: dish.mprice2,
             mprice3: dish.mprice3,
             dscflag: dish.dscflag,
+            presentflag: dish.presentflag,
+            chooseqtyflag: dish.chooseqtyflag,
+            minsaleflag: dish.minsaleflag,
             printflag: dish.printflag,
             labelflag: dish.labelflag,
           )
@@ -422,6 +535,9 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     // 必点菜行 mustflag=1；mustType 由调用方指定（0=固定必点 / 1=可选必点）
     final CartItem item = CartItem(product: product, quantity: qty.toInt() < 1 ? 1 : qty.toInt());
     item.mustflag = 1;
+    item.typeid = dish?.typeid ?? raw['typeid']?.toString() ?? '';
+    item.typename = dish?.typename ?? raw['typename']?.toString() ?? '';
+    item.unit = dish?.unit ?? raw['unit']?.toString() ?? '';
     item.mustType = mustType;
     return item;
   }
@@ -457,26 +573,27 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         if (groups.isEmpty || !mounted) return;
         _mustGroups = groups;
       }
-      final int storemodel = StoreModeUtils.getCurrentStoreModel();
       setState(() {
         for (final Map<String, dynamic> group in groups) {
           // 仅固定必点菜（对齐 smdcapp mustrule == 0）
           if (_mustToInt(group['mustrule']) != 0) continue;
           final dynamic rawList = group['mustproductlist'];
           if (rawList is! List || rawList.isEmpty) continue;
-          // 规则要求数量（对齐 smdcapp：正餐且每人必点 → 人数，否则 1）
-          final double requiredQty =
-              (storemodel == StoreModeUtils.storeModelNormal && _mustToInt(group['musttype']) == 0)
-                  ? (newPersonnum < 1 ? 1 : newPersonnum).toDouble()
-                  : 1.0;
+          // 规则要求数量（对齐 smdcapp：每人必点 → mustqty×人数，每单必点 → mustqty）
+          final bool perPerson = _mustToInt(group['musttype']) == 0;
           for (final dynamic raw in rawList) {
             if (raw is! Map<String, dynamic>) continue;
             final String pid = raw['productid']?.toString() ?? '';
             if (pid.isEmpty) continue;
+            final double baseQty = _mustToDouble(raw['mustqty']) < 1
+                ? 1.0
+                : _mustToDouble(raw['mustqty']);
+            final double requiredQty =
+                perPerson ? baseQty * (newPersonnum < 1 ? 1 : newPersonnum) : baseQty;
             // 必点菜当前有效数量（统计口径对齐 smdcapp：mustflag==1，退菜不计）
             final double currentQty = _cartItems
                 .where((CartItem c) => c.product.id == pid && c.mustflag == 1 && !c.isRefunded)
-                .fold(0.0, (double s, CartItem c) => s + c.quantity);
+                .fold(0.0, (double s, CartItem c) => s + c.qtyValue);
             if (newPersonnum > oldPersonnum) {
               // 人数增加：补足差额（对齐 smdcapp mergeMustItems 优先合并到已有必点行）
               final double gapQty = requiredQty - currentQty;
@@ -511,6 +628,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
             }
           }
         }
+        _applyNthDiscount();
         _rebuildCountMap();
       });
       _cartBadgeController.forward(from: 0);
@@ -560,7 +678,10 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           final int index = _cartItems
               .indexWhere((CartItem c) => c.uniqueKey == item.uniqueKey);
           if (index >= 0) {
-            _cartItems[index].quantity += item.quantity;
+            final double totalQty =
+                _cartItems[index].qtyValue + item.qtyValue;
+            _cartItems[index].quantity = totalQty.floor();
+            _cartItems[index].extraQty = totalQty - totalQty.floor();
           } else {
             _cartItems.add(item);
           }
@@ -737,14 +858,27 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     item.isSuspended = _mustToInt(d['hangflag']) == 1;
     item.bagPrice = bagPrice;
     item.isBag = _mustToInt(d['bagstatus']) == 1 || item.bagPrice > 0;
+    // 报表需要的分类/单位字段（R2）：优先取保存快照，回退商品目录
+    item.typeid = (d['typeid']?.toString() ?? '').isNotEmpty
+        ? d['typeid'].toString()
+        : (dish?.typeid ?? '');
+    item.typename = (d['typename']?.toString() ?? '').isNotEmpty
+        ? d['typename'].toString()
+        : (dish?.typename ?? '');
+    item.unit = (d['unit']?.toString() ?? '').isNotEmpty
+        ? d['unit'].toString()
+        : (dish?.unit ?? '');
     // 恢复做法明细（下单/再次保存时转 cooklist 上传，杯贴打印用）
     item.cooks = parseSelectedCooks(d['cooklist'] ?? d['cookList']);
     final double discount = _mustToDouble(d['discount']);
     if (discount > 0 && discount < 100) {
       item.discount = discount;
     }
-    // 保存的现价与当前计算单价不一致且非折扣 → 按保存价改价还原
-    if (!item.isDiscounted &&
+    // 第N份促销行（specpriceflag=7）不按保存价还原为改价行，
+    // 还原为普通行后由 _applyNthDiscount 统一重算拆行（对齐 smdcapp mergeBack 重算口径）
+    final int savedSpf = _mustToInt(d['specpriceflag']);
+    if (savedSpf != 7 &&
+        !item.isDiscounted &&
         rrprice > 0 &&
         (rrprice - item.unitPrice).abs() > 0.005) {
       item.customPrice = rrprice;
@@ -846,8 +980,9 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
   // ==================== 购物车逻辑 ====================
 
-  int get _totalCount =>
-      _cartItems.fold(0, (int sum, CartItem item) => sum + item.quantity);
+  int get _totalCount => _cartItems
+      .fold<double>(0, (double sum, CartItem item) => sum + item.qtyValue)
+      .round();
 
   double get _totalPrice =>
       _cartItems.fold(0, (double sum, CartItem item) => sum + item.totalPrice);
@@ -863,11 +998,11 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     _categoryCountMap.clear();
     for (final CartItem item in _cartItems) {
       _productCountMap[item.product.id] =
-          (_productCountMap[item.product.id] ?? 0) + item.quantity;
+          (_productCountMap[item.product.id] ?? 0) + item.qtyValue.ceil();
       final String? typeid = _productTypeIdMap[item.product.id];
       if (typeid != null) {
         _categoryCountMap[typeid] =
-            (_categoryCountMap[typeid] ?? 0) + item.quantity;
+            (_categoryCountMap[typeid] ?? 0) + item.qtyValue.ceil();
       }
     }
   }
@@ -882,15 +1017,69 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     return _removeCallbacks.putIfAbsent(product.productid, () => () => _removeFromCart(product));
   }
 
+  /// 校验商品是否在可售时段（R69/R70：不在时段内展示但点选时提示）
+  bool _ensureSaleTime(DishProduct dish) {
+    if (dish.saleTimeValid) return true;
+    Toast.show('该商品${dish.saleTimeText.isEmpty ? '当前不可售' : dish.saleTimeText}');
+    return false;
+  }
+
   /// 加购（无规格商品）
   /// 对齐 smdcapp CartGoodsModel: setting_check_down_goods 开启时，重复点菜弹确认
   Future<void> _addToCart(DishProduct dish, {int? quantity, String specText = '', double extraPrice = 0}) async {
+    if (!_ensureSaleTime(dish)) return;
+    // R4/R5/R6：加购前拉取该分类最新商品与沽清状态，避免 Web 停用/改价/沽清后仍能点菜
+    await _refreshRealtimeSnapshot(dish.typeid);
+    if (!mounted) return;
+    final _RealtimeProductSnapshot? snapshot = _realtimeSnapshots[dish.typeid];
+    final DishProduct? latest = snapshot?.products[dish.productid];
+    if (snapshot != null && (latest == null || latest.isDisabled)) {
+      Toast.show('菜品【${dish.name}】已停用，无法点餐');
+      return;
+    }
+    final bool simpleDish = dish.specflag == 0 &&
+        dish.combflag == 0 &&
+        dish.weighflag == 0 &&
+        dish.curflag == 0;
+    final double? latestPrice = simpleDish ? latest?.sellprice : null;
     // 本单已点数量（限点校验 + 起售/增售判断共用）
     final double currentQty = _cartItems
         .where((CartItem item) => item.product.id == dish.productid)
-        .fold(0.0, (double sum, CartItem item) => sum + item.quantity);
+        .fold(0.0, (double sum, CartItem item) => sum + item.qtyValue);
     // 起售/增售数量（对齐 smdcapp SelectProductFragment：首次加起售数量，之后加增售数量）
-    final int step = quantity ?? (currentQty <= 0 ? dish.startQty : dish.addQty).round();
+    int step = quantity ?? (currentQty <= 0 ? dish.startQty : dish.addQty).round();
+    // R67：菜品开启“点菜时选择数量”时先弹窗录入数量
+    if (dish.chooseqtyflag == 1 && quantity == null) {
+      final String? input = await InputDialog.show(
+        context,
+        title: dish.name,
+        hintText: '请输入数量',
+        initialValue: '${step < 1 ? 1 : step}',
+        maxLines: 1,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: <TextInputFormatter>[
+          FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,3}')),
+        ],
+        suffixText: dish.unit,
+        autoSelectAll: true,
+        submitOnEnter: true,
+      );
+      if (input == null || !mounted) return;
+      final double? qty = double.tryParse(input);
+      if (qty == null || qty <= 0) {
+        Toast.show('请输入正确数量');
+        return;
+      }
+      step = qty.round() < 1 ? 1 : qty.round();
+    }
+    // R5：沽清剩余数量实时校验（按商品维度；多规格商品在规格弹窗内校验）
+    if (simpleDish) {
+      final double? left = _guQingLeftMap[dish.productid];
+      if (left != null && currentQty + step > left) {
+        Toast.show('库存不足，剩余${_fmtQty(left)}');
+        return;
+      }
+    }
     // 限点校验（对齐 smdcapp DialogHelper: maxsellqty > 0 时检查本单已点数量）
     if (dish.maxsellqty > 0) {
       if (currentQty + step > dish.maxsellqty) {
@@ -914,12 +1103,21 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       }
     }
     final Product product = _toProduct(dish);
+    bool repriced = false;
+    if (latestPrice != null &&
+        (latestPrice - product.price).abs() > 0.005) {
+      product.price = latestPrice;
+      repriced = true;
+    }
     setState(() {
       final String key = '${product.id}_$specText';
-      // 必点菜行数量独立管理（对齐 smdcapp 必点行 mustflag=1 不参与普通加购合并）
-      final int index = _cartItems.indexWhere((CartItem item) => item.uniqueKey == key && item.mustflag != 1);
+      // 必点菜行数量独立管理（对齐 smdcapp 必点行 mustflag=1 不参与普通加购合并）；
+      // 第N份促销拆分行不参与合并，否则会把促销数量并入普通行
+      final int index = _cartItems.indexWhere((CartItem item) =>
+          item.uniqueKey == key && item.mustflag != 1 && !item.isNthPromo);
       if (index >= 0) {
         _cartItems[index].quantity += step;
+        if (repriced) _applyLatestPrice(_cartItems[index], latestPrice!);
       } else {
         final CartItem item = CartItem(
           product: product,
@@ -928,12 +1126,72 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           extraPrice: extraPrice,
         );
         item.typeid = dish.typeid;
+        item.typename = dish.typename;
+        item.unit = dish.unit;
         PromotionManager.instance.applyToCartItem(item);
+        MemberPriceUtils.applyToItem(item, _member);
         _cartItems.add(item);
       }
+      _applyNthDiscount();
       _rebuildCountMap();
     });
+    if (repriced) {
+      Toast.show('菜品【${dish.name}】价格已更新为 ¥${latestPrice!.toStringAsFixed(2)}');
+    }
     _cartBadgeController.forward(from: 0);
+  }
+
+  /// Web 改价后同步购物车行价格，并清掉基于旧价命中的促销后重新匹配
+  void _applyLatestPrice(CartItem item, double price) {
+    item.product.price = price;
+    item.jcmbillid = '';
+    item.specpriceflag = 0;
+    item.promoPrice = 0;
+    PromotionManager.instance.applyToCartItem(item);
+  }
+
+  /// 刷新分类商品与沽清实时快照（2 秒节流；接口失败时保留旧快照/不拦截）
+  Future<void> _refreshRealtimeSnapshot(String typeid) async {
+    final DateTime now = DateTime.now();
+    final _RealtimeProductSnapshot? cached = _realtimeSnapshots[typeid];
+    final bool productFresh = cached != null &&
+        now.difference(cached.at) < const Duration(seconds: 2);
+    if (!productFresh) {
+      try {
+        final List<DishProduct> products =
+            await OrderRepository.fetchProductsForValidation(typeid: typeid);
+        if (products.isNotEmpty) {
+          _realtimeSnapshots[typeid] = _RealtimeProductSnapshot(
+            now,
+            <String, DishProduct>{
+              for (final DishProduct p in products) p.productid: p,
+            },
+          );
+        }
+      } catch (_) {}
+    }
+    final bool warnFresh = _warnSnapshotAt != null &&
+        now.difference(_warnSnapshotAt!) < const Duration(seconds: 2);
+    if (warnFresh) return;
+    _warnSnapshotAt = now;
+    try {
+      final List<Map<String, dynamic>> warns =
+          await OrderRepository.fetchWarnList();
+      _guQingLeftMap.clear();
+      for (final Map<String, dynamic> w in warns) {
+        final String pid = w['productid']?.toString() ?? '';
+        if (pid.isEmpty) continue;
+        final String specid = w['specid']?.toString() ?? '';
+        // 规格级沽清交给规格弹窗校验，这里只缓存商品级剩余
+        if (specid.isNotEmpty) continue;
+        final double warnqty =
+            double.tryParse(w['warnqty']?.toString() ?? '0') ?? 0;
+        final double saleqty =
+            double.tryParse(w['saleqty']?.toString() ?? '0') ?? 0;
+        _guQingLeftMap[pid] = warnqty - saleqty;
+      }
+      if (mounted) setState(() {});
+    } catch (_) {}
   }
 
   /// 规格商品加购（对齐 smdcapp addCart 逻辑）
@@ -945,7 +1203,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     if (dish.maxsellqty > 0) {
       final double currentQty = _cartItems
           .where((CartItem item) => item.product.id == dish.productid)
-          .fold(0.0, (double sum, CartItem item) => sum + item.quantity);
+          .fold(0.0, (double sum, CartItem item) => sum + item.qtyValue);
       if (currentQty + quantity > dish.maxsellqty) {
         Toast.show('本单限点${_fmtQty(dish.maxsellqty)}${dish.unit}');
         return;
@@ -959,17 +1217,22 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       emoji: '🍜',
       gradient: const <Color>[Color(0xFFFFF1F0), Color(0xFFFFE7E3)],
       soldOut: dish.isSoldOut,
-      mprice1: dish.mprice1,
+      mprice1: data.mprice1 > 0 ? data.mprice1 : dish.mprice1,
       mprice2: dish.mprice2,
       mprice3: dish.mprice3,
       dscflag: dish.dscflag,
+      presentflag: dish.presentflag,
+      chooseqtyflag: dish.chooseqtyflag,
+      minsaleflag: dish.minsaleflag,
       printflag: dish.printflag,
       labelflag: dish.labelflag,
     );
     setState(() {
       final String key = '${product.id}_$specText';
-      // 必点菜行数量独立管理（对齐 smdcapp 必点行 mustflag=1 不参与普通加购合并）
-      final int index = _cartItems.indexWhere((CartItem item) => item.uniqueKey == key && item.mustflag != 1);
+      // 必点菜行数量独立管理（对齐 smdcapp 必点行 mustflag=1 不参与普通加购合并）；
+      // 第N份促销拆分行不参与合并
+      final int index = _cartItems.indexWhere((CartItem item) =>
+          item.uniqueKey == key && item.mustflag != 1 && !item.isNthPromo);
       if (index >= 0) {
         _cartItems[index].quantity += quantity;
       } else {
@@ -979,14 +1242,19 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           specText: specText,
           extraPrice: wholeExtra,
         );
+        item.unitCookExtra = data.unitExtra;
         item.typeid = dish.typeid;
+        item.typename = dish.typename;
+        item.unit = dish.unit;
         // 规格与做法分列存储，下单时按 smdcapp 字段分别上传
         item.specName = data.specName;
         item.cookText = data.cookText;
         item.cooks = List<SelectedCook>.from(data.cooks);
         PromotionManager.instance.applyToCartItem(item);
+        MemberPriceUtils.applyToItem(item, _member);
         _cartItems.add(item);
       }
+      _applyNthDiscount();
       _rebuildCountMap();
     });
     _cartBadgeController.forward(from: 0);
@@ -994,6 +1262,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
   /// 打开规格做法弹窗（对齐 smdcapp: 先调 getProductCookSpec 接口获取规格数据）
   Future<void> _openSpecSheet(DishProduct dish) async {
+    if (!_ensureSaleTime(dish)) return;
     try {
       // 显示加载中
       showDialog<void>(
@@ -1038,6 +1307,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
   /// 打开套餐弹窗（对齐 smdcapp: 先调 getProductComb 接口获取套餐详情）
   Future<void> _openSetMealSheet(DishProduct dish) async {
+    if (!_ensureSaleTime(dish)) return;
     try {
       // 显示加载中
       showDialog<void>(
@@ -1085,6 +1355,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   /// - curflag==1（时价菜）优先：先输价格；若同时 weighflag==1 再链式输重量
   /// - 仅 weighflag==1（称重菜）：输重量
   Future<void> _openTimePriceOrWeighSheet(DishProduct dish) async {
+    if (!_ensureSaleTime(dish)) return;
     if (dish.isTimePrice) {
       // 时价菜：先输价格（对齐 smdcapp showTimePricePop(name+"-价格", 0, it)）
       final double? price = await TimePriceSheet.show(
@@ -1124,7 +1395,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     if (dish.maxsellqty > 0) {
       final double currentQty = _cartItems
           .where((CartItem item) => item.product.id == dish.productid)
-          .fold(0.0, (double sum, CartItem item) => sum + item.quantity);
+          .fold(0.0, (double sum, CartItem item) => sum + item.qtyValue);
       if (currentQty + 1 > dish.maxsellqty) {
         Toast.show('本单限点${_fmtQty(dish.maxsellqty)}${dish.unit}');
         return;
@@ -1147,7 +1418,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     if (dish.maxsellqty > 0) {
       final double currentQty = _cartItems
           .where((CartItem item) => item.product.id == dish.productid)
-          .fold(0.0, (double sum, CartItem item) => sum + item.quantity);
+          .fold(0.0, (double sum, CartItem item) => sum + item.qtyValue);
       if (currentQty + 1 > dish.maxsellqty) {
         Toast.show('本单限点${_fmtQty(dish.maxsellqty)}${dish.unit}');
         return;
@@ -1171,7 +1442,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     if (dish.maxsellqty > 0) {
       final double currentQty = _cartItems
           .where((CartItem item) => item.product.id == dish.productid)
-          .fold(0.0, (double sum, CartItem item) => sum + item.quantity);
+          .fold(0.0, (double sum, CartItem item) => sum + item.qtyValue);
       if (currentQty + 1 > dish.maxsellqty) {
         Toast.show('本单限点${_fmtQty(dish.maxsellqty)}${dish.unit}');
         return;
@@ -1195,7 +1466,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     if (dish.maxsellqty > 0) {
       final double currentQty = _cartItems
           .where((CartItem item) => item.product.id == dish.productid)
-          .fold(0.0, (double sum, CartItem item) => sum + item.quantity);
+          .fold(0.0, (double sum, CartItem item) => sum + item.qtyValue);
       if (currentQty + result.quantity > dish.maxsellqty) {
         Toast.show('本单限点${_fmtQty(dish.maxsellqty)}${dish.unit}');
         return;
@@ -1213,13 +1484,18 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       mprice2: dish.mprice2,
       mprice3: dish.mprice3,
       dscflag: dish.dscflag,
+      presentflag: dish.presentflag,
+      chooseqtyflag: dish.chooseqtyflag,
+      minsaleflag: dish.minsaleflag,
       printflag: dish.printflag,
       labelflag: dish.labelflag,
     );
     setState(() {
       final String key = '${product.id}_${result.specText}';
-      // 必点菜行数量独立管理（对齐 smdcapp 必点行 mustflag=1 不参与普通加购合并）
-      final int index = _cartItems.indexWhere((CartItem item) => item.uniqueKey == key && item.mustflag != 1);
+      // 必点菜行数量独立管理（对齐 smdcapp 必点行 mustflag=1 不参与普通加购合并）；
+      // 第N份促销拆分行不参与合并
+      final int index = _cartItems.indexWhere((CartItem item) =>
+          item.uniqueKey == key && item.mustflag != 1 && !item.isNthPromo);
       if (index >= 0) {
         _cartItems[index].quantity += result.quantity;
       } else {
@@ -1229,8 +1505,12 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           specText: result.specText,
           extraPrice: result.combAddAmt,
           combItems: result.selectedItems,
-        ));
+        )
+          ..typeid = dish.typeid
+          ..typename = dish.typename
+          ..unit = dish.unit);
       }
+      _applyNthDiscount();
       _rebuildCountMap();
     });
     _cartBadgeController.forward(from: 0);
@@ -1246,40 +1526,71 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       context,
       cartItems: _cartItems,
       onAdd: (CartItem item) {
-        // 对齐 smdcapp checkQtyValid：必点菜不能操作
+        // R80：必点菜允许增加数量，但需二次确认（对齐安卓“允许并提示是否继续”）
         if (item.mustflag == 1) {
-          Toast.show('必点菜不能操作');
+          ConfirmDialog.show(
+            context,
+            content: '该菜品为必点菜，修改数量可能影响必点规则，是否继续？',
+          ).then((bool ok) {
+            if (!ok || !mounted) return;
+            setState(() {
+              item.quantity++;
+              _applyNthDiscount();
+              _rebuildCountMap();
+            });
+          });
+          return;
+        }
+        // 对齐 smdcapp checkQtyValid：第N份促销拆分行不能直接加数量
+        if (item.isNthPromo) {
+          Toast.show('促销商品不能操作');
+          return;
+        }
+        // R73：购物车加数量实时校验沽清
+        final double? left = _guQingLeftMap[item.product.id];
+        if (left != null && item.qtyValue + 1 > left) {
+          Toast.show('库存不足，剩余${_fmtQty(left)}');
           return;
         }
         setState(() {
           item.quantity++;
+          _applyNthDiscount();
           _rebuildCountMap();
         });
       },
       onRemove: (CartItem item) {
-        // 对齐 smdcapp checkQtyValid：必点菜不能操作
+        // 必点菜数量受规则约束，不允许减少
         if (item.mustflag == 1) {
-          Toast.show('必点菜不能操作');
+          Toast.show('必点菜不能减少数量');
           return;
         }
         setState(() {
-          item.quantity--;
-          if (item.quantity <= 0) {
+          // 有小数部分先去掉小数，否则整数部分减 1
+          if (item.extraQty > 0) {
+            item.extraQty = 0;
+          } else {
+            item.quantity--;
+          }
+          if (item.qtyValue <= 0) {
             _cartItems.remove(item);
           }
+          _applyNthDiscount();
           _rebuildCountMap();
         });
       },
       onClear: () {
         setState(() {
-          // 清空保留必点菜（对齐 smdcapp ShoppingCartPopup2.clearCartHint：filter mustflag != 1）
-          _cartItems.removeWhere((CartItem c) => c.mustflag != 1);
+          // R56：清空待下单行（含必点菜），对齐 smdcapp clearCartHint 删除 id==0 的行；
+          // 清空后本次点菜不再自动补回必点菜
+          _cartItems.removeWhere((CartItem c) => c.orderedAmt == null);
+          _applyNthDiscount();
           _rebuildCountMap();
         });
         Navigator.of(context).pop();
       },
       onItemChanged: (CartItem item) {
         setState(() {
+          _applyNthDiscount();
           _rebuildCountMap();
         });
       },
@@ -1291,21 +1602,82 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         }
         setState(() {
           _cartItems.remove(item);
+          _applyNthDiscount();
           _rebuildCountMap();
         });
         if (_cartItems.isEmpty) {
           Navigator.of(context).pop();
         }
       },
+      onEditQty: _editCartQty,
     );
+  }
+
+  /// 编辑购物车数量（R4：支持小数，称重菜编辑重量）
+  Future<void> _editCartQty(CartItem item) async {
+    if (item.mustflag == 1) {
+      // R80：必点菜允许改数量，但需二次确认
+      final bool ok = await ConfirmDialog.show(
+        context,
+        content: '该菜品为必点菜，修改数量可能影响必点规则，是否继续？',
+      );
+      if (!ok || !mounted) return;
+    }
+    // 对齐 smdcapp checkInputQtyValid：第N份促销拆分行不能单独改数量
+    if (item.isNthPromo) {
+      Toast.show('第N份促销商品不能操作');
+      return;
+    }
+    final String? result = await InputDialog.show(
+      context,
+      title: item.displayName,
+      hintText: item.isWeigh ? '请输入重量' : '请输入数量',
+      initialValue:
+          item.isWeigh ? _fmtQty(item.weighNum) : _fmtQty(item.qtyValue),
+      maxLines: 1,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      inputFormatters: <TextInputFormatter>[
+        FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,3}')),
+      ],
+      suffixText: item.unit,
+      autoSelectAll: true,
+      submitOnEnter: true,
+    );
+    if (result == null || !mounted) return;
+    final double? value = double.tryParse(result);
+    if (value == null || value <= 0) return;
+    // R73：手动修改数量同样校验沽清剩余
+    final double? left = _guQingLeftMap[item.product.id];
+    final double nextQty = item.isWeigh ? value : value;
+    if (left != null && nextQty > left) {
+      Toast.show('库存不足，剩余${_fmtQty(left)}');
+      return;
+    }
+    setState(() {
+      if (item.isWeigh) {
+        item.weighNum = value;
+      } else {
+        item.quantity = value.floor();
+        item.extraQty = value - item.quantity;
+      }
+      _applyNthDiscount();
+      _rebuildCountMap();
+    });
   }
 
   /// 减少（对齐 smdcapp checkQtyValid：必点菜不能操作）
   void _removeFromCart(DishProduct dish) {
     setState(() {
-      // 优先减非必点行，避免普通减购触碰必点菜行
-      final int index = _cartItems.indexWhere(
-          (CartItem item) => item.product.id == dish.productid && item.mustflag != 1);
+      // 优先减非必点、非促销的普通行，避免普通减购触碰必点菜/第N份促销行
+      int index = _cartItems.indexWhere((CartItem item) =>
+          item.product.id == dish.productid &&
+          item.mustflag != 1 &&
+          !item.isNthPromo);
+      if (index < 0) {
+        // 只剩促销行时允许减促销行（下一轮重算会合并还原）
+        index = _cartItems.indexWhere((CartItem item) =>
+            item.product.id == dish.productid && item.mustflag != 1);
+      }
       if (index < 0) {
         final int mustIndex = _cartItems.indexWhere(
             (CartItem item) => item.product.id == dish.productid);
@@ -1317,12 +1689,15 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       // 起售/增售数量（对齐 smdcapp SelectProductFragment：减后低于起售数量则直接删除）
       final int start = dish.startQty.round();
       final int add = dish.addQty.round();
-      final int rowQty = _cartItems[index].quantity;
+      final double rowQty = _cartItems[index].qtyValue;
       if (rowQty <= start || rowQty - add < start) {
         _cartItems.removeAt(index);
       } else {
-        _cartItems[index].quantity = rowQty - add;
+        final double next = rowQty - add;
+        _cartItems[index].quantity = next.floor();
+        _cartItems[index].extraQty = next - next.floor();
       }
+      _applyNthDiscount();
       _rebuildCountMap();
     });
   }
@@ -1341,6 +1716,9 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       mprice2: dish.mprice2,
       mprice3: dish.mprice3,
       dscflag: dish.dscflag,
+      presentflag: dish.presentflag,
+      chooseqtyflag: dish.chooseqtyflag,
+      minsaleflag: dish.minsaleflag,
       printflag: dish.printflag,
       labelflag: dish.labelflag,
     );
@@ -1421,6 +1799,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       for (final MustSelectResult result in selected) {
         _cartItems.add(_mustProductToCartItem(result.raw, result.qty, mustType: 1));
       }
+      _applyNthDiscount();
       _rebuildCountMap();
     });
     _cartBadgeController.forward(from: 0);
@@ -1456,7 +1835,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         final double per = baseQty > 0 ? baseQty : 1.0;
         final double inCartQty = _cartItems
             .where((CartItem c) => c.product.id == pid && !c.isRefunded)
-            .fold(0.0, (double s, CartItem c) => s + c.quantity);
+            .fold(0.0, (double s, CartItem c) => s + c.qtyValue);
         totalSelections += inCartQty / per;
       }
       if (totalSelections < required) return false;
@@ -1562,7 +1941,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     );
   }
 
-  /// 快餐模式顶栏（对齐 smdcapp DishesHomeAct2：标题“快餐点餐” + 右侧模式切换图标，搜索框在标题下方）
+  /// 快餐模式顶栏（对齐 smdcapp DishesHomeAct2：左侧设置入口 + 标题“快餐点餐” + 右侧模式切换图标）
   Widget _buildFastModeAppBar(bool isDark) {
     return ColoredBox(
       color: isDark ? const Color(0xFF242526) : Colors.white,
@@ -1572,6 +1951,21 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           height: 46,
           child: Stack(
             children: <Widget>[
+              // 左侧: 设置入口（对齐 smdcapp ivSetting → PersonalCenterActivity）
+              Positioned(
+                left: 8,
+                top: 0,
+                bottom: 0,
+                child: IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
+                  iconSize: 22,
+                  color: isDark ? Colors.white : const Color(0xFF4E5969),
+                  icon: const Icon(Icons.menu),
+                  onPressed: () => NavigatorUtils.push(
+                      context, SettingRouter.personalCenterPage),
+                ),
+              ),
               // 中间: 标题（对齐 smdcapp titleTextView “快餐点餐”）
               Center(
                 child: Text(
@@ -1583,22 +1977,24 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                   ),
                 ),
               ),
-              // 右侧: 模式切换图标（对齐 smdcapp imgSx + data_change 图标）
-              Positioned(
-                right: 8,
-                top: 0,
-                bottom: 0,
-                child: IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
-                  icon: Image.asset(
-                    'assets/images/data_change.png',
-                    width: 20,
-                    height: 20,
+              // 右侧: 模式切换图标（对齐 smdcapp imgSx：仅后台为快餐的商户不可见，
+              // 后台正餐但当前切到快餐时才显示切换入口）
+              if (!StoreModeUtils.isBusinessFastMode())
+                Positioned(
+                  right: 8,
+                  top: 0,
+                  bottom: 0,
+                  child: IconButton(
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 38, minHeight: 38),
+                    icon: Image.asset(
+                      'assets/images/data_change.png',
+                      width: 20,
+                      height: 20,
+                    ),
+                    onPressed: _showModeSwitchSheet,
                   ),
-                  onPressed: _showModeSwitchSheet,
                 ),
-              ),
             ],
           ),
         ),
@@ -1657,6 +2053,9 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           price: r.price + r.cookUnitExtra,
           desc: r.typename.isNotEmpty ? r.typename : '临时菜',
           dscflag: r.tpdscflag,
+          // R10：临时菜选择出品档口后需要厨打/杯贴，否则下单不出出品单/出品分单
+          printflag: (r.tpdishid != '-1' || r.tpdishidzd != '-1') ? 1 : 0,
+          labelflag: (r.tpdishid != '-1' || r.tpdishidzd != '-1') ? 1 : 0,
         ),
         quantity: r.qty,
         specText: r.cookText,
@@ -1669,6 +2068,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         ..unit = r.unit
         ..typeid = r.typeid
         ..typename = r.typename
+        // R11：单独保存做法文本，下单时上传 cooktext（此前只写 specText 导致做法丢失）
+        ..cookText = r.cookText
         ..remark = r.remark;
       _cartItems.add(item);
       _rebuildCountMap();
@@ -2793,8 +3194,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           ? allProducts
           : allProducts.where(_matchSearch).toList();
 
-      if (products.isEmpty) continue;
-      hasAnyResult = true;
+      // 搜索时隐藏无结果分类
+      if (products.isEmpty && _searchKeyword.isNotEmpty) continue;
 
       // 分类 header
       slivers.add(
@@ -2815,6 +3216,11 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           ),
         ),
       );
+
+      // 无菜品的分类只展示标题，不再展示"暂无菜品"占位区
+      if (products.isEmpty) continue;
+
+      hasAnyResult = true;
 
       // 该分类下的商品（SliverList 懒加载 + RepaintBoundary 隔离重绘）
       slivers.add(
@@ -2849,8 +3255,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     // 底部留白（给购物车栏让位）
     slivers.add(const SliverToBoxAdapter(child: SizedBox(height: 80)));
 
-    // 搜索无结果提示
-    if (!hasAnyResult) {
+    // 搜索无结果提示（仅搜索态展示）
+    if (_searchKeyword.isNotEmpty && !hasAnyResult) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -3163,43 +3569,47 @@ class _DishProductCard extends StatelessWidget {
       child: Row(
         children: <Widget>[
           // 商品图（优先显示网络图片，无图时用渐变色块 + emoji 代替）
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Stack(
-              children: <Widget>[
-                if (product.imageurl.isNotEmpty)
-                  CachedNetworkImage(
-                    imageUrl: product.imageurl.startsWith('http')
-                        ? product.imageurl
-                        : '$_kImgAddress${product.imageurl}',
-                    width: 64,
-                    height: 64,
-                    fit: BoxFit.cover,
-                    memCacheWidth: 128,
-                    placeholder: (_, __) => _buildPlaceholder(soldOut),
-                    errorWidget: (_, __, dynamic error) => _buildPlaceholder(soldOut),
-                  )
-                else
-                  _buildPlaceholder(soldOut),
-                // 沽清剩余吸顶悬浮（对齐 smdcapp rl_stock_num：半透明黑底 + 白字居中）
-                if (guQingBase != null && !soldOut && !stockExhausted)
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      color: const Color(0x55000000),
-                      alignment: Alignment.center,
-                      child: Text(
-                        '剩余:${_fmtQty(leftQty)}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 10, color: Colors.white),
+          // R64：点击支持全屏缩放查看
+          GestureDetector(
+            onTap: () => _previewProductImage(context),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Stack(
+                children: <Widget>[
+                  if (product.imageurl.isNotEmpty)
+                    CachedNetworkImage(
+                      imageUrl: product.imageurl.startsWith('http')
+                          ? product.imageurl
+                          : '$_kImgAddress${product.imageurl}',
+                      width: 64,
+                      height: 64,
+                      fit: BoxFit.cover,
+                      memCacheWidth: 128,
+                      placeholder: (_, __) => _buildPlaceholder(soldOut),
+                      errorWidget: (_, __, dynamic error) => _buildPlaceholder(soldOut),
+                    )
+                  else
+                    _buildPlaceholder(soldOut),
+                  // 沽清剩余吸顶悬浮（对齐 smdcapp rl_stock_num：半透明黑底 + 白字居中）
+                  if (guQingBase != null && !soldOut && !stockExhausted)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        color: const Color(0x55000000),
+                        alignment: Alignment.center,
+                        child: Text(
+                          '剩余:${_fmtQty(leftQty)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 10, color: Colors.white),
+                        ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
           const SizedBox(width: 10),
@@ -3209,17 +3619,37 @@ class _DishProductCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.center,
               children: <Widget>[
-                Text(
-                  product.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: soldOut
-                        ? (isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4))
-                        : (isDark ? Colors.white : const Color(0xFF1D2129)),
-                  ),
+                Row(
+                  children: <Widget>[
+                    Flexible(
+                      child: Text(
+                        product.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: soldOut
+                              ? (isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4))
+                              : (isDark ? Colors.white : const Color(0xFF1D2129)),
+                        ),
+                      ),
+                    ),
+                    if (!product.saleTimeValid) ...<Widget>[
+                      const SizedBox(width: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF3E0),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                        child: const Text(
+                          '非售卖时段',
+                          style: TextStyle(fontSize: 9, color: Color(0xFFFF7D00)),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 const SizedBox(height: 4),
                 // 限点 + 会员价（对齐 smdcapp，放在价格上方）
@@ -3331,6 +3761,47 @@ class _DishProductCard extends StatelessWidget {
           else
             _buildQuantityControl(),
         ],
+      ),
+    );
+  }
+
+  /// 全屏查看商品图片并支持双指缩放（R64）
+  void _previewProductImage(BuildContext context) {
+    if (product.imageurl.isEmpty) return;
+    final String url = product.imageurl.startsWith('http')
+        ? product.imageurl
+        : '$_kImgAddress${product.imageurl}';
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black,
+      builder: (BuildContext dialogCtx) => GestureDetector(
+        onTap: () => Navigator.of(dialogCtx).pop(),
+        child: Scaffold(
+          backgroundColor: Colors.black,
+          body: SafeArea(
+            child: Stack(
+              children: <Widget>[
+                Positioned.fill(
+                  child: InteractiveViewer(
+                    minScale: 1,
+                    maxScale: 4,
+                    child: Center(
+                      child: CachedNetworkImage(imageUrl: url, fit: BoxFit.contain),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                    onPressed: () => Navigator.of(dialogCtx).pop(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

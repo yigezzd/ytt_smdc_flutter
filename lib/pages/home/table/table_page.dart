@@ -24,6 +24,7 @@ import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
 import 'package:flutter_deer/setting/setting_router.dart';
 import 'package:flutter_deer/util/store_mode_utils.dart';
+import 'package:flutter_deer/util/table_concurrency_guard.dart';
 import 'package:flutter_deer/util/table_data_utils.dart';
 import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
@@ -57,6 +58,9 @@ class _TablePageState extends State<TablePage>
   /// 状态筛选: null=全部
   TableStatus? _statusFilter;
 
+  /// 只看预打桌台（R25，对齐 smdcapp showpreprintonly/preprintflag）
+  bool _prePrintOnly = false;
+
   /// 是否处于搜索模式（对齐 smdcapp imgSearch 点击切换 llSearch/TitleLayout 显示）
   bool _searchMode = false;
 
@@ -75,6 +79,9 @@ class _TablePageState extends State<TablePage>
 
   /// 弹窗是否正在展示（防止重复弹出）
   bool _pcCheckDialogShowing = false;
+
+  /// 桌台点击前的并发校验进行中（防止连点重复请求）
+  bool _checkingTableTap = false;
 
   /// 定时轮询 Timer（对齐 smdcapp：桌台状态实时刷新，如锁台/开台等变更）
   Timer? _pollTimer;
@@ -327,6 +334,7 @@ class _TablePageState extends State<TablePage>
         masterDevice: ConnectionManager.pcAlive,
         areaid: _currentAreaid,
         tablestatus: _currentStatusCode,
+        showPrePrintOnly: _prePrintOnly,
       );
     } catch (_) {
       if (mounted) {
@@ -495,56 +503,104 @@ class _TablePageState extends State<TablePage>
   }
 
   void _onStatusChanged(TableStatus? status) {
-    if (_statusFilter == status) {
+    if (_statusFilter == status && !_prePrintOnly) {
       return;
     }
-    setState(() => _statusFilter = status);
+    setState(() {
+      _statusFilter = status;
+      // 状态筛选与预打筛选互斥，避免查询参数冲突
+      _prePrintOnly = false;
+    });
     _loadData();
   }
 
-  void _onTableTap(TableInfo table) {
-    if (table.isIdle) {
+  /// 只看预打桌台（R25）
+  void _onPrePrintChanged(bool selected) {
+    if (_prePrintOnly == selected) return;
+    setState(() {
+      _prePrintOnly = selected;
+      if (selected) _statusFilter = null;
+    });
+    _loadData();
+  }
+
+  /// 当前列表中的预打桌台数量
+  int get _prePrintCount => _tables.where((TableInfo t) => t.isPrePrint).length;
+
+  Future<void> _onTableTap(TableInfo table) async {
+    if (_checkingTableTap) return;
+    _checkingTableTap = true;
+    // R2：先取该桌台最新状态/锁台标志，避免使用列表缓存导致后进入的设备未提示
+    TableInfo target = table;
+    try {
+      final TableInfo? latest = await TableConcurrencyGuard.fetchLatest(
+        table.tableid,
+        areaid: table.areaid,
+      );
+      if (!mounted) return;
+      if (latest != null) {
+        target = latest;
+        // 同步列表里的桌台数据，保证卡片状态与本次操作一致
+        final int index = _tables.indexWhere(
+          (TableInfo t) => t.tableid == latest.tableid,
+        );
+        if (index >= 0) {
+          _tables[index] = latest;
+        }
+      }
+    } finally {
+      _checkingTableTap = false;
+    }
+    if (!mounted) return;
+
+    if (target.isLocked) {
+      // 锁台桌台 → 弹出解锁确认弹窗（对齐 smdcapp TipDialog 解锁流程）
+      await _showUnlockConfirmDialog(target);
+      return;
+    }
+
+    if (target.isIdle) {
       // 空闲桌台 → 底部抽屉开台弹窗
       showModalBottomSheet<void>(
         context: context,
         isScrollControlled: true,
         backgroundColor: Colors.transparent,
-        builder: (_) => OpenTableDialog(table: table),
+        builder: (_) => OpenTableDialog(table: target),
       );
-    } else if (table.isLocked) {
-      // 锁台桌台 → 弹出解锁确认弹窗（对齐 smdcapp TipDialog 解锁流程）
-      _showUnlockConfirmDialog(table);
-    } else if (table.status == TableStatus.waitingOrder) {
+    } else if (target.status == TableStatus.waitingOrder) {
       // 待下单桌台 → 弹出操作弹窗（对齐 smdcapp operateTable case "1" → OperationPopup2）
       showModalBottomSheet<void>(
         context: context,
         isScrollControlled: true,
         backgroundColor: Colors.transparent,
         builder: (_) => TableOperationDialog(
-          table: table,
+          table: target,
         ),
       );
-    } else if (table.status == TableStatus.waitingSettle ||
-        table.status == TableStatus.preSettled) {
+    } else if (target.status == TableStatus.waitingSettle ||
+        target.status == TableStatus.preSettled) {
       // 待结算/已预结 → 进入订单详情页（对齐 smdcapp TableInfoActivity case "2"/"3" → OrderDetailActivity）
       NavigatorUtils.push(
         context,
         Routes.orderDetailPage,
         arguments: <String, dynamic>{
-          'tableId': table.tableid,
-          'tableName': table.name,
-          'tableCode': table.code,
-          'persons': table.tmp?.personnum ?? table.person,
-          'serverId': table.tmp?.serverid ?? '',
-          'serverName': table.tmp?.servername ?? '',
-          'remark': table.tmp?.remark ?? '',
-          'saleid': table.tmp?.saleid ?? '',
-          'tableJson': table.toJson(),
+          'tableId': target.tableid,
+          'tableName': target.name,
+          'tableCode': target.code,
+          'persons': target.tmp?.personnum ?? target.person,
+          'serverId': target.tmp?.serverid ?? '',
+          'serverName': target.tmp?.servername ?? '',
+          'remark': target.tmp?.remark ?? '',
+          'saleid': target.tmp?.saleid ?? '',
+          'tableJson': target.toJson(),
         },
       );
-    } else if (table.status == TableStatus.waitingClear) {
+    } else if (target.status == TableStatus.waitingClear) {
       // 待清台 → 清台确认弹窗（对齐 smdcapp operateTable case "4" → TableClearBottomDialog）
-      _showClearTableConfirmDialog(table);
+      _showClearTableConfirmDialog(target);
+    } else if (target != table) {
+      // 状态在点击瞬间已变化（如已被其他设备清台），刷新列表让用户看到最新状态
+      _silentRefresh();
     }
   }
 
@@ -919,7 +975,73 @@ class _TablePageState extends State<TablePage>
     return _TableGrid(
       tables: displayTables,
       onTap: _onTableTap,
+      onMergeTap: _showUnionTables,
     );
+  }
+
+  /// 查看并台关联桌台明细（R37）
+  Future<void> _showUnionTables(TableInfo table) async {
+    final String unitableid = table.tmp?.unitableid ?? '';
+    if (unitableid.isEmpty) return;
+    try {
+      final Map<String, dynamic> resp = await requestForm(
+        HttpApi.getUniTables,
+        <String, dynamic>{
+          'unitableid': unitableid,
+          'tableid': unitableid,
+        },
+        showError: false,
+      );
+      final dynamic data = resp['data'] ?? resp['Data'];
+      List<Map<String, dynamic>> list = <Map<String, dynamic>>[];
+      if (data is List) {
+        list = data.whereType<Map<String, dynamic>>().toList();
+      } else if (data is Map<String, dynamic> && data['list'] is List) {
+        list = (data['list'] as List).whereType<Map<String, dynamic>>().toList();
+      }
+      if (list.isEmpty) {
+        Toast.show('暂无关联桌台');
+        return;
+      }
+      final List<TableInfo> merged =
+          list.map(TableInfo.fromJson).toList();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (BuildContext dialogCtx) => AlertDialog(
+          title: const Text('并台桌台'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: merged.map((TableInfo t) {
+              final String amount = (t.tmp?.amt ?? 0).toStringAsFixed(2);
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        '${t.name}（${t.status.label}）',
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    ),
+                    Text('¥$amount',
+                        style: const TextStyle(fontSize: 14, color: Color(0xFFE13426))),
+                  ],
+                ),
+              );
+            }).toList(),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(dialogCtx).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      Toast.show('获取并台桌台失败');
+    }
   }
 
   @override
@@ -953,6 +1075,9 @@ class _TablePageState extends State<TablePage>
               activeStatus: _statusFilter,
               counts: _statusCounts,
               totalCount: _totalCount,
+              prePrintSelected: _prePrintOnly,
+              prePrintCount: _prePrintCount,
+              onPrePrintChanged: _onPrePrintChanged,
               onChanged: _onStatusChanged,
             ),
           ],
@@ -967,10 +1092,12 @@ class _TableGrid extends StatefulWidget {
   const _TableGrid({
     required this.tables,
     required this.onTap,
+    this.onMergeTap,
   });
 
   final List<TableInfo> tables;
   final ValueChanged<TableInfo> onTap;
+  final ValueChanged<TableInfo>? onMergeTap;
 
   @override
   State<_TableGrid> createState() => _TableGridState();
@@ -1047,6 +1174,7 @@ class _TableGridState extends State<_TableGrid>
           table: tables[index],
           animation: animation,
           onTap: widget.onTap,
+          onMergeTap: widget.onMergeTap,
         );
       },
     );

@@ -401,10 +401,10 @@ class _DepositSheetState extends State<DepositSheet> {
           final Map<String, dynamic> userMap =
               jsonDecode(userStr) as Map<String, dynamic>;
           if (operid.isEmpty) {
-            operid = userMap['userid']?.toString() ?? '';
+            operid = userMap['userid']?.toString() ?? userMap['id']?.toString() ?? '';
           }
           if (opername.isEmpty) {
-            opername = userMap['username']?.toString() ?? '';
+            opername = userMap['name']?.toString() ?? userMap['username']?.toString() ?? '';
           }
         }
       } catch (_) {}
@@ -595,7 +595,7 @@ class _DepositSheetState extends State<DepositSheet> {
       if (userStr.isNotEmpty) {
         final Map<String, dynamic> userMap =
             jsonDecode(userStr) as Map<String, dynamic>;
-        return userMap['username']?.toString() ?? '';
+        return userMap['name']?.toString() ?? userMap['username']?.toString() ?? '';
       }
     } catch (_) {}
     return '';
@@ -942,8 +942,8 @@ class _DepositRecordSheetState extends State<_DepositRecordSheet> {
         if (userStr.isNotEmpty) {
           final Map<String, dynamic> userMap =
               jsonDecode(userStr) as Map<String, dynamic>;
-          if (operid.isEmpty) operid = userMap['userid']?.toString() ?? '';
-          if (opername.isEmpty) opername = userMap['username']?.toString() ?? '';
+          if (operid.isEmpty) operid = userMap['userid']?.toString() ?? userMap['id']?.toString() ?? '';
+          if (opername.isEmpty) opername = userMap['name']?.toString() ?? userMap['username']?.toString() ?? '';
         }
       } catch (_) {}
 

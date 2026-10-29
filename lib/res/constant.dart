@@ -48,6 +48,9 @@ class Constant {
   /// 商业模式相关存储 key（对齐 smdcapp SpUtils STORE_MODEL_3）
   static const String storeMode = 'store_mode'; // 当前商业模式：1=快餐 2=正餐
 
+  /// 商户后台商业模式（对齐 smdcapp SpUtils STORE_MODEL：登录返回 store.miniverflag）
+  static const String storeBusinessMode = 'store_business_mode'; // 1=快餐 2=正餐
+
   /// 双模式连接相关存储 key
   static const String localhost = 'localhost';     // 主设备地址（登录返回，如 http://192.168.8.47:9094）
   static const String serverType = 'server_type';  // 连接模式：0=不限 1=仅主设备 2=仅云服务
@@ -80,6 +83,11 @@ class Constant {
   static const String machGettakeoutorder = 'mach_gettakeoutorder';     // 外卖接单标志
   static const String machMasterflag = 'mach_masterflag';               // 主设备标志
   static const String machClienttype = 'mach_clienttype';               // 客户端类型
+
+  /// 结账页开关（对齐 smdcapp Constant.SETTLE_DY / SETTLE_ZJ / SETTLE_YJ）
+  static const String settleDy = 'SETTLE_DY'; // 打印结账小票
+  static const String settleZj = 'SETTLE_ZJ'; // 整单暂结
+  static const String settleYj = 'SETTLE_YJ'; // 结账打印押金
 
 }
 

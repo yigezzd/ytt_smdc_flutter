@@ -21,6 +21,56 @@ import 'package:sp_util/sp_util.dart';
 class PermissionUtils {
   PermissionUtils._();
 
+  /// 读取并解析本地缓存的 JSON Map。
+  ///
+  /// Web 端 shared_preferences 可能把字符串再 JSON 编码一次（如 `"{}"`），
+  /// 这里兼容单层/双层编码，避免非空 rolemap 被误判为不存在。
+  static Map<String, dynamic>? _readJsonMap(String key) {
+    try {
+      final String raw = SpUtil.getString(key, defValue: '') ?? '';
+      if (raw.isEmpty) return null;
+      dynamic value = jsonDecode(raw);
+      if (value is String) {
+        value = jsonDecode(value);
+      }
+      if (value is Map) {
+        return Map<String, dynamic>.from(value);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  // ──────────── 权限码（对齐 smdcapp PermissionUtil / RoleEnum）────────────
+  static const String appDishes = '0101'; // 点菜
+  static const String appEditTable = '0102'; // 修改开台信息
+  static const String appSpecCook = '0103'; // 规格/做法
+  static const String appDishDiscount = '0104'; // 菜品打折
+  static const String appChangePrice = '0105'; // 改价
+  static const String appGive = '0106'; // 赠送
+  static const String appRefund = '0107'; // 退菜
+  static const String appHangUp = '0108'; // 挂起
+  static const String appStartDish = '0109'; // 起菜
+  static const String appUrge = '0110'; // 催菜
+  static const String appBag = '0111'; // 打包
+  static const String appRemark = '0112'; // 备注
+  static const String appChangeQty = '0113'; // 修改数量
+  static const String appDeleteDish = '0114'; // 删除商品
+  static const String appChangeCombo = '0115'; // 修改套餐
+  static const String appTransferDish = '0116'; // 转菜
+  static const String appServeDish = '0117'; // 划菜
+  static const String appRemarkAll = '0201'; // 整单备注
+  static const String appMemberLogin = '0202'; // 会员登录
+  static const String appMemberLogout = '0203'; // 会员登出
+  static const String appTotalDiscount = '0204'; // 整单折扣
+  static const String appOpenTable = '0205'; // 开台
+  static const String appClearTable = '0206'; // 清台
+  static const String appTransferTable = '0207'; // 转台
+  static const String appMergeTable = '0208'; // 并台
+  static const String appCancelTable = '0209'; // 消台
+  static const String appPrePrint = '0210'; // 预打
+  static const String appCheckout = '0211'; // 结账
+  static const String appCancelOrder = '0212'; // 撤单
+
   // ──────────── 权限接口节流（对齐 boss 项目 10s 节流策略）────────────
 
   /// 节流间隔：10 秒内不重复请求
@@ -38,31 +88,30 @@ class PermissionUtils {
   ///
   /// - [showTip] 为 true 时无权限会弹 Toast 提示（默认 true）
   /// - 返回 true 表示有权限，false 表示无权限
-  static bool checkPermission(String menuId, {bool showTip = true}) {
+  static bool checkPermission(String menuId, {bool showTip = true, String? tip}) {
     if (menuId.isEmpty) return true;
 
-    // 读取 rolemap 缓存
-    Map<String, dynamic>? rolemap;
-    try {
-      final rolemapStr = SpUtil.getString(Constant.rolemap, defValue: '') ?? '';
-      if (rolemapStr.isNotEmpty) {
-        rolemap = jsonDecode(rolemapStr) as Map<String, dynamic>;
+    // 读取 rolemap / user 缓存（兼容 Web 双层 JSON 编码）
+    final Map<String, dynamic>? rolemap = _readJsonMap(Constant.rolemap);
+    final Map<String, dynamic>? user = _readJsonMap(Constant.user);
+
+    // 规则 1：超级管理员始终放行
+    if (user != null) {
+      final String roleid = user['roleid']?.toString() ?? '';
+      final String code = user['code']?.toString() ?? '';
+      if (roleid == '1001' || code == '1001') return true;
+    }
+
+    // 规则 2：对齐 smdcapp PermissionUtil：权限 map 为空视为无操作权限
+    // （登录本身不拦截，避免受限账号无法进入系统）
+    if (rolemap == null || rolemap.isEmpty) {
+      if (showTip) {
+        Toast.show(tip ?? '当前账号无此操作权限，请联系管理员');
       }
-    } catch (_) {}
+      return false;
+    }
 
-    // 读取 user 缓存
-    Map<String, dynamic>? user;
-    try {
-      final userStr = SpUtil.getString(Constant.user, defValue: '') ?? '';
-      if (userStr.isNotEmpty) {
-        user = jsonDecode(userStr) as Map<String, dynamic>;
-      }
-    } catch (_) {}
-
-    // 规则 1：rolemap 和 user 均不存在 → 放行
-    if (rolemap == null && user == null) return true;
-
-    // 规则 2：rolemap 中包含该 menuId → 放行
+    // 规则 3：rolemap 中包含该 menuId → 放行
     // rolemap 的值可能是 true / 'true' / 1 / '查看' 等，
     // 只要不是显式的 falsy 值（false / 'false' / 0 / '0' / null / ''）即视为有权限
     if (rolemap != null && rolemap.containsKey(menuId)) {
@@ -77,16 +126,55 @@ class PermissionUtils {
       }
     }
 
-    // 规则 3：超级管理员放行
-    if (user != null) {
-      final roleid = user['roleid']?.toString() ?? '';
-      final code = user['code']?.toString() ?? '';
-      if (roleid == '1001' || code == '1001') return true;
-    }
-
     // 规则 4：无权限 → 拦截
     if (showTip) {
-      Toast.show('你无权访问此模块，请在后台修改权限');
+      Toast.show(tip ?? '你无权访问此模块，请在后台修改权限');
+    }
+    return false;
+  }
+
+  /// 带操作名称的权限校验（R29-R40：无权限时提示具体操作）
+  static bool check(String menuId, String actionName) {
+    return checkPermission(menuId, tip: '当前账号无$actionName权限，请联系管理员');
+  }
+
+  /// 当前账号是否有 APP 端权限（对齐 R29）
+  ///
+  /// 后台角色按 app端 → 菜品操作(01)/订单操作(02)/个人中心(03) 授权；
+  /// rolemap 非空但没有任何 app 端权限码时视为无 APP 使用权限。
+  /// rolemap 为空（门店未启用权限管控）时保持放行，避免误伤老门店。
+  static bool hasAppPermission() {
+    Map<String, dynamic>? rolemap;
+    Map<String, dynamic>? user;
+    try {
+      final String rolemapStr = SpUtil.getString(Constant.rolemap, defValue: '') ?? '';
+      if (rolemapStr.isNotEmpty) {
+        rolemap = jsonDecode(rolemapStr) as Map<String, dynamic>;
+      }
+    } catch (_) {}
+    try {
+      final String userStr = SpUtil.getString(Constant.user, defValue: '') ?? '';
+      if (userStr.isNotEmpty) {
+        user = jsonDecode(userStr) as Map<String, dynamic>;
+      }
+    } catch (_) {}
+    // 超级管理员始终放行
+    if (user != null) {
+      final String roleid = user['roleid']?.toString() ?? '';
+      final String code = user['code']?.toString() ?? '';
+      if (roleid == '1001' || code == '1001') return true;
+    }
+    // 对齐 smdcapp PermissionUtil：权限 map 为空视为无任何 APP 权限
+    if (rolemap == null || rolemap.isEmpty) return false;
+    for (final String key in rolemap.keys) {
+      final dynamic val = rolemap[key];
+      if (val == null || val == false || val == 'false' || val == '0' || val == '') {
+        continue;
+      }
+      if (key == '01' || key == '02' || key == '03' ||
+          key.startsWith('01') || key.startsWith('02') || key.startsWith('03')) {
+        return true;
+      }
     }
     return false;
   }
@@ -173,12 +261,6 @@ class PermissionUtils {
   }
 
   static Map<String, dynamic>? _getCachedRolemap() {
-    try {
-      final rolemapStr = SpUtil.getString(Constant.rolemap, defValue: '') ?? '';
-      if (rolemapStr.isNotEmpty) {
-        return jsonDecode(rolemapStr) as Map<String, dynamic>;
-      }
-    } catch (_) {}
-    return null;
+    return _readJsonMap(Constant.rolemap);
   }
 }

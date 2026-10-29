@@ -29,6 +29,7 @@ class CartPanelSheet extends StatefulWidget {
     required this.onClear,
     this.onItemChanged,
     this.onDelete,
+    this.onEditQty,
   });
 
   final List<CartItem> cartItems;
@@ -48,6 +49,9 @@ class CartPanelSheet extends StatefulWidget {
   /// 删除某条目回调
   final ValueChanged<CartItem>? onDelete;
 
+  /// 点击数量编辑回调（R4：支持输入小数数量）
+  final Future<void> Function(CartItem)? onEditQty;
+
   static Future<void> show(
     BuildContext context, {
     required List<CartItem> cartItems,
@@ -56,6 +60,7 @@ class CartPanelSheet extends StatefulWidget {
     required VoidCallback onClear,
     ValueChanged<CartItem>? onItemChanged,
     ValueChanged<CartItem>? onDelete,
+    Future<void> Function(CartItem)? onEditQty,
   }) {
     return showModalBottomSheet<void>(
       context: context,
@@ -68,6 +73,7 @@ class CartPanelSheet extends StatefulWidget {
         onClear: onClear,
         onItemChanged: onItemChanged,
         onDelete: onDelete,
+        onEditQty: onEditQty,
       ),
     );
   }
@@ -81,9 +87,16 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
       widget.cartItems.fold(0, (double sum, CartItem item) => sum + item.totalPrice);
 
   int get _totalCount =>
-      widget.cartItems.fold(0, (int sum, CartItem item) => sum + item.quantity);
+      widget.cartItems
+          .fold<double>(0, (double sum, CartItem item) => sum + item.qtyValue)
+          .round();
 
   void _handleAdd(CartItem item) {
+    // 对齐 smdcapp checkQtyValid：第N份促销拆分行不能直接加数量
+    if (item.isNthPromo) {
+      Toast.show('促销商品不能操作');
+      return;
+    }
     widget.onAdd(item);
     setState(() {});
   }
@@ -333,12 +346,12 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
                             color: _kBrandRed,
                           ),
                         ),
-                        // 打折时显示原价划线
-                        if (item.isDiscounted)
+                        // 打折/促销/赠送/改价时显示原价划线
+                        if (item.hasOriginPrice)
                           Padding(
                             padding: const EdgeInsets.only(left: 6),
                             child: Text(
-                              '¥${_formatPrice(item.unitPrice)}',
+                              '¥${_formatPrice(item.product.price)}',
                               style: TextStyle(
                                 fontSize: 11,
                                 color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4),
@@ -399,15 +412,34 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
                     ),
                   ),
                 ),
-                SizedBox(
-                  width: 36,
-                  child: Center(
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: widget.onEditQty == null
+                      ? null
+                      : () async {
+                          // 对齐 smdcapp checkInputQtyValid：第N份促销行不能单独改数量
+                          if (item.isNthPromo) {
+                            Toast.show('第N份促销商品不能操作');
+                            return;
+                          }
+                          await widget.onEditQty!(item);
+                          // 数量编辑弹窗关闭后刷新购物车面板（合计/数量）
+                          if (mounted) setState(() {});
+                        },
+                  child: Container(
+                    width: 44,
+                    height: 40,
+                    alignment: Alignment.center,
                     child: Text(
-                      '${item.quantity}',
+                      item.qtyValue == item.qtyValue.roundToDouble()
+                          ? item.qtyValue.toInt().toString()
+                          : item.qtyValue.toString(),
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
                         color: isDark ? Colors.white : const Color(0xFF1D2129),
+                        decoration: TextDecoration.underline,
+                        decorationStyle: TextDecorationStyle.dotted,
                       ),
                     ),
                   ),
@@ -525,6 +557,11 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
           Toast.show('赠送商品不能打折');
           return;
         }
+        // R58：菜品档案未开启可折扣时禁止打折
+        if (item.product.dscflag == 0) {
+          Toast.show('该菜品不可打折');
+          return;
+        }
         final DiscountResult? result = await DishDiscountSheet.show(
           context,
           dishName: item.displayName,
@@ -546,6 +583,11 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
           Toast.show('已取消赠送');
           return;
         }
+        // R62：菜品档案未开启可赠送时禁止赠送
+        if (item.product.presentflag == 0) {
+          Toast.show('该菜品不允许赠送');
+          return;
+        }
         // 对齐 smdcapp GiveNumPopup 赠送逻辑
         final GiveResult? result = await DishGiveSheet.show(
           context,
@@ -560,6 +602,11 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
         }
 
       case DishOperationType.changePrice:
+        // 对齐 smdcapp handleChangePrice：第N份促销拆分行由系统统一计算，不允许改价
+        if (item.isNthPromo) {
+          Toast.show('促销商品不能改价');
+          return;
+        }
         // 对齐 smdcapp: 赠送商品不能改价
         if (item.isGift) {
           Toast.show('赠送商品不能改价');
@@ -571,11 +618,16 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
           currentPrice: item.unitPrice,
         );
         if (price != null) {
-          // 对齐 smdcapp: price == sellprice 时取消改价
-          if (price == item.product.price + item.extraPrice) {
+          // 对齐 smdcapp: price == 当前单价时取消改价
+          if ((price - item.unitPrice).abs() < 0.005) {
             item.customPrice = null;
           } else {
             item.customPrice = price;
+            // 改价即最终价，清除整单折扣避免再次被打折（R14）
+            item.discount = 100;
+            item.specpriceflag = 0;
+            item.jcmbillid = '';
+            item.promoPrice = 0;
           }
           _notifyChanged(item);
         }

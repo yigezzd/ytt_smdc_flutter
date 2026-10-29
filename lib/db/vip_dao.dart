@@ -39,8 +39,8 @@ class VipDao {
       if (userStr.isNotEmpty) {
         final Map<String, dynamic> userMap =
             jsonDecode(userStr) as Map<String, dynamic>;
-        operid = userMap['userid']?.toString() ?? '';
-        opername = userMap['username']?.toString() ?? '';
+        operid = userMap['userid']?.toString() ?? userMap['id']?.toString() ?? '';
+        opername = userMap['name']?.toString() ?? userMap['username']?.toString() ?? '';
       }
     } catch (_) {}
     try {

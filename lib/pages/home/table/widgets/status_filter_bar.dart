@@ -12,6 +12,9 @@ class StatusFilterBar extends StatelessWidget {
     required this.counts,
     required this.totalCount,
     required this.onChanged,
+    this.prePrintSelected = false,
+    this.prePrintCount = 0,
+    this.onPrePrintChanged,
   });
 
   final TableStatus? activeStatus;
@@ -22,6 +25,11 @@ class StatusFilterBar extends StatelessWidget {
   final int totalCount;
 
   final ValueChanged<TableStatus?> onChanged;
+
+  /// 是否只看预打桌台（R25）
+  final bool prePrintSelected;
+  final int prePrintCount;
+  final ValueChanged<bool>? onPrePrintChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -52,7 +60,7 @@ class StatusFilterBar extends StatelessWidget {
               label: '全部',
               count: totalCount,
               color: isDark ? const Color(0xFFB8B8B8) : const Color(0xFF333333),
-              selected: activeStatus == null,
+              selected: activeStatus == null && !prePrintSelected,
               isAll: true,
               onTap: () => onChanged(null),
             ),
@@ -71,6 +79,19 @@ class StatusFilterBar extends StatelessWidget {
                       // 再次点击当前状态 => 取消筛选
                       onChanged(activeStatus == status ? null : status),
                 ),
+              ),
+            ),
+          ),
+          // 预打桌台筛选（R25）
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(left: 6),
+              child: _FilterButton(
+                label: '预打',
+                count: prePrintCount,
+                color: const Color(0xFFD97706),
+                selected: prePrintSelected,
+                onTap: () => onPrePrintChanged?.call(!prePrintSelected),
               ),
             ),
           ),

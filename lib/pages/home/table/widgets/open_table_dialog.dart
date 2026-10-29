@@ -15,6 +15,7 @@ import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
 import 'package:flutter_deer/util/params_sp_utils.dart';
+import 'package:flutter_deer/util/permission_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:sp_util/sp_util.dart';
 
@@ -121,8 +122,10 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
       if (userStr.isNotEmpty) {
         final Map<String, dynamic> userMap =
             jsonDecode(userStr) as Map<String, dynamic>;
-        _serverId = userMap['userid']?.toString() ?? '';
-        _serverName = userMap['username']?.toString() ?? '系统管理员';
+        _serverId = userMap['userid']?.toString() ?? userMap['id']?.toString() ?? '';
+        _serverName = userMap['name']?.toString() ??
+            userMap['username']?.toString() ??
+            '系统管理员';
       }
     } catch (_) {}
   }
@@ -174,6 +177,8 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
   /// 点菜按钮：先调开台接口再跳转点菜页
   /// （对齐 smdcapp TableOpenBottomV2Dialog.openTableOrOrder(false)：点菜也先 beginTable）
   Future<void> _onOrderTap() async {
+    // R30：先校验点菜权限，避免无权限时仍先把桌台开台
+    if (!PermissionUtils.check(PermissionUtils.appDishes, '点菜')) return;
     await _beginTable(goOrder: true);
   }
 

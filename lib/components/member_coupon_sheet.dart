@@ -16,15 +16,28 @@ class MemberCoupon {
     this.favamt = 0,
     this.favtype = 0,
     this.enddate = '',
+    this.raw = const <String, dynamic>{},
   });
 
   factory MemberCoupon.fromJson(Map<String, dynamic> json) {
     return MemberCoupon(
-      favid: json['favid']?.toString() ?? json['id']?.toString() ?? '',
-      favname: json['favname']?.toString() ?? json['name']?.toString() ?? '优惠券',
-      favamt: _toDouble(json['favamt'] ?? json['amount']),
+      favid: json['favid']?.toString() ??
+          json['fid']?.toString() ??
+          json['id']?.toString() ??
+          '',
+      favname: json['favname']?.toString() ??
+          json['name']?.toString() ??
+          '优惠券',
+      // 会员券接口返回 faceamt（券面额），旧字段 favamt/amount 兼容
+      favamt: _toDouble(json['faceamt'] ??
+          json['favbaseamt'] ??
+          json['favamt'] ??
+          json['amount']),
       favtype: _toInt(json['favtype']),
-      enddate: json['enddate']?.toString() ?? '',
+      enddate: json['validend']?.toString() ??
+          json['enddate']?.toString() ??
+          '',
+      raw: json,
     );
   }
 
@@ -38,12 +51,15 @@ class MemberCoupon {
   final int favtype;
   final String enddate;
 
+  /// 服务端原始券数据（核销接口原样回传，对齐 smdcapp Gson(VipCoupon)）
+  final Map<String, dynamic> raw;
+
   String get typeText {
     switch (favtype) {
       case 1:
-        return '代金券';
+        return '现金券';
       case 2:
-        return '折扣券';
+        return '项目券';
       case 3:
         return '礼品券';
       default:
@@ -51,7 +67,7 @@ class MemberCoupon {
     }
   }
 
-  String get amountText => favtype == 2 ? '${favamt}折' : '¥$favamt';
+  String get amountText => '¥$favamt';
 }
 
 /// 会员优惠券选择弹窗（对齐 smdcapp CouponListActivity + MemberDateilsActivity）
@@ -111,7 +127,7 @@ class _MemberCouponSheetState extends State<MemberCouponSheet> {
           'vipid': widget.vipid,
           'master': widget.master,
           'projectlist': widget.projectlist,
-          'clienttype': 'APP',
+          'clienttype': '4',
         },
         showError: false,
       );
@@ -232,7 +248,7 @@ class CouponVerifyHelper {
         <String, dynamic>{
           'master': master,
           'projectlist': projectlist,
-          'clienttype': 'APP',
+          'clienttype': '4',
           'fav': fav,
         },
       );

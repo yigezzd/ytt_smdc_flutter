@@ -54,6 +54,8 @@ class SpecCookSubmit {
     required this.cookText,
     required this.unitPrice,
     required this.wholeExtra,
+    this.unitExtra = 0,
+    this.mprice1 = 0,
     this.cooks = const <SelectedCook>[],
   });
 
@@ -62,6 +64,12 @@ class SpecCookSubmit {
   final String cookText;
   final double unitPrice;
   final double wholeExtra;
+
+  /// 单份做法数量加价（ptype=2 合计）
+  final double unitExtra;
+
+  /// 所选规格的会员价1（对齐 smdcapp 规格级 mprice1）
+  final double mprice1;
 
   /// 已选做法明细（下单时转 cooklist 上传）
   final List<SelectedCook> cooks;
@@ -601,6 +609,8 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
       cookText: _cookText,
       unitPrice: _unitPrice,
       wholeExtra: _wholeExtraPrice,
+      unitExtra: _unitExtraPrice,
+      mprice1: _checkedSpec?.mprice1 ?? 0,
       cooks: _selectedCooks,
     );
     if (buyNow) {

@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_deer/db/dao/reason_info_dao.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
+import 'package:flutter_deer/util/params_sp_utils.dart';
+import 'package:flutter_deer/util/user_helper.dart';
 
 /// 品牌红
 const Color _kBrandRed = Color(0xFFE63F31);
@@ -42,16 +45,21 @@ class DishDiscountSheet extends StatefulWidget {
     super.key,
     required this.dishName,
     this.currentDiscount = 100,
+    this.showNumpad = false,
   });
 
   final String dishName;
   final double currentDiscount;
+
+  /// 是否显示内置虚拟数字键盘（整单折扣，R48）
+  final bool showNumpad;
 
   /// 显示弹窗，返回 DiscountResult 或 null（取消）
   static Future<DiscountResult?> show(
     BuildContext context, {
     required String dishName,
     double currentDiscount = 100,
+    bool showNumpad = false,
   }) {
     return showModalBottomSheet<DiscountResult>(
       context: context,
@@ -60,6 +68,7 @@ class DishDiscountSheet extends StatefulWidget {
       builder: (_) => DishDiscountSheet(
         dishName: dishName,
         currentDiscount: currentDiscount,
+        showNumpad: showNumpad,
       ),
     );
   }
@@ -70,17 +79,11 @@ class DishDiscountSheet extends StatefulWidget {
 
 class _DishDiscountSheetState extends State<DishDiscountSheet> {
   late TextEditingController _controller;
+  final TextEditingController _reasonTextController = TextEditingController();
   String _selectedReason = '';
 
-  /// 打折原因列表（对齐 smdcapp reasonInfo typeid=03）
-  static const List<String> _reasons = <String>[
-    '会员折扣',
-    '老顾客优惠',
-    '员工餐',
-    '活动促销',
-    '抹零',
-    '其他',
-  ];
+  /// 打折原因列表（对齐 smdcapp reasonInfo typeid=03，读取后台配置）
+  List<String> _reasons = <String>[];
 
   @override
   void initState() {
@@ -90,11 +93,31 @@ class _DishDiscountSheetState extends State<DishDiscountSheet> {
           ? _formatNum(widget.currentDiscount)
           : '',
     );
+    _loadReasons();
+  }
+
+  Future<void> _loadReasons() async {
+    try {
+      final List<Map<String, dynamic>> rows =
+          await ReasonInfoDao.instance.queryByTypeid(
+        '03',
+        spid: UserHelper.getSpid(),
+        sid: UserHelper.getSid(),
+      );
+      final List<String> list = rows
+          .map((Map<String, dynamic> r) => r['value']?.toString() ?? '')
+          .where((String s) => s.isNotEmpty)
+          .toList();
+      if (list.isNotEmpty && mounted) {
+        setState(() => _reasons = list);
+      }
+    } catch (_) {}
   }
 
   @override
   void dispose() {
     _controller.dispose();
+    _reasonTextController.dispose();
     super.dispose();
   }
 
@@ -117,7 +140,20 @@ class _DishDiscountSheetState extends State<DishDiscountSheet> {
       );
       return;
     }
-    Navigator.of(context).pop(DiscountResult(discount: discount, remark: _selectedReason));
+    // R49：后台要求打折原因必填时必须选择/输入原因（不打折除外）
+    if (discount < 100 &&
+        ParamsSpUtils.isRemarkMust('03') &&
+        _selectedReason.isEmpty &&
+        _reasonTextController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请选择打折原因'), duration: Duration(seconds: 1)),
+      );
+      return;
+    }
+    final String reason = _reasonTextController.text.trim().isNotEmpty
+        ? _reasonTextController.text.trim()
+        : _selectedReason;
+    Navigator.of(context).pop(DiscountResult(discount: discount, remark: reason));
   }
 
   @override
@@ -186,9 +222,11 @@ class _DishDiscountSheetState extends State<DishDiscountSheet> {
               ],
             ),
             const SizedBox(height: 16),
-            // 折扣输入
+            // 折扣输入（整单折扣使用内置键盘，避免系统键盘遮挡）
             TextField(
               controller: _controller,
+              readOnly: widget.showNumpad,
+              showCursor: true,
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               inputFormatters: <TextInputFormatter>[
                 FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
@@ -227,6 +265,10 @@ class _DishDiscountSheetState extends State<DishDiscountSheet> {
                 ),
               ),
             ),
+            if (widget.showNumpad) ...[
+              const SizedBox(height: 10),
+              _buildNumpad(isDark),
+            ],
             const SizedBox(height: 16),
             // 打折原因（对齐 smdcapp 原因列表）
             Text(
@@ -272,6 +314,38 @@ class _DishDiscountSheetState extends State<DishDiscountSheet> {
                 );
               }).toList(),
             ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _reasonTextController,
+              style: TextStyle(
+                fontSize: 14,
+                color: isDark ? Colors.white : const Color(0xFF1D2129),
+              ),
+              decoration: InputDecoration(
+                hintText: '或输入打折原因',
+                hintStyle: TextStyle(
+                  fontSize: 14,
+                  color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4),
+                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(
+                    color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
+                  ),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide(
+                    color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: const BorderSide(color: _kBrandRed),
+                ),
+              ),
+            ),
             const SizedBox(height: 20),
             // 确定按钮
             SizedBox(
@@ -297,6 +371,9 @@ class _DishDiscountSheetState extends State<DishDiscountSheet> {
   }
 
   Widget _buildQuickBtn(String label, String value, bool isDark) {
+    // R49：点击常用折扣后按钮保留选中底色，便于识别当前选择
+    final bool selected =
+        double.tryParse(_controller.text.trim()) == double.tryParse(value);
     return Expanded(
       child: GestureDetector(
         // 对齐 smdcapp DiscountPopup：tv_no 清空后 setValue("100")，输入框显示 100
@@ -304,21 +381,107 @@ class _DishDiscountSheetState extends State<DishDiscountSheet> {
         child: Container(
           height: 34,
           decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF5F5F5),
+            color: selected
+                ? _kBrandRed.withValues(alpha: 0.10)
+                : (isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF5F5F5)),
             borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: selected
+                  ? _kBrandRed
+                  : (isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB)),
+            ),
           ),
           child: Center(
             child: Text(
               label,
               style: TextStyle(
                 fontSize: 12,
-                color: isDark ? Colors.white70 : const Color(0xFF333333),
+                color: selected
+                    ? _kBrandRed
+                    : (isDark ? Colors.white70 : const Color(0xFF333333)),
               ),
             ),
           ),
         ),
       ),
     );
+  }
+
+  /// 内置数字键盘（R48：整单折扣页避免系统键盘遮挡并方便快速输入）
+  Widget _buildNumpad(bool isDark) {
+    Widget key(String label, {VoidCallback? onTap, IconData? icon}) {
+      return Expanded(
+        child: GestureDetector(
+          onTap: onTap ?? () => _appendDigit(label),
+          child: Container(
+            height: 40,
+            margin: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF5F6F8),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Center(
+              child: icon != null
+                  ? Icon(icon, size: 18, color: isDark ? Colors.white70 : const Color(0xFF4E5969))
+                  : Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: isDark ? Colors.white : const Color(0xFF1D2129),
+                      ),
+                    ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      children: <Widget>[
+        for (final List<String> row in <List<String>>[
+          <String>['1', '2', '3'],
+          <String>['4', '5', '6'],
+          <String>['7', '8', '9'],
+          <String>['.', '0', '⌫'],
+        ])
+          Row(
+            children: row
+                .map((String k) => key(
+                      k,
+                      onTap: k == '⌫' ? _backspace : null,
+                      icon: k == '⌫' ? Icons.backspace_outlined : null,
+                    ))
+                .toList(),
+          ),
+      ],
+    );
+  }
+
+  void _appendDigit(String digit) {
+    final String text = _controller.text;
+    setState(() {
+      if (digit == '.') {
+        if (text.contains('.')) return;
+        _controller.text = text.isEmpty ? '0.' : '$text.';
+      } else {
+        final String next = '$text$digit';
+        if (next.length > 5) return;
+        _controller.text = next;
+      }
+      _controller.selection =
+          TextSelection.collapsed(offset: _controller.text.length);
+    });
+  }
+
+  void _backspace() {
+    final String text = _controller.text;
+    if (text.isEmpty) return;
+    setState(() {
+      _controller.text = text.substring(0, text.length - 1);
+      _controller.selection =
+          TextSelection.collapsed(offset: _controller.text.length);
+    });
   }
 }
 
@@ -776,14 +939,8 @@ class _DishGiveSheetState extends State<DishGiveSheet> {
   late TextEditingController _remarkController;
   String _selectedReason = '';
 
-  /// 赠送原因列表（对齐 smdcapp reasonInfo typeid=04）
-  static const List<String> _reasons = <String>[
-    '客户投诉',
-    '老顾客赠送',
-    '活动赠送',
-    '老板赠送',
-    '其他',
-  ];
+  /// 赠送原因列表（对齐 smdcapp reasonInfo typeid=04，读取后台配置）
+  List<String> _reasons = <String>[];
 
   @override
   void initState() {
@@ -794,6 +951,25 @@ class _DishGiveSheetState extends State<DishGiveSheet> {
           : widget.maxNum.toString(),
     );
     _remarkController = TextEditingController();
+    _loadReasons();
+  }
+
+  Future<void> _loadReasons() async {
+    try {
+      final List<Map<String, dynamic>> rows =
+          await ReasonInfoDao.instance.queryByTypeid(
+        '04',
+        spid: UserHelper.getSpid(),
+        sid: UserHelper.getSid(),
+      );
+      final List<String> list = rows
+          .map((Map<String, dynamic> r) => r['value']?.toString() ?? '')
+          .where((String s) => s.isNotEmpty)
+          .toList();
+      if (list.isNotEmpty && mounted) {
+        setState(() => _reasons = list);
+      }
+    } catch (_) {}
   }
 
   @override
@@ -824,6 +1000,16 @@ class _DishGiveSheetState extends State<DishGiveSheet> {
     final String remark = _remarkController.text.trim().isNotEmpty
         ? _remarkController.text.trim()
         : _selectedReason;
+    // R50：后台要求赠送原因必填时必须选择/输入原因
+    if (ParamsSpUtils.isRemarkMust('04') && remark.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(widget.isGive ? '请选择取消原因' : '请选择赠送原因'),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+      return;
+    }
     Navigator.of(context).pop(GiveResult(remark: remark, num: num));
   }
 
@@ -1817,10 +2003,7 @@ class _DishReturnSheetState extends State<DishReturnSheet> {
   void initState() {
     super.initState();
     _num = widget.maxQty;
-    // 对齐 smdcapp: 如果设置了退菜原因必选，默认选中第一个
-    if (widget.reasons.isNotEmpty) {
-      _selectedReason = widget.reasons.first;
-    }
+    // R51：退菜原因不设默认值，由操作员主动选择
   }
 
   @override
@@ -2007,6 +2190,13 @@ class _DishReturnSheetState extends State<DishReturnSheet> {
     if (_selectedReason.isNotEmpty) {
       if (sb.isNotEmpty) sb.write(',');
       sb.write(_selectedReason);
+    }
+    // 后台要求退菜原因必填时不能直接确认
+    if (ParamsSpUtils.isRemarkMust('02') && sb.toString().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请选择退菜原因'), duration: Duration(seconds: 1)),
+      );
+      return;
     }
     Navigator.pop(
       context,

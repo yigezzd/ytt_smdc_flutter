@@ -15,11 +15,15 @@ class TableCard extends StatefulWidget {
     super.key,
     required this.table,
     required this.onTap,
+    this.onMergeTap,
     this.animation,
   });
 
   final TableInfo table;
   final ValueChanged<TableInfo> onTap;
+
+  /// 点击“并”字标签查看关联桌台明细（R37）
+  final ValueChanged<TableInfo>? onMergeTap;
 
   /// 入场动画(网格切换时的交错动画)
   final Animation<double>? animation;
@@ -177,7 +181,9 @@ class _TableCardState extends State<TableCard> {
                           ),
                         ),
                         if (table.isLocked) _miniTag('锁', const Color(0xFF86909C)),
-                        if (table.isHang) _miniTag('挂', const Color(0xFFD97706)),
+                        if (table.isHang)
+                          _miniTag(ParamsSpUtils.getHangUpLabelName(),
+                              const Color(0xFFD97706)),
                         if (table.isPrePrint) _miniTag('预打', const Color(0xFFD97706)),
                         if (table.selected)
                           Container(
@@ -202,20 +208,25 @@ class _TableCardState extends State<TableCard> {
                         mainAxisSize: MainAxisSize.min,
                         children: <Widget>[
                           if (table.mergeNote != null)
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 4),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFE13426),
-                                borderRadius: BorderRadius.circular(3),
-                              ),
-                              child: Text(
-                                table.mergeNote!,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white),
+                            GestureDetector(
+                              onTap: widget.onMergeTap == null
+                                  ? null
+                                  : () => widget.onMergeTap!(widget.table),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE13426),
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                                child: Text(
+                                  table.mergeNote!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white),
+                                ),
                               ),
                             ),
                           if (_weighTag.isNotEmpty) ...<Widget>[

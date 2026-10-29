@@ -535,7 +535,7 @@ class CashReconService {
       if (userStr.isNotEmpty) {
         final Map<String, dynamic> userMap =
             jsonDecode(userStr) as Map<String, dynamic>;
-        return userMap['userid']?.toString() ?? '0';
+        return userMap['userid']?.toString() ?? userMap['id']?.toString() ?? '0';
       }
     } catch (_) {}
     return '0';

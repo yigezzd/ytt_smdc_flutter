@@ -23,6 +23,7 @@ class ConnectionManager {
 
   static bool _masterDeviceReachable = false;
   static String? _activeServerType;
+  static bool _manualCloud = false;
 
   // 业务调用以 pcAlive 选路；仅主设备断线时仍须保留 PC 路由，禁止降级到云端。
   static bool get pcAlive =>
@@ -40,6 +41,7 @@ class ConnectionManager {
   static void beginSession() {
     _activeServerType = getServerType();
     _masterDeviceReachable = false;
+    _manualCloud = false;
   }
 
   static final StreamController<void> _masterDeviceLostController =
@@ -82,6 +84,29 @@ class ConnectionManager {
     }
     SpUtil.putString(Constant.serverType, type);
     return true;
+  }
+
+  /// 连接失败弹窗选择“连接云服务”：本会话立即切云，不改写后台/参数配置（R36）
+  ///
+  /// 数据交换后重新初始化会话时保持该选择，避免再次弹出连接方式选择。
+  static void switchToCloud() {
+    _activeServerType = '2';
+    _masterDeviceReachable = false;
+    _manualCloud = true;
+  }
+
+  /// 数据交换完成后的会话刷新：保留用户本次手动选择的云服务，否则按配置重读
+  ///
+  /// 只重读连接模式，不重置主设备可达状态（登录时已探活得出，对齐 smdcapp
+  /// App.pcAlive 登录后一直保留）。若在此清零，桌台页会因会话已初始化跳过探活，
+  /// 直接用 false 判定并误弹“无法连接到主设备”。
+  static void refreshSessionForDataExchange() {
+    if (_manualCloud) {
+      _activeServerType = '2';
+      _masterDeviceReachable = false;
+      return;
+    }
+    _activeServerType = getServerType();
   }
 
   /// 主设备地址（登录响应的 localhost 字段）

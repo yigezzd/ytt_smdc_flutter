@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_deer/components/confirm_dialog.dart';
+import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/table_download_manager.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
+import 'package:flutter_deer/util/store_mode_utils.dart';
 
 /// 数据交换页（对齐 smdcapp ChangeDataPopup + dialog_change_data.xml）
 ///
@@ -100,12 +102,8 @@ class _DataExchangePageState extends State<DataExchangePage> {
         _showRetryDialog();
         break;
       case ChangeDataEvent.code200:
-        // 全部下载完成 → 重新初始化数据并进入桌台页
-        // （对齐 smdcapp: initInfo + TableInfoActivity.startActivity + 登录页 finish）
-        TableDownloadManager.initInfo();
-        if (mounted) {
-          NavigatorUtils.push(context, Routes.home, clearStack: true);
-        }
+        // 全部下载完成 → 重新初始化数据并按商业模式进入对应页面
+        _goAfterLogin();
         break;
       default:
         // 下载中：更新文本与进度条
@@ -144,10 +142,31 @@ class _DataExchangePageState extends State<DataExchangePage> {
     if (retry && !overLimit) {
       _startDownload(isRetry: true);
     } else {
-      // 取消/超过重试上限也进入桌台页（对齐 smdcapp: 取消后仍跳转 TableInfoActivity）
-      TableDownloadManager.initInfo();
-      NavigatorUtils.push(context, Routes.home, clearStack: true);
+      _goAfterLogin();
     }
+  }
+
+  /// 登录后跳转（R9：快餐模式直接进入快餐点菜页，不经过桌台页）
+  void _goAfterLogin() {
+    TableDownloadManager.initInfo();
+    // R36：数据交换完成后按最新连接配置刷新会话；手动选择过云服务时保持本会话不再弹窗
+    ConnectionManager.refreshSessionForDataExchange();
+    if (!mounted) return;
+    if (StoreModeUtils.isFastMode()) {
+      NavigatorUtils.push(
+        context,
+        Routes.orderPage,
+        clearStack: true,
+        arguments: <String, dynamic>{
+          'fastMode': true,
+          'saleid': StoreModeUtils.generateSaleId(),
+          'tableName': '',
+          'persons': 0,
+        },
+      );
+      return;
+    }
+    NavigatorUtils.push(context, Routes.home, clearStack: true);
   }
 
   @override
@@ -159,32 +178,51 @@ class _DataExchangePageState extends State<DataExchangePage> {
         // 下载期间禁止返回（对齐 smdcapp dismissOnBackPressed(false)）
         body: PopScope(
           canPop: false,
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  // 进度文本（对齐 smdcapp tv_change_data: 16sp 白色居中）
-                  Text(
-                    _statusText,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      color: Colors.white,
-                    ),
-                  ),
-                  // 数字进度条（对齐 smdcapp NumberProgressBar Grace_Yellow）
-                  Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: _NumberProgressBar(
-                      max: _max,
-                      progress: _progress,
-                    ),
-                  ),
-                ],
+          child: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              // R4：数据交换界面同样使用新的菜品背景图
+              Image.asset(
+                'assets/images/login/login_bg_food.jpg',
+                fit: BoxFit.cover,
               ),
-            ),
+              const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: <Color>[Color(0x99000000), Color(0x44000000)],
+                  ),
+                ),
+              ),
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      // 进度文本（对齐 smdcapp tv_change_data: 16sp 白色居中）
+                      Text(
+                        _statusText,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          color: Colors.white,
+                        ),
+                      ),
+                      // 数字进度条（对齐 smdcapp NumberProgressBar Grace_Yellow）
+                      Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: _NumberProgressBar(
+                          max: _max,
+                          progress: _progress,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

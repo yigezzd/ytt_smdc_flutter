@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_deer/net/pay_gateway.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
+import 'package:flutter_deer/util/scan_pending_store.dart';
+import 'package:flutter_deer/util/toast_utils.dart';
 
 /// 异常订单查询页（对齐 smdcapp YcOrderActivity）
 /// smdcapp 中此页面读取本地 Room 数据库 PayFlow 表，展示未上传/交易异常的流水。
@@ -22,8 +25,10 @@ class _YcOrderPageState extends State<YcOrderPage> {
   }
 
   void _loadData() {
-    // TODO: 对接本地流水数据库（对齐 smdcapp DbManager.db.getPayFlowDao()）
-    // 当前 Flutter 端无本地 PayFlow 存储，显示空态
+    final List<Map<String, dynamic>> list = ScanPendingStore.load();
+    if (mounted) setState(() => _orderList
+      ..clear()
+      ..addAll(list));
   }
 
   @override
@@ -128,6 +133,11 @@ class _YcOrderPageState extends State<YcOrderPage> {
               )),
               const Spacer(),
               Text('操作员：$cashname', style: const TextStyle(fontSize: 12, color: Color(0xFF999999))),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: () => _queryOrder(order),
+                child: const Text('交易查询', style: TextStyle(fontSize: 12, color: Color(0xFFE13426))),
+              ),
             ],
           ),
         ],
@@ -135,7 +145,42 @@ class _YcOrderPageState extends State<YcOrderPage> {
     );
   }
 
+  /// 重新交易查询（R61）
+  Future<void> _queryOrder(Map<String, dynamic> order) async {
+    final Map<String, dynamic> cfg =
+        (order['payConfig'] as Map?)?.cast<String, dynamic>() ??
+            <String, dynamic>{};
+    final String terminalsn = cfg['terminalsn']?.toString() ?? '';
+    final String terminalkey = cfg['terminalkey']?.toString() ?? '';
+    if (terminalsn.isEmpty || terminalkey.isEmpty) {
+      Toast.show('缺少支付配置，请到结账页重新查询');
+      return;
+    }
+    final PayGateway gateway = PayGateway(
+      terminalsn: terminalsn,
+      terminalkey: terminalkey,
+      payType: cfg['paytype']?.toString() ?? '1',
+      shopId: cfg['shopid']?.toString() ?? '',
+      operator: order['cashname']?.toString() ?? '',
+    );
+    final ScanPayResult result = await gateway.queryStatus(
+      billNo: order['billno']?.toString() ?? '',
+      payid: order['payid']?.toString() ?? '09',
+    );
+    if (!mounted) return;
+    if (result.success) {
+      ScanPendingStore.remove(order['billno']?.toString() ?? '');
+      Toast.show('查询成功：该笔交易已支付');
+      _loadData();
+    } else if (result.trade.isNotEmpty) {
+      Toast.show('交易失败：${result.trade}');
+    } else {
+      Toast.show('交易仍在处理中，请稍后再查');
+    }
+  }
+
   void _clearAll() {
+    ScanPendingStore.clear();
     setState(() => _orderList.clear());
   }
 }

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
+import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:sp_util/sp_util.dart';
@@ -22,6 +23,7 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
 
   // ==================== 开关状态（对齐 smdcapp ConstantSetKey + SpUtils） ====================
   bool _printBill = false;       // 打印账单（MMKV print_bill）
+  bool _settlePrint = false;     // 结账打印小票（MMKV SETTLE_DY，对齐 smdcapp）
   bool _fullPayment = true;      // 默认全款付（MMKV full_payment）
   bool _enableNfc = false;       // 开启NFC（MMKV ENABLE_NFC）
   bool _enableKd = true;         // 客单开关（MMKV ENABLE_KD）
@@ -46,6 +48,7 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
   void _loadSettings() {
     _serverType = ConnectionManager.getServerType();
     _printBill = SpUtil.getBool('print_bill') ?? false;
+    _settlePrint = SpUtil.getBool(Constant.settleDy, defValue: true) ?? true;
     _fullPayment = SpUtil.getBool('full_payment', defValue: true) ?? true;
     _enableNfc = SpUtil.getBool('ENABLE_NFC') ?? false;
     _enableKd = SpUtil.getBool('ENABLE_KD', defValue: true) ?? true;
@@ -79,6 +82,11 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
   void _togglePrintBill(bool v) {
     setState(() => _printBill = v);
     SpUtil.putBool('print_bill', v);
+  }
+
+  void _toggleSettlePrint(bool v) {
+    setState(() => _settlePrint = v);
+    SpUtil.putBool(Constant.settleDy, v);
   }
 
   void _toggleFullPayment(bool v) {
@@ -210,6 +218,7 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
           const SizedBox(height: 12),
           _buildSection('结账设置', [
             _buildSwitchItem('打印账单', _printBill, _togglePrintBill),
+            _buildSwitchItem('结账打印小票', _settlePrint, _toggleSettlePrint),
             _buildSwitchItem('默认全款付', _fullPayment, _toggleFullPayment),
             _buildSwitchItem('开启暂结', _kqZj, _toggleKqZj),
           ]),

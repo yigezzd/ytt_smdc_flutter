@@ -160,7 +160,7 @@ class _MasterDeviceCheckDialogState extends State<MasterDeviceCheckDialog> {
                       Navigator.of(context).pop(false);
                       return;
                     }
-                    ConnectionManager.pcAlive = false;
+                    ConnectionManager.switchToCloud();
                     Navigator.of(context).pop(true);
                     Toast.show('已切换为云服务模式');
                   },

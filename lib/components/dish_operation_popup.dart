@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../util/params_sp_utils.dart';
 import '../util/store_mode_utils.dart';
 
 /// 品牌红
@@ -197,9 +198,10 @@ class DishOperationPopup extends StatelessWidget {
     final DishOperation del = const DishOperation(DishOperationType.delete, '删除');
     final DishOperation waiter = const DishOperation(DishOperationType.waiter, '服务员');
     final DishOperation rename = const DishOperation(DishOperationType.rename, '改名');
+    final String hangName = ParamsSpUtils.getHangUpName();
     final DishOperation suspend = DishOperation(
       DishOperationType.suspend,
-      isSuspended ? '取消\n挂起' : '挂起',
+      isSuspended ? '取消\n$hangName' : hangName,
       isCancel: isSuspended,
     );
 

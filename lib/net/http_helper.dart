@@ -127,7 +127,7 @@ Future<Map<String, dynamic>> request(
     if (userStr.isNotEmpty) {
       final Map<String, dynamic> userMap =
           jsonDecode(userStr) as Map<String, dynamic>;
-      userid = userMap['userid']?.toString();
+      userid = userMap['userid']?.toString() ?? userMap['id']?.toString();
     }
   } catch (_) {}
 
@@ -247,9 +247,9 @@ Future<Map<String, dynamic>> request(
             errorMsg = retmsg;
           }
         } catch (_) {}
-      } else if (e.message != null && e.message!.isNotEmpty) {
-        // 无响应体时（超时/连接拒绝等），保留 Dio 的原始描述
-        errorMsg = e.message!;
+      } else {
+        // 无响应体时（超时/连接拒绝等）统一中文提示，避免把 Dio 英文原文暴露给商家
+        errorMsg = _friendlyNetworkError(e);
       }
     }
     if (showError) Toast.show(errorMsg);
@@ -420,8 +420,8 @@ Future<Map<String, dynamic>> _buildSignedParams(
     if (userStr.isNotEmpty) {
       final Map<String, dynamic> userMap =
           jsonDecode(userStr) as Map<String, dynamic>;
-      operid = userMap['userid']?.toString() ?? '0';
-      opername = userMap['username']?.toString() ?? '';
+      operid = userMap['userid']?.toString() ?? userMap['id']?.toString() ?? '0';
+      opername = userMap['name']?.toString() ?? userMap['username']?.toString() ?? '';
     }
   } catch (_) {}
 
@@ -586,8 +586,8 @@ Future<Map<String, dynamic>> requestForm(
             errorMsg = retmsg;
           }
         } catch (_) {}
-      } else if (e.message != null && e.message!.isNotEmpty) {
-        errorMsg = e.message!;
+      } else {
+        errorMsg = _friendlyNetworkError(e);
       }
     }
     if (showError) {
@@ -596,6 +596,31 @@ Future<Map<String, dynamic>> requestForm(
     _logApi(fullUrl, signedData, '异常: $errorMsg',
         elapsedMs: stopwatch.elapsedMilliseconds, response: respText);
     throw _ApiException(<String, dynamic>{'retcode': -1, 'retmsg': errorMsg});
+  }
+}
+
+/// 网络层异常统一中文提示（R52：断网/超时不再显示 Dio 英文原文）
+String _friendlyNetworkError(DioException e) {
+  switch (e.type) {
+    case DioExceptionType.connectionTimeout:
+      return '连接超时，请检查网络后重试';
+    case DioExceptionType.sendTimeout:
+      return '请求超时，请稍后重试';
+    case DioExceptionType.receiveTimeout:
+      return '响应超时，请稍后重试';
+    case DioExceptionType.connectionError:
+      return '网络连接失败，请检查网络或主设备';
+    case DioExceptionType.badCertificate:
+      return '安全证书校验失败，请联系管理员';
+    case DioExceptionType.badResponse:
+      final int? status = e.response?.statusCode;
+      return '服务器异常${status == null ? '' : '（$status）'}，请稍后重试';
+    case DioExceptionType.cancel:
+      return '请求已取消';
+    case DioExceptionType.unknown:
+      return '网络异常，请检查网络后重试';
+    default:
+      return '网络异常，请检查网络后重试';
   }
 }
 

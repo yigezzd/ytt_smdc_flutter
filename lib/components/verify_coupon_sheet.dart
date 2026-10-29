@@ -2,9 +2,34 @@ import 'package:flutter/material.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
+import 'package:flutter_deer/widgets/barcode_scanner_page.dart';
 
 /// 品牌红
 const Color _kBrandRed = Color(0xFFE13426);
+
+/// 团购核销结果（对齐 smdcapp DyVerifyBean：dealprice=结算价，productprice=券面值）
+class VerifyCouponResult {
+  const VerifyCouponResult({
+    required this.amount,
+    required this.faceAmount,
+    this.name = '',
+    this.verifyToken = '',
+    this.businesstype = '0',
+  });
+
+  /// 实际抵扣/结算金额（dealprice）
+  final double amount;
+
+  /// 券面值（productprice）
+  final double faceAmount;
+
+  final String name;
+  final String verifyToken;
+  final String businesstype;
+
+  /// 券面值与结算价的差额（平台优惠）
+  double get discount => faceAmount > amount ? faceAmount - amount : 0;
+}
 
 /// 团购核销弹窗（对齐 smdcapp DyVerifyPopup）
 ///
@@ -20,19 +45,18 @@ class VerifyCouponSheet extends StatefulWidget {
   final String saleid;
   final String billno;
 
-  /// 显示核销弹窗，返回核销金额（成功时 > 0）
-  static Future<double> show(
+  /// 显示核销弹窗，返回核销结果；null 表示取消
+  static Future<VerifyCouponResult?> show(
     BuildContext context, {
     required String saleid,
     String billno = '',
   }) async {
-    final double? result = await showModalBottomSheet<double>(
+    return showModalBottomSheet<VerifyCouponResult>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => VerifyCouponSheet(saleid: saleid, billno: billno),
     );
-    return result ?? 0;
   }
 
   @override
@@ -64,6 +88,17 @@ class _VerifyCouponSheetState extends State<VerifyCouponSheet> {
     _codeCtrl.dispose();
     _codeFocusNode.dispose();
     super.dispose();
+  }
+
+  /// R76：调用摄像头扫描团购券码
+  Future<void> _scanCode() async {
+    final Object? code = await Navigator.push<Object>(
+      context,
+      MaterialPageRoute<Object>(builder: (_) => const BarcodeScannerPage()),
+    );
+    if (code == null || !mounted) return;
+    _codeCtrl.text = code.toString();
+    await _queryCoupon();
   }
 
   @override
@@ -132,8 +167,13 @@ class _VerifyCouponSheetState extends State<VerifyCouponSheet> {
                         decoration: InputDecoration(
                           hintText: '输入或扫描券号',
                           hintStyle: const TextStyle(fontSize: 14, color: Color(0xFFC9CDD4)),
-                          prefixIcon: const Icon(Icons.qr_code_scanner, size: 20, color: Color(0xFF86909C)),
-                          prefixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 0),
+                          prefixIcon: GestureDetector(
+                            onTap: _scanCode,
+                            child: const Icon(Icons.qr_code_scanner,
+                                size: 20, color: Color(0xFF86909C)),
+                          ),
+                          prefixIconConstraints:
+                              const BoxConstraints(minWidth: 40, minHeight: 0),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
                             borderSide: BorderSide.none,
@@ -269,10 +309,19 @@ class _VerifyCouponSheetState extends State<VerifyCouponSheet> {
       if (data is Map<String, dynamic> && data.isNotEmpty) {
         setState(() => _couponInfo = data);
       } else {
-        Toast.show('未查询到券信息');
+        // R18/R19：优先展示服务端返回的已核销/已过期等原因
+        final String msg = resp['retmsg']?.toString() ??
+            resp['Message']?.toString() ??
+            resp['message']?.toString() ??
+            '';
+        Toast.show(msg.isNotEmpty ? msg : '未查询到券信息');
       }
-    } catch (_) {
-      Toast.show('查询失败，请检查券号');
+    } catch (e) {
+      // R18/R19：网络/服务端异常时透出具体原因
+      final String msg = e.toString();
+      Toast.show(msg.contains('已核销') || msg.contains('过期')
+          ? msg
+          : '查询失败，请检查券号');
     } finally {
       if (mounted) setState(() => _querying = false);
     }
@@ -298,11 +347,31 @@ class _VerifyCouponSheetState extends State<VerifyCouponSheet> {
         'businesstype': _couponInfo!['businesstype']?.toString() ?? '0',
       });
       if (!mounted) return;
-      final double amt = double.tryParse(_couponInfo!['productprice']?.toString() ?? '0') ?? 0;
+      final double faceAmt =
+          double.tryParse(_couponInfo!['productprice']?.toString() ?? '0') ?? 0;
+      final double dealAmt = double.tryParse(
+              _couponInfo!['dealprice']?.toString() ?? '') ??
+          faceAmt;
       Toast.show('核销成功');
-      Navigator.pop(context, amt);
-    } catch (_) {
-      if (mounted) Toast.show('核销失败');
+      Navigator.pop(
+        context,
+        VerifyCouponResult(
+          amount: dealAmt > 0 ? dealAmt : faceAmt,
+          faceAmount: faceAmt > 0 ? faceAmt : dealAmt,
+          name: _couponInfo!['marketname']?.toString() ??
+              _couponInfo!['name']?.toString() ??
+              '团购券',
+          verifyToken: _couponInfo!['verify_token']?.toString() ?? '',
+          businesstype: _couponInfo!['businesstype']?.toString() ?? '0',
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        final String msg = e.toString();
+        Toast.show(msg.contains('已核销') || msg.contains('过期')
+            ? msg
+            : '核销失败');
+      }
     } finally {
       if (mounted) setState(() => _verifying = false);
     }

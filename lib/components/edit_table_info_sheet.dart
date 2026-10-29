@@ -398,6 +398,10 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
     }
     setState(() => _submitting = true);
     try {
+      // 修改开台信息时保留桌台已有的会员绑定，避免把会员信息清空（R45）
+      final Map<String, dynamic> tmp =
+          widget.tableJson?['tmp'] as Map<String, dynamic>? ??
+              <String, dynamic>{};
       await OrderRepository.updateMasterTmpVip(
         saleid: widget.saleid,
         tableid: widget.tableId,
@@ -406,10 +410,10 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
         personnum: '$personNum',
         serverid: _serverId,
         servername: _serverName,
-        vipid: '',
-        vipno: '',
-        vipname: '',
-        vipmobile: '',
+        vipid: tmp['vipid']?.toString() ?? '',
+        vipno: tmp['vipno']?.toString() ?? '',
+        vipname: tmp['vipname']?.toString() ?? '',
+        vipmobile: tmp['vipmobile']?.toString() ?? '',
         masterDevice: ConnectionManager.pcAlive,
         tableJson: widget.tableJson,
       );

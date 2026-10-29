@@ -119,6 +119,9 @@ class Product {
     this.mprice2 = 0,
     this.mprice3 = 0,
     this.dscflag = 1,
+    this.presentflag = 1,
+    this.chooseqtyflag = 0,
+    this.minsaleflag = 1,
     this.printflag = 0,
     this.labelflag = 0,
   });
@@ -154,6 +157,15 @@ class Product {
 
   /// 是否可打折 1=可打折 0=不可打折（对齐 smdcapp dscflag）
   final int dscflag;
+
+  /// 是否可赠送 1=可赠送 0=不可赠送（对齐 smdcapp presentflag）
+  final int presentflag;
+
+  /// 点菜时是否必须输入数量 1=是（对齐 smdcapp chooseqtyflag）
+  final int chooseqtyflag;
+
+  /// 是否计入低消 1=计入 0=不计入（对齐 smdcapp minsaleflag）
+  final int minsaleflag;
 
   /// 厨打标记（对齐 smdcapp printflag）：1=需要厨打 0=不厨打
   final int printflag;
@@ -250,6 +262,17 @@ class CartItem {
   final Product product;
   int quantity;
 
+  /// 小数数量部分（R4：点菜支持小数，如 1.5 份）
+  double extraQty = 0;
+
+  /// 明细操作类型（对齐 smdcapp DetailListBean.opertype）：
+  /// 0=正常 2=退菜 3=赠送 4=打折 5=改价
+  /// Web 后台订单明细报表据此显示【折】【赠】【退】【改】标识
+  int opertype = 0;
+
+  /// 实际数量（整数部分 + 小数部分）
+  double get qtyValue => quantity + extraQty;
+
   /// 称重菜重量（对齐 smdcapp weighNum），0=非称重商品
   /// 称重菜计价按 单价×重量，数量固定为1份
   double weighNum;
@@ -270,8 +293,16 @@ class CartItem {
   /// 是否套餐商品（对齐 smdcapp combflag==1）
   bool get isCombo => combItems.isNotEmpty;
 
-  /// 规格做法加价合计(单份，做法修改时可更新)
+  /// 整份加价合计(整行一次，做法修改时可更新)
   double extraPrice;
+
+  /// 单份做法数量加价（ptype=2 合计，随数量翻倍；对齐 smdcapp cookaddamt 分项）
+  ///
+  /// [product.price] 在加购时已包含该金额（用于展示/促销比价），
+  /// 计算行总额与上传 sellprice/rrprice/cookaddamt 时必须把它拆出来：
+  /// - 行总额 = 单份价 × 数量 + 整份加价 + 打包费
+  /// - cookaddamt = 单份数量加价 × 数量 + 整份加价 + 打包费
+  double unitCookExtra = 0;
 
   /// 已选做法明细（下单时转 cooklist 上传；打包费也按打包做法拼入，对齐 smdcapp CookHelper）
   List<SelectedCook> cooks = <SelectedCook>[];
@@ -280,11 +311,8 @@ class CartItem {
   /// [wholeExtra] 覆盖整份加价(ptype=1)。
   /// 注意：需在更新 [cooks] 之前调用（依赖旧做法明细剥离旧单价加价）。
   void applyCookModify({required double wholeExtra, required double unitExtra}) {
-    double oldUnitExtra = 0;
-    for (final SelectedCook c in cooks) {
-      if (c.ptype == 2) oldUnitExtra += c.price * c.qty;
-    }
-    product.price = product.price - oldUnitExtra + unitExtra;
+    product.price = product.price - unitCookExtra + unitExtra;
+    unitCookExtra = unitExtra;
     extraPrice = wholeExtra;
   }
 
@@ -356,11 +384,93 @@ class CartItem {
   /// 命中的基础促销活动ID（分类折扣/菜品折扣/特价菜）
   String jcmbillid = '';
 
-  /// 特价标识：0=非特价 1=分类折扣 2=菜品折扣 3=特价菜（对齐 smdcapp specpriceflag）
+  /// 特价标识：0=非特价 1=分类折扣 2=菜品折扣 3=特价菜 7=第N份促销
+  /// （对齐 smdcapp specpriceflag）
   int specpriceflag = 0;
 
   /// 特价菜单价（specpriceflag==3 时生效，优先于原价）
   double promoPrice = 0;
+
+  // ---- 第N份促销（对齐 smdcapp specpriceflag=7 / cxmbillid / rrprice）----
+
+  /// 第N份促销单价（促销后菜品单价，不含做法/规格加价；specpriceflag==7 时生效）
+  double nthPrice = 0;
+
+  /// 是否第N份促销拆分行（对齐 smdcapp specpriceflag==7 && cxmbillid 非空）
+  bool get isNthPromo => specpriceflag == 7 && cxmbillid.isNotEmpty;
+
+  /// 整行原地转为第N份促销行
+  void markNthPromo({required String billid, required double promoUnitPrice}) {
+    specpriceflag = 7;
+    cxmbillid = billid;
+    nthPrice = promoUnitPrice;
+    discount = 100;
+    jcmbillid = '';
+    promoPrice = 0;
+  }
+
+  /// 撤销第N份促销（还原为普通行，对齐 smdcapp resetPromoRow）
+  void resetNthPromo() {
+    specpriceflag = 0;
+    cxmbillid = '';
+    nthPrice = 0;
+    discount = 100;
+    jcmbillid = '';
+    promoPrice = 0;
+  }
+
+  /// 生成第N份促销拆分行（对齐 smdcapp generateNormalSplitItem）
+  CartItem copyAsNthPromo({
+    required String billid,
+    required double promoUnitPrice,
+    required int qty,
+  }) {
+    final CartItem copy = CartItem(
+      product: Product(
+        id: product.id,
+        name: product.name,
+        price: product.price,
+        originalPrice: product.originalPrice,
+        desc: product.desc,
+        emoji: product.emoji,
+        gradient: product.gradient,
+        tag: product.tag,
+        soldOut: product.soldOut,
+        specGroups: product.specGroups,
+        mprice1: product.mprice1,
+        mprice2: product.mprice2,
+        mprice3: product.mprice3,
+        dscflag: product.dscflag,
+        presentflag: product.presentflag,
+        chooseqtyflag: product.chooseqtyflag,
+        minsaleflag: product.minsaleflag,
+        printflag: product.printflag,
+        labelflag: product.labelflag,
+      ),
+      quantity: qty,
+      specText: specText,
+      extraPrice: extraPrice,
+      combItems: List<ComboSelectedItem>.from(combItems),
+    );
+    copy.unitCookExtra = unitCookExtra;
+    copy.specName = specName;
+    copy.cookText = cookText;
+    copy.cooks = List<SelectedCook>.from(cooks);
+    copy.opertype = opertype;
+    copy.isSuspended = isSuspended;
+    copy.bagPrice = bagPrice;
+    copy.isBag = isBag;
+    copy.remark = remark;
+    copy.waiterName = waiterName;
+    copy.waiterId = waiterId;
+    copy.mustflag = mustflag;
+    copy.mustType = mustType;
+    copy.unit = unit;
+    copy.typeid = typeid;
+    copy.typename = typename;
+    copy.markNthPromo(billid: billid, promoUnitPrice: promoUnitPrice);
+    return copy;
+  }
 
   // ---- 场景促销赠品字段（对齐 smdcapp DetailListBean cxmbillid/bxxpxxflag）----
 
@@ -423,36 +533,76 @@ class CartItem {
   bool get isWeigh => weighNum > 0;
 
   /// 计价数量（称重菜按重量计价，普通菜按数量计价，对齐 smdcapp 单价×重量逻辑）
-  double get priceQty => isWeigh ? weighNum : quantity.toDouble();
+  double get priceQty => isWeigh ? weighNum : qtyValue;
 
-  /// 是否命中基础促销（对齐 smdcapp DishesTagHelper.isPromotion）
+  /// 是否命中促销（对齐 smdcapp DishesTagHelper.isPromotion：1/2/3/6/7 或带活动ID）
   bool get isPromotion =>
       !isCombo &&
       (specpriceflag == 1 ||
           specpriceflag == 2 ||
           specpriceflag == 3 ||
+          specpriceflag == 7 ||
           jcmbillid.isNotEmpty);
 
-  /// 单份基础价（特价菜优先，其次原价）
-  double get baseUnitPrice => promoPrice > 0 ? promoPrice : product.price;
+  /// 单份基础价（不含规格/做法加价）：第N份促销 > 特价菜 > 常规价
+  double get baseUnitPrice {
+    final double regular = (product.price - unitCookExtra).clamp(0, double.infinity);
+    return isNthPromo && nthPrice > 0
+        ? nthPrice
+        : (promoPrice > 0 ? promoPrice : regular);
+  }
 
-  /// 单份实际价格（改价 > 会员价 > 基础价+规格加价）
-  double get unitPrice => customPrice ?? memberUnitPrice ?? (baseUnitPrice + extraPrice);
+  /// 未打折前的单份实际价格（改价/会员价 > 促销基础价 + 单份做法加价）
+  double get unitPrice => (customPrice ?? memberUnitPrice ?? baseUnitPrice) + unitCookExtra;
 
   /// 折扣后单价
-  double get discountedUnitPrice =>
-      discount < 100 ? unitPrice * discount / 100 : unitPrice;
+  ///
+  /// 折扣只作用于菜品基础价（对齐 smdcapp getMemberPrice：discount 乘的是 sellprice），
+  /// 做法加价按原价另计，不被折扣放大。
+  double get discountedUnitPrice {
+    final double base = customPrice ?? memberUnitPrice ?? baseUnitPrice;
+    final double discounted =
+        (discount < 100 && discount > 0 && customPrice == null && memberUnitPrice == null)
+            ? base * discount / 100
+            : base;
+    return discounted + unitCookExtra;
+  }
+
+  /// 折扣后、未含做法加价的单份价（上传 rrprice 用，对齐 smdcapp）
+  double get baseRrPrice {
+    final double base = customPrice ?? memberUnitPrice ?? baseUnitPrice;
+    if (discount < 100 && discount > 0 && customPrice == null && memberUnitPrice == null) {
+      return base * discount / 100;
+    }
+    return base;
+  }
 
   /// 是否打折
   bool get isDiscounted => discount < 100 && discount > 0;
 
+  /// 上传用的促销标识：会员价优先生效时写 5（对齐 smdcapp specpriceflag=5）
+  int get uploadSpecpriceflag => memberUnitPrice != null ? 5 : specpriceflag;
+
+  /// 上传用的活动ID：会员价优先生效时清空促销活动
+  String get uploadJcmbillid => memberUnitPrice != null ? '' : jcmbillid;
+
+  /// 上传用的折扣率：会员价优先生效时按原价上传（会员价体现在 rrprice）
+  double get uploadDiscount => memberUnitPrice != null ? 100 : discount;
+
+  /// 是否有可展示的原价（赠送/手工折扣/基础促销/第N份促销）
+  bool get hasOriginPrice =>
+      isGift || isDiscounted || isPromotion || isNthPromo || customPrice != null;
+
+  /// 行原价（划线价，整份加价只计一次）
+  double get originTotalPrice => product.price * priceQty + extraPrice;
+
   /// 总价（对齐 smdcapp ShoppingCartUtil：赠送商品不计入合计金额；称重菜按单价×重量）
   /// 已下单商品直接使用服务端 rramt（对齐 smdcapp PriceUtil.formatPrice(bean.rramt)）
   ///
-  /// 打包费按行整份计入（对齐 smdcapp rramt = 现单价×数量 + cookaddamt(含打包)），
+  /// 整份加价/打包费按行整份计入（对齐 smdcapp cookaddamt = ptype2×qty + ptype1 + bag），
   /// 不随数量翻倍；赠送商品仅计打包费（对齐 smdcapp isBag ? bagPrice : 0）
   double get totalPrice => orderedAmt ??
-      (isGift ? bagPrice : discountedUnitPrice * priceQty + bagPrice);
+      (isGift ? bagPrice : discountedUnitPrice * priceQty + extraPrice + bagPrice);
 
   double get totalOriginalPrice => (product.originalPrice ?? product.price) * quantity;
 

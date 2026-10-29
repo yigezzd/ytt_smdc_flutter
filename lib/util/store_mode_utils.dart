@@ -28,6 +28,20 @@ class StoreModeUtils {
   /// 是否快餐模式
   static bool isFastMode() => getCurrentStoreModel() == storeModelFast;
 
+  /// 保存商户后台商业模式（对齐 smdcapp SpUtils.putStoremodel，快餐商户不可切换模式）
+  static void putBusinessStoreModel(int storeModel) {
+    SpUtil.putInt(Constant.storeBusinessMode, storeModel);
+  }
+
+  /// 获取商户后台商业模式（对齐 smdcapp SpUtils.getStoremodel，默认正餐）
+  static int getBusinessStoreModel() {
+    return SpUtil.getInt(Constant.storeBusinessMode) ?? storeModelNormal;
+  }
+
+  /// 商户后台是否为快餐模式
+  static bool isBusinessFastMode() =>
+      getBusinessStoreModel() == storeModelFast;
+
   /// 生成销售单id（对齐 smdcapp BillUtils.getSaleId：yyMMdd + machNo + millis%1000 + random6）
   static String generateSaleId() {
     final DateTime now = DateTime.now();

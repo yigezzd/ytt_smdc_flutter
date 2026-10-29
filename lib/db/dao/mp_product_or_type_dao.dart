@@ -1,3 +1,6 @@
+import 'package:flutter/foundation.dart';
+
+import '../../net/table_download_manager.dart';
 import '../entity/db_table_name.dart';
 import '../entity/mp_product_or_type_entity.dart';
 import 'base_dao.dart';
@@ -51,6 +54,19 @@ class MpProductOrTypeDao extends BaseDao<MpProductOrTypeEntity> {
     if (billids.isEmpty) {
       return [];
     }
+    if (kIsWeb) {
+      // Web 无 sqflite，改读 tabledown 内存缓存
+      final Set<String> ids = billids.toSet();
+      final List<Map<String, dynamic>> rows =
+          await TableDownloadManager.readTableData(table);
+      return rows
+          .where((Map<String, dynamic> m) =>
+              _asInt(m['spid']) == spid &&
+              _asInt(m['sid']) == sid &&
+              ids.contains(m['billid']?.toString()))
+          .map(fromMap)
+          .toList();
+    }
     final placeholders = billids.map((_) => '?').join(',');
     final rows = await db.queryList(
       'SELECT * FROM $table WHERE spid = ? AND sid = ? AND billid IN ($placeholders)',
@@ -58,6 +74,9 @@ class MpProductOrTypeDao extends BaseDao<MpProductOrTypeEntity> {
     );
     return rows.map(fromMap).toList();
   }
+
+  static int _asInt(dynamic v) =>
+      v is num ? v.toInt() : int.tryParse(v?.toString() ?? '') ?? 0;
 
   /// 查询促销商品/分类并关联规则表（对齐 queryAll2 / queryAll3）
   ///

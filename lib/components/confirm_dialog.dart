@@ -240,6 +240,9 @@ class InputDialog extends StatefulWidget {
     this.keyboardType,
     this.inputFormatters,
     this.changeBaseAmount,
+    this.suffixText,
+    this.autoSelectAll = false,
+    this.submitOnEnter = false,
   });
 
   /// 弹窗标题
@@ -269,6 +272,15 @@ class InputDialog extends StatefulWidget {
   /// 应收金额：设置后输入值大于该值时实时显示找零（对齐 smdcapp PricePopup tvChange）
   final double? changeBaseAmount;
 
+  /// 输入框右侧单位/后缀文字（如"份""kg"）
+  final String? suffixText;
+
+  /// 获得焦点时自动全选文本（数字输入等需要快速覆盖输入的场景）
+  final bool autoSelectAll;
+
+  /// 按键盘完成键直接提交（单行输入场景）
+  final bool submitOnEnter;
+
   /// 弹出输入弹窗，返回输入的文本；返回 null 表示取消
   ///
   /// [barrierDismissible] 默认 false：输入框弹窗点遮罩不关闭，
@@ -285,6 +297,9 @@ class InputDialog extends StatefulWidget {
     TextInputType? keyboardType,
     List<TextInputFormatter>? inputFormatters,
     double? changeBaseAmount,
+    String? suffixText,
+    bool autoSelectAll = false,
+    bool submitOnEnter = false,
   }) {
     return showDialog<String>(
       context: context,
@@ -299,6 +314,9 @@ class InputDialog extends StatefulWidget {
         keyboardType: keyboardType,
         inputFormatters: inputFormatters,
         changeBaseAmount: changeBaseAmount,
+        suffixText: suffixText,
+        autoSelectAll: autoSelectAll,
+        submitOnEnter: submitOnEnter,
       ),
     );
   }
@@ -309,12 +327,29 @@ class InputDialog extends StatefulWidget {
 
 class _InputDialogState extends State<InputDialog> {
   late final TextEditingController _controller;
+  late final FocusNode _focusNode;
 
   @override
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.initialValue);
     _controller.addListener(_onChanged);
+    _focusNode = FocusNode();
+    if (widget.autoSelectAll) {
+      _focusNode.addListener(_onFocusChanged);
+      _controller.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _controller.text.length,
+      );
+    }
+  }
+
+  void _onFocusChanged() {
+    if (!_focusNode.hasFocus) return;
+    _controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: _controller.text.length,
+    );
   }
 
   void _onChanged() {
@@ -326,8 +361,14 @@ class _InputDialogState extends State<InputDialog> {
   @override
   void dispose() {
     _controller.removeListener(_onChanged);
+    if (widget.autoSelectAll) _focusNode.removeListener(_onFocusChanged);
+    _focusNode.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  void _submit() {
+    Navigator.of(context).pop(_controller.text.trim());
   }
 
   /// 找零金额（未超出应收时为 null）
@@ -336,6 +377,14 @@ class _InputDialogState extends State<InputDialog> {
     if (base == null) return null;
     final double input = double.tryParse(_controller.text.trim()) ?? 0;
     return input > base ? input - base : null;
+  }
+
+  /// 少收差额（输入小于应收且大于0时显示，R54）
+  double? get _shortfallAmt {
+    final double? base = widget.changeBaseAmount;
+    if (base == null) return null;
+    final double input = double.tryParse(_controller.text.trim()) ?? 0;
+    return input > 0 && input < base ? base - input : null;
   }
 
   @override
@@ -379,10 +428,14 @@ class _InputDialogState extends State<InputDialog> {
             // 输入框
             TextField(
               controller: _controller,
+              focusNode: _focusNode,
               autofocus: true,
               maxLines: widget.maxLines,
               keyboardType: widget.keyboardType,
+              textInputAction:
+                  widget.submitOnEnter ? TextInputAction.done : null,
               inputFormatters: widget.inputFormatters,
+              onSubmitted: widget.submitOnEnter ? (_) => _submit() : null,
               style: TextStyle(
                 fontSize: 14,
                 color: isDark ? Colors.white : const Color(0xFF1D2129),
@@ -390,6 +443,11 @@ class _InputDialogState extends State<InputDialog> {
               decoration: InputDecoration(
                 hintText: widget.hintText,
                 hintStyle: const TextStyle(fontSize: 14, color: Color(0xFFC9CDD4)),
+                suffixText: widget.suffixText,
+                suffixStyle: TextStyle(
+                  fontSize: 14,
+                  color: isDark ? const Color(0xFFB0B0B0) : const Color(0xFF4E5969),
+                ),
                 filled: true,
                 fillColor: isDark ? const Color(0xFF3A3A3C) : const Color(0xFFF7F8FA),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -414,6 +472,21 @@ class _InputDialogState extends State<InputDialog> {
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
                     color: _kBrandRed,
+                  ),
+                ),
+              ),
+            ],
+            // 少收提示（输入 < 应收时显示差额，R54）
+            if (_shortfallAmt != null) ...<Widget>[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '还差：¥${_shortfallAmt!.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFFFF7D00),
                   ),
                 ),
               ),

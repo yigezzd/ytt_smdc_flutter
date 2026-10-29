@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -8,11 +9,14 @@ import 'package:flutter_deer/components/confirm_dialog.dart';
 import 'package:flutter_deer/components/dish_operation_popup.dart';
 import 'package:flutter_deer/components/dish_select_sheet.dart';
 import 'package:flutter_deer/components/spec_cook_sheet.dart';
+import 'package:flutter_deer/db/dao/table_type_dao.dart';
+import 'package:flutter_deer/db/entity/table_type_entity.dart';
 import 'package:flutter_deer/net/cart_event_bus.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/net/table_event_bus.dart';
+import 'package:flutter_deer/pages/order/nth_discount_manager.dart';
 import 'package:flutter_deer/pages/order/order_models.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/pages/order/promotion_manager.dart';
@@ -21,11 +25,17 @@ import 'package:flutter_deer/pages/order/widgets/set_meal_sheet.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
+import 'package:flutter_deer/util/amount_calc_utils.dart';
+import 'package:flutter_deer/util/auth_limit_utils.dart';
 import 'package:flutter_deer/util/file_log_writer.dart';
+import 'package:flutter_deer/util/order_log_utils.dart';
+import 'package:flutter_deer/util/member_price_utils.dart';
 import 'package:flutter_deer/util/params_sp_utils.dart';
+import 'package:flutter_deer/util/permission_utils.dart';
 import 'package:flutter_deer/util/promotion_helper.dart';
 import 'package:flutter_deer/util/print_service.dart';
 import 'package:flutter_deer/util/store_mode_utils.dart';
+import 'package:flutter_deer/util/table_concurrency_guard.dart';
 import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:sp_util/sp_util.dart';
@@ -80,6 +90,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
   /// 出品单开关（对齐 smdcapp cb_print_cpd）
   bool _printCpd = true;
 
+  /// 出品分单开关（对齐 smdcapp cbPrintCpdBranch，默认关闭）
+  bool _printCpdBranch = false;
+
   /// 客单开关（对齐 smdcapp cb_print_kd，默认值取 ENABLE_KD 参数）
   late bool _printKd;
 
@@ -102,6 +115,19 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
   /// post() 传完整 detailList：待下单 + 已下单）
   List<Map<String, dynamic>> _orderedRawRows = <Map<String, dynamic>>[];
 
+  /// 本地计算的低消差（R17：服务端低消配置变更后立即可用）
+  double _localLowAmt = 0;
+
+  /// 锁台事件订阅（R2）
+  StreamSubscription<Map<String, dynamic>>? _lockSubscription;
+
+  String get _lockSaleid {
+    final dynamic tmp = widget.tableJson?['tmp'];
+    final String tmpSaleid =
+        tmp is Map ? tmp['saleid']?.toString() ?? '' : '';
+    return tmpSaleid.isNotEmpty ? tmpSaleid : widget.saleid;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -111,12 +137,27 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     _orderRemark = widget.remark;
     // 对齐 smdcapp: cbPrintKd.isChecked = decodeBoolean(ENABLE_KD, true)
     _printKd = SpUtil.getBool('ENABLE_KD', defValue: true) ?? true;
+    _printCpdBranch = SpUtil.getBool('ENABLE_CPD_BRANCH') ?? false;
+    if (!widget.fastMode) {
+      _lockSubscription = TableConcurrencyGuard.listenLockEvent(
+        context: context,
+        saleid: _lockSaleid,
+        tableName: widget.tableName,
+        onExit: _onLockedByOtherExit,
+      );
+    }
     // 对齐 smdcapp：订单确认页的价格信息由促销引擎重算（进入页面即重新校验基础促销）
     _revalidatePromotions();
     // 对齐 smdcapp PlacedOrderFragment2.initData：加载已下单菜品（快餐模式无已下单数据，跳过）
     if (!widget.fastMode) {
       _loadOrderedItems();
     }
+  }
+
+  void _onLockedByOtherExit() {
+    if (!mounted) return;
+    Navigator.of(context).popUntil((Route<dynamic> route) => route.isFirst);
+    TableEventBus.fireTableChanged();
   }
 
   /// 进入订单确认页时重新校验「待下单」商品的基础促销（对齐 smdcapp checkPromotion123）
@@ -137,16 +178,53 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         }
       }
       PromotionManager.instance.revalidateAll(_pendingItems);
+      // 会员价与促销取最优（R11/R26/R49）
+      await _applyMemberPricing();
+      // 基础促销刷新后重算第N份促销拆行（对齐 smdcapp 进入确认页价格引擎重算）
+      _applyNthDiscount();
       if (mounted) setState(() {});
     } catch (e) {
       FileLogWriter.instance.writeToFile('订单确认页促销校验失败: $e', tag: '促销');
     }
   }
 
+  /// 加载桌台会员并按会员价重算待下单明细（R11/R26/R49）
+  Future<void> _applyMemberPricing() async {
+    final String vipid = _promoVipid;
+    if (vipid.isEmpty) {
+      MemberPriceUtils.applyToItems(_pendingItems, null);
+      return;
+    }
+    try {
+      final VipMember? member = await OrderRepository.fetchVipByVipid(vipid);
+      if (!mounted) return;
+      MemberPriceUtils.applyToItems(_pendingItems, member);
+    } catch (_) {}
+  }
+
   @override
   void dispose() {
+    _lockSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
+  }
+
+  /// 重算第N份促销并同步待下单列表（以点菜页购物车为主列表，
+  /// 两页共用同一批 CartItem 引用，返回点菜页后数据即最新）
+  void _applyNthDiscount() {
+    // 已下单的第N份促销份数占用整单上限（对齐 smdcapp lockedCount）
+    final Map<String, int> lockedByBill = <String, int>{};
+    for (final CartItem item in _orderedItems) {
+      if (item.specpriceflag == 7 && item.cxmbillid.isNotEmpty) {
+        lockedByBill[item.cxmbillid] =
+            (lockedByBill[item.cxmbillid] ?? 0) + item.priceQty.round();
+      }
+    }
+    NthDiscountManager.instance.apply(
+      widget.cartItems,
+      lockedByBill: lockedByBill,
+    );
+    _pendingItems = List<CartItem>.from(widget.cartItems);
   }
 
   // ═══════════════ 已下单数据加载（对齐 smdcapp PlacedOrderFragment2 + CartGoodsModel.orderedDishes） ═══════════════
@@ -310,7 +388,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
               '已下单加载成功: ${useMaster ? '主设备' : '云服务'} '
               '明细${rawList.length}条 本地combflag库${localCombFlags.length}条 '
               '最终展示${ordered.length}条(套餐${ordered.where((CartItem i) => i.combItems.isNotEmpty).length}条) '
-              '${ordered.map((CartItem i) => '${i.product.name}x${i.quantity}${i.combItems.isNotEmpty ? '(子${i.combItems.length})' : ''}').join(',')}',
+              '${ordered.map((CartItem i) => '${i.product.name}x${_fmtQtyValue(i.qtyValue)}${i.combItems.isNotEmpty ? '(子${i.combItems.length})' : ''}').join(',')}',
               tag: '已下单加载');
           // 逐条记录接口原始行关键字段，便于核对服务端返回结构
           for (final dynamic raw in rawList) {
@@ -328,6 +406,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
             _orderedItems.clear();
             _orderedItems.addAll(ordered);
           });
+          // 已下单第N份促销占用整单上限，加载完成后重算待下单拆行
+          if (mounted) {
+            setState(_applyNthDiscount);
+          }
         } else {
           FileLogWriter.instance.writeToFile(
               '已下单加载: ${useMaster ? '主设备' : '云服务'} '
@@ -455,7 +537,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       items.fold(0, (double sum, CartItem item) => sum + item.totalPrice);
 
   int _totalCount(List<CartItem> items) =>
-      items.fold(0, (int sum, CartItem item) => sum + item.quantity);
+      items.fold<double>(0, (double sum, CartItem item) => sum + item.qtyValue).round();
 
   double get _grandTotal => _totalPrice(_pendingItems) + _totalPrice(_orderedItems);
 
@@ -467,16 +549,27 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       Toast.show('必点菜不能操作');
       return;
     }
+    // 对齐 smdcapp checkQtyValid：第N份促销拆分行不能直接加数量
+    if (item.isNthPromo && delta > 0) {
+      Toast.show('促销商品不能操作');
+      return;
+    }
     setState(() {
-      item.quantity += delta;
-      if (item.quantity <= 0) {
+      if (delta < 0 && item.extraQty > 0) {
+        item.extraQty = 0;
+      } else {
+        item.quantity += delta;
+      }
+      if (item.qtyValue <= 0) {
         _pendingItems.remove(item);
+        // 两页共用同一购物车列表：零数量行同时移出，避免第N份重算时被同步回来
+        widget.cartItems.remove(item);
         // 赠品同步移除点菜页购物车（赠品在下单前才加入购物车，见 _mergeGiftSelections）
-        if (item.isGift && widget.cartItems.contains(item)) {
-          widget.cartItems.remove(item);
+        if (item.isGift) {
           CartEventBus.fireCartChanged();
         }
       }
+      _applyNthDiscount();
     });
   }
 
@@ -499,10 +592,15 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
 
     setState(() {
       _isOrdering = true;
-      _isLoading = true;
     });
 
     try {
+      // R4/R5/R6：下单前实时校验停用、改价、沽清与库存
+      if (!await _validateRealtimeBeforeOrder()) return;
+      if (!mounted) return;
+      setState(() => _isLoading = true);
+      // R17：按下单金额/桌台类型重算低消差，避免上传 lowamt=0 覆盖后台配置
+      await _calcLocalLowAmt();
       // 下单前促销校验（对齐 smdcapp post() → getSalesPromotionList(promoflag=2) → showGivePop）：
       // 有剩余可赠额度时弹赠品选择弹窗，取消则中止下单
       if (!await _checkGiftPromotion()) return;
@@ -511,6 +609,11 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       int printAllType = -1;
       if (_printCpd && _pendingItems.isNotEmpty) {
         printType = '3';
+        printAllType = 1;
+      }
+      // R53：本批含挂起菜品时同时出挂起单（printtype=6）
+      if (_pendingItems.any((CartItem i) => i.isSuspended)) {
+        printType = printType == '-1' ? '6' : '$printType,6';
         printAllType = 1;
       }
 
@@ -532,6 +635,19 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       if (!masterDevice && hasLabelItem) {
         printType = printType == '-1' ? '14' : '$printType,14';
         printAllType = 1;
+      }
+      // 云服务下单打印：按开关把客单15/出品分单23并入 printtype，
+      // 服务端按 saleid 重建并推送，避免依赖“云打印”开关
+      if (!masterDevice) {
+        // R15：云服务下单默认打印客单（正餐），不依赖 ENABLE_KD 参数
+        if (!widget.fastMode) {
+          printType = printType == '-1' ? '15' : '$printType,15';
+          printAllType = 1;
+        }
+        if (_printCpdBranch) {
+          printType = printType == '-1' ? '23' : '$printType,23';
+          printAllType = 1;
+        }
       }
 
       final Map<String, dynamic> resp;
@@ -562,16 +678,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
 
       if (success) {
         Toast.show('下单成功');
-        // 对齐 smdcapp postTableInfo 成功后的打印回调：触发厨打/出品单打印
-        final String billno = widget.tableJson?['tmp']?['localbillno']?.toString() ?? '';
-        final String saleid = widget.saleid.isNotEmpty
-            ? widget.saleid
-            : (widget.tableJson?['tmp']?['saleid']?.toString() ?? '');
-        PrintService.instance.triggerCookPrint(
-          saleid: saleid,
-          billno: billno,
-          withLabel: hasLabelItem,
-        );
+        _logAction('下单成功');
+        // 云服务：客单/出品单/出品分单/杯贴/挂起单已通过 printtype 交给服务端重建，
+        // 不再额外调用 restPrint，避免同一票据重复打印。
         // 对齐 smdcapp：下单成功后返回桌台首页并刷新桌台数据（桌台变为待结算状态）
         TableEventBus.fireTableChanged();
         if (mounted) {
@@ -592,6 +701,175 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       }
     }
   }
+
+  // ═══════════════════ 下单前实时校验（R4/R5/R6） ═══════════════════
+
+  /// 下单/去结账前重新拉取商品、沽清与库存：
+  /// - 菜品被 Web 停用 → 拦截；
+  /// - 菜品价格变更 → 同步新价并二次确认；
+  /// - 沽清剩余不足 / 库存不足 → 提示并拦截（库存提示类型=2 时允许继续）。
+  Future<bool> _validateRealtimeBeforeOrder() async {
+    final List<CartItem> pending = _pendingItems
+        .where((CartItem i) => i.qtyValue > 0 && !i.isRefunded)
+        .toList();
+    if (pending.isEmpty) return true;
+
+    // 1. 停用 / 改价（强制走实时接口，并把停用商品一起取回）
+    try {
+      final List<DishProduct> products =
+          await OrderRepository.fetchProductsForValidation(
+        areaid: widget.tableJson?['areaid']?.toString() ?? '',
+      );
+      if (!mounted) return false;
+      if (products.isNotEmpty) {
+        final Map<String, DishProduct> latestMap = <String, DishProduct>{
+          for (final DishProduct p in products) p.productid: p,
+        };
+        final List<String> disabled = <String>[];
+        final List<String> repriced = <String>[];
+        for (final CartItem item in pending) {
+          // 临时菜不在商品档案内，跳过
+          if (item.tpdishflag == 1) continue;
+          final DishProduct? latest = latestMap[item.product.id];
+          if (latest == null || latest.isDisabled) {
+            disabled.add(item.displayName);
+            continue;
+          }
+          final bool simple = !item.isCombo &&
+              !item.isWeigh &&
+              !item.isNthPromo &&
+              item.specText.isEmpty &&
+              item.customPrice == null &&
+              item.discount >= 100 &&
+              !item.isGift;
+          if (!simple) continue;
+          final double oldPrice = item.product.price;
+          if ((latest.sellprice - oldPrice).abs() <= 0.005) continue;
+          item.product.price = latest.sellprice;
+          item.jcmbillid = '';
+          item.specpriceflag = 0;
+          item.promoPrice = 0;
+          PromotionManager.instance.applyToCartItem(item);
+          repriced.add(
+            '${item.displayName} ¥${oldPrice.toStringAsFixed(2)} → '
+            '¥${latest.sellprice.toStringAsFixed(2)}',
+          );
+          FileLogWriter.instance.writeToFile(
+            '下单前实时改价: ${item.product.name} $oldPrice -> ${latest.sellprice}',
+            tag: '下单',
+          );
+        }
+        if (disabled.isNotEmpty) {
+          await ConfirmDialog.show(
+            context,
+            content: '以下菜品已停用/下架，无法下单：\n'
+                '${disabled.join('\n')}\n请删除后再试',
+            singleButton: true,
+          );
+          return false;
+        }
+        if (repriced.isNotEmpty) {
+          if (mounted) setState(() {});
+          if (!mounted) return false;
+          final bool goOn = await ConfirmDialog.show(
+            context,
+            content: '以下菜品价格已更新：\n${repriced.join('\n')}\n是否继续下单？',
+            confirmText: '继续下单',
+          );
+          if (!goOn) return false;
+        }
+      }
+    } catch (_) {
+      // 实时接口失败不阻断下单（对齐 smdcapp fail-open）
+    }
+
+    // 2. 沽清实时校验
+    try {
+      final List<Map<String, dynamic>> warns =
+          await OrderRepository.fetchWarnList();
+      if (!mounted) return false;
+      final Map<String, double> leftMap = <String, double>{};
+      for (final Map<String, dynamic> w in warns) {
+        final String pid = w['productid']?.toString() ?? '';
+        if (pid.isEmpty) continue;
+        // 规格级沽清由规格弹窗负责，这里只校验商品级
+        if ((w['specid']?.toString() ?? '').isNotEmpty) continue;
+        final double warnqty =
+            double.tryParse(w['warnqty']?.toString() ?? '0') ?? 0;
+        final double saleqty =
+            double.tryParse(w['saleqty']?.toString() ?? '0') ?? 0;
+        leftMap[pid] = warnqty - saleqty;
+      }
+      final List<String> lines = <String>[];
+      for (final CartItem item in pending) {
+        if (item.isCombo) {
+          // R72：套餐按明细子商品校验沽清数量
+          for (final ComboSelectedItem c in item.combItems) {
+            final double? left = leftMap[c.productid];
+            final double need = c.qty * item.qtyValue;
+            if (left != null && need > left) {
+              lines.add('${c.productname}（需${_fmtQtyForCheck(need)}，'
+                  '剩余${_fmtQtyForCheck(left)}）');
+            }
+          }
+          continue;
+        }
+        final double? left = leftMap[item.product.id];
+        if (left != null && item.qtyValue > left) {
+          lines.add('${item.displayName}（需${_fmtQtyForCheck(item.qtyValue)}，'
+              '剩余${_fmtQtyForCheck(left)}）');
+        }
+      }
+      if (lines.isNotEmpty) {
+        await ConfirmDialog.show(
+          context,
+          content: '以下菜品沽清数量不足：\n${lines.join('\n')}\n请调整数量后再下单',
+          singleButton: true,
+        );
+        return false;
+      }
+    } catch (_) {}
+
+    // 3. 实时库存校验（对齐 smdcapp OrderProcessor.checkStock → checkOrderStock）
+    final String overStock = ParamsSpUtils.getOverStockPerSale();
+    if (overStock != '1') {
+      try {
+        final List<Map<String, dynamic>>? errs =
+            await OrderRepository.checkOrderStock(_buildDetailList());
+        if (!mounted) return false;
+        if (errs != null && errs.isNotEmpty) {
+          final List<String> lines = errs.map((Map<String, dynamic> e) {
+            final String name = e['productname']?.toString() ?? '';
+            final String qty =
+                (e['newqty'] ?? e['qty'] ?? '').toString();
+            final String stock =
+                (e['stockqty'] ?? e['rawstockqty'] ?? '').toString();
+            return '$name（需$qty，剩余$stock）';
+          }).toList();
+          final String content = '以下菜品库存不足：\n${lines.join('\n')}';
+          if (overStock == '2') {
+            final bool goOn = await ConfirmDialog.show(
+              context,
+              content: '$content\n是否继续下单？',
+              confirmText: '继续下单',
+            );
+            if (!goOn) return false;
+          } else {
+            await ConfirmDialog.show(
+              context,
+              content: '$content\n请调整数量后再下单',
+              singleButton: true,
+            );
+            return false;
+          }
+        }
+      } catch (_) {}
+    }
+    return true;
+  }
+
+  String _fmtQtyForCheck(double qty) =>
+      qty == qty.roundToDouble() ? qty.toInt().toString() : qty.toString();
 
   // ═══════════════════ 下单前促销校验（对齐 smdcapp OrderConfirmationActivity2.post()） ═══════════════════
 
@@ -627,6 +905,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
   /// 无活动/无剩余额度直接下单；有额度则弹赠品选择弹窗，
   /// 选中的赠品并入待下单明细后继续下单。返回 false 表示取消下单。
   Future<bool> _checkGiftPromotion() async {
+    // R40：无促销活动权限时不展示活动赠品
+    if (!PermissionUtils.hasPermission(PermissionUtils.appTotalDiscount)) {
+      return true;
+    }
     final List<PromotionGiftActivity> activities =
         await PromotionHelper.fetchGiftActivities(
       saleid: _promoSaleid,
@@ -704,6 +986,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         quantity: qty,
       );
       gift.isGift = true;
+      gift.opertype = 3;
       gift.cxmbillid = sel.cxmbillid;
       gift.bxxpxxflag = sel.bxxpxxflag;
       gift.typeid = sel.typeid;
@@ -717,52 +1000,106 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     CartEventBus.fireCartChanged();
   }
 
+  /// 计算低消差（R17，对齐 smdcapp GetServiceAmountUtils.getMinSalemoney）
+  Future<void> _calcLocalLowAmt() async {
+    _localLowAmt = 0;
+    if (widget.fastMode ||
+        StoreModeUtils.getCurrentStoreModel() != StoreModeUtils.storeModelNormal) {
+      return;
+    }
+    try {
+      final Map<String, dynamic>? tmp =
+          widget.tableJson?['tmp'] as Map<String, dynamic>?;
+      final String tableTypeId = tmp?['tabletypeid']?.toString() ??
+          widget.tableJson?['tabletypeid']?.toString() ??
+          '';
+      final String additionId = tmp?['additionid']?.toString() ?? '';
+      final String lookupId = ParamsSpUtils.getOpenTableAmtFlag() == '0'
+          ? tableTypeId
+          : (additionId.isNotEmpty ? additionId : tableTypeId);
+      if (lookupId.isEmpty) return;
+      final TableTypeEntity? type =
+          await TableTypeDao.instance.getByCreateid(lookupId);
+      if (type == null) return;
+      double totalMoney = 0;
+      for (final CartItem item in <CartItem>[..._pendingItems, ..._orderedItems]) {
+        if (item.isGift || item.isRefunded) continue;
+        // R78：未开启“计入低消”的菜品不计入低消基数
+        if (item.product.minsaleflag == 0) continue;
+        totalMoney += item.totalPrice;
+      }
+      final int personNum = int.tryParse(tmp?['personnum']?.toString() ?? '') ??
+          (widget.persons > 0 ? widget.persons : 1);
+      _localLowAmt = AmountCalcUtils.getMinSalemoneyDiff(
+        lowtype: type.lowtype,
+        lowamt: type.lowamt,
+        personnum: personNum > 0 ? personNum : 1,
+        totalmoney: totalMoney,
+        servicemoney: 0,
+        minsalesamtflag: type.minsalesamtflag,
+      );
+    } catch (_) {
+      _localLowAmt = 0;
+    }
+  }
+
   /// 快餐模式去结账（对齐 smdcapp OrderFastDetailActivity3.goSettle → SettleActivity）
   ///
   /// 快餐无桌台，smdcapp 从不调用 upSaleMasterTmp，单据（master/detail）
   /// 在结账页随支付通过 saleflow 一并上传。
-  void _goSettle() {
+  Future<void> _goSettle() async {
     if (_pendingItems.isEmpty) {
       Toast.show('当前没有商品，请添加商品');
       return;
     }
+    if (_isOrdering) return;
+    _isOrdering = true;
+    try {
+      // R4/R5/R6：去结账前实时校验停用、改价、沽清与库存
+      if (!await _validateRealtimeBeforeOrder()) return;
+      if (!mounted) return;
+      await _calcLocalLowAmt();
+      if (!mounted) return;
 
-    // 金额口径对齐 smdcapp getDownPrice/showAllPriceInfo：
-    // 菜品费=总原价+做法加价，优惠=菜品费-应付，应付=现价合计
-    final double totalRR = _grandTotal;
-    final double totalOriginal = _pendingItems.fold<double>(
-            0.0, (double s, CartItem i) => s + i.product.price * i.quantity) +
-        _orderedItems.fold<double>(0.0, (double s, CartItem i) => s + i.product.price * i.quantity);
-    final double addamt =
-        _pendingItems.fold<double>(0.0, (double s, CartItem i) => s + i.extraPrice + i.bagPrice);
-    final double dishAmt = totalOriginal + addamt;
-    final double diff = dishAmt - totalRR;
-    final double disAmt = diff > 0 ? diff : 0;
+      // 金额口径对齐 smdcapp getDownPrice/showAllPriceInfo：
+      // 菜品费=总原价+做法加价，优惠=菜品费-应付，应付=现价合计
+      final double totalRR = _grandTotal;
+      final double totalOriginal = _pendingItems.fold<double>(
+              0.0, (double s, CartItem i) => s + i.product.price * i.qtyValue) +
+          _orderedItems.fold<double>(0.0, (double s, CartItem i) => s + i.product.price * i.qtyValue);
+      final double addamt =
+          _pendingItems.fold<double>(0.0, (double s, CartItem i) => s + i.extraPrice + i.bagPrice);
+      final double dishAmt = totalOriginal + addamt;
+      final double diff = dishAmt - totalRR;
+      final double disAmt = diff > 0 ? diff : 0;
 
-    final String saleid =
-        widget.saleid.isNotEmpty ? widget.saleid : StoreModeUtils.generateSaleId();
+      final String saleid =
+          widget.saleid.isNotEmpty ? widget.saleid : StoreModeUtils.generateSaleId();
 
-    NavigatorUtils.push(
-      context,
-      Routes.settlePage,
-      arguments: <String, dynamic>{
-        'tableName': widget.tableName,
-        'persons': widget.persons,
-        'tableId': widget.tableId,
-        'tableCode': widget.tableCode,
-        'saleid': saleid,
-        'serverId': widget.serverId,
-        'serverName': widget.serverName,
-        'remark': _orderRemark,
-        'tableJson': widget.tableJson,
-        'detailList': _buildDetailList(),
-        'dishAmt': dishAmt,
-        'serviceAmt': 0,
-        'lowAmt': 0,
-        'disAmt': disAmt,
-        'payAmt': totalRR,
-      },
-    );
+      NavigatorUtils.push(
+        context,
+        Routes.settlePage,
+        arguments: <String, dynamic>{
+          'tableName': widget.tableName,
+          'persons': widget.persons,
+          'tableId': widget.tableId,
+          'tableCode': widget.tableCode,
+          'saleid': saleid,
+          'serverId': widget.serverId,
+          'serverName': widget.serverName,
+          'remark': _orderRemark,
+          'tableJson': widget.tableJson,
+          'detailList': _buildDetailList(),
+          'dishAmt': dishAmt,
+          'serviceAmt': 0,
+          'lowAmt': _rd2(_localLowAmt),
+          'disAmt': disAmt,
+          'payAmt': _rd2(totalRR + _localLowAmt),
+        },
+      );
+    } finally {
+      _isOrdering = false;
+    }
   }
 
   /// 主表称重状态（对齐 smdcapp ProductBusiness.getReweighStatus）：
@@ -800,7 +1137,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       final String userStr = SpUtil.getString(Constant.user) ?? '';
       if (userStr.isNotEmpty) {
         final Map<String, dynamic> userMap = jsonDecode(userStr) as Map<String, dynamic>;
-        userId = userMap['userid']?.toString() ?? '';
+        userId = userMap['userid']?.toString() ?? userMap['id']?.toString() ?? '';
       }
     } catch (_) {}
 
@@ -808,8 +1145,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
 
     final double totalRR = _grandTotal;
     final double totalOriginal = _pendingItems.fold<double>(
-            0.0, (double s, CartItem i) => s + i.product.price * i.quantity) +
-        _orderedItems.fold<double>(0.0, (double s, CartItem i) => s + i.product.price * i.quantity);
+            0.0, (double s, CartItem i) => s + i.product.price * i.qtyValue) +
+        _orderedItems.fold<double>(0.0, (double s, CartItem i) => s + i.product.price * i.qtyValue);
     final double disAmt = totalOriginal - totalRR;
     // 对齐 smdcapp: addamt = 做法加价金额总和（含打包费）
     final double addamt =
@@ -823,7 +1160,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       'retailamt': _rd2(totalOriginal),
       'dscamt': _rd2(disAmt > 0 ? disAmt : 0),
       'serviceamt': 0,
-      'lowamt': 0,
+      'lowamt': _rd2(_localLowAmt),
       'addamt': _rd2(addamt),
       'sid': sid,
       'spid': spid,
@@ -885,6 +1222,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
   /// 套餐主行上传单价（对齐 smdcapp: rrprice 不含明细加减价，
   /// 加减价通过 combaddamt 单独上传，避免服务端/PC 二次计算时重复计入）
   double _combMainRrPrice(CartItem item) {
+    if (item.isNthPromo && item.nthPrice > 0) {
+      return item.nthPrice;
+    }
     if (item.customPrice != null) {
       return item.customPrice! - item.extraPrice;
     }
@@ -898,7 +1238,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     for (final ComboSelectedItem c in item.combItems) {
       sum += c.combaddamt;
     }
-    return sum * item.quantity;
+    return sum * item.qtyValue;
   }
 
   /// 套餐主行明细做法加价合计（对齐 smdcapp 主行 cookaddamt = 明细做法加价总和×套餐数量）
@@ -907,13 +1247,15 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     for (final ComboSelectedItem c in item.combItems) {
       sum += c.cookExtra;
     }
-    return sum * item.quantity;
+    return sum * item.qtyValue;
   }
 
   /// 明细做法加价（对齐 smdcapp CookHelper：打包费绑定为整份加价做法计入 cookaddamt，
-  /// ptype=1 不随数量翻倍）
-  double _detailCookAddAmt(CartItem item) =>
-      (item.isCombo ? _comboCookTotal(item) : item.extraPrice) + item.bagPrice;
+  /// ptype=1 不随数量翻倍；ptype=2 数量加价随数量翻倍）
+  double _detailCookAddAmt(CartItem item) {
+    if (item.isCombo) return _comboCookTotal(item) + item.bagPrice;
+    return item.unitCookExtra * item.priceQty + item.extraPrice + item.bagPrice;
+  }
 
   /// 打包做法文本（对齐 smdcapp CookHelper.createBagCookBean：
   /// 有打包费为"打包(￥66.0)"，零元打包为"打包"）
@@ -1007,8 +1349,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       final String userStr = SpUtil.getString(Constant.user) ?? '';
       if (userStr.isNotEmpty) {
         final Map<String, dynamic> userMap = jsonDecode(userStr) as Map<String, dynamic>;
-        userId = userMap['userid']?.toString() ?? '';
-        userName = userMap['username']?.toString() ?? '';
+        userId = userMap['userid']?.toString() ?? userMap['id']?.toString() ?? '';
+        userName = userMap['name']?.toString() ?? userMap['username']?.toString() ?? '';
       }
     } catch (_) {}
 
@@ -1040,16 +1382,16 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'sid': sid,
         'productid': item.product.id,
         'productname': item.displayName,
-        'qty': item.isWeigh ? item.weighNum : item.quantity.toDouble(),
+        'qty': item.isWeigh ? item.weighNum : item.qtyValue,
         // 改价/改名改价后以改后价作为 sellprice 上传（对齐 smdcapp ChangeName/ChangePricePopup
         // 同步更新 sellprice），否则订单重算会回落到目录价，与单据/桌台记录金额不一致
-        'sellprice': _rd2(item.customPrice ?? item.product.price),
-        'rrprice': isComb ? _rd2(_combMainRrPrice(item)) : _rd2(item.discountedUnitPrice),
+        'sellprice': _rd2(item.customPrice ?? (item.product.price - item.unitCookExtra)),
+        'rrprice': isComb ? _rd2(_combMainRrPrice(item)) : _rd2(item.baseRrPrice),
         'rramt': _rd2(item.totalPrice),
-        'discount': item.discount,
+        'discount': item.uploadDiscount,
         // 基础促销（分类折扣/菜品折扣/特价菜）
-        'jcmbillid': item.jcmbillid,
-        'specpriceflag': item.specpriceflag,
+        'jcmbillid': item.uploadJcmbillid,
+        'specpriceflag': item.uploadSpecpriceflag,
         'promoprice': _rd2(item.promoPrice),
         // 场景促销赠品（买赠/满赠赠品，对齐 smdcapp DetailListBean cxmbillid/bxxpxxflag）
         'cxmbillid': item.cxmbillid,
@@ -1108,7 +1450,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'subqty': 0,
         'urgeflag': 0,
         'callflag': 0,
-        'opertype': 0,
+        'opertype': item.opertype,
         'bagstatus': item.isBag ? 1 : 0,
         'propresentflag': item.isGift ? 1 : 0,
         'unit': item.unit,
@@ -1188,7 +1530,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'sid': sid,
         'productid': c.productid,
         'productname': c.productname,
-        'qty': c.qty * item.quantity,
+        'qty': c.qty * item.qtyValue,
         'combsetqty': c.qty,
         'sellprice': _rd2(c.sellprice),
         'rrprice': _rd2(c.sellprice),
@@ -1203,7 +1545,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'combproductid': item.product.id,
         'combgroupid': c.groupid,
         'combsetproductid': c.combsetproductid,
-        'combaddamt': _rd2(c.combaddamt * item.quantity),
+        'combaddamt': _rd2(c.combaddamt * item.qtyValue),
         'unit': c.unit,
         'remark': '',
         'presentflag': item.isGift ? 1 : 0,
@@ -1213,7 +1555,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         if (item.isSuspended) 'hashangflag': 99,
         'weighflag': 0,
         'weighnum': 0,
-        'cookaddamt': _rd2(c.cookExtra * item.quantity),
+        'cookaddamt': _rd2(c.cookExtra * item.qtyValue),
         'cooktext': c.cookText,
         'bagamt': 0,
         'salesname': salesname,
@@ -1359,8 +1701,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       final String userStr = SpUtil.getString(Constant.user) ?? '';
       if (userStr.isNotEmpty) {
         final Map<String, dynamic> userMap = jsonDecode(userStr) as Map<String, dynamic>;
-        userId = userMap['userid']?.toString() ?? '';
-        userName = userMap['username']?.toString() ?? '';
+        userId = userMap['userid']?.toString() ?? userMap['id']?.toString() ?? '';
+        userName = userMap['name']?.toString() ?? userMap['username']?.toString() ?? '';
       }
     } catch (_) {}
     machNo = SpUtil.getString(Constant.machNo) ?? '';
@@ -1372,9 +1714,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     final double totalOriginal = forSave
         ? 0.0
         : _pendingItems.fold<double>(
-                0.0, (double s, CartItem i) => s + i.product.price * i.quantity) +
+                0.0, (double s, CartItem i) => s + i.product.price * i.qtyValue) +
             _orderedItems.fold<double>(
-                0.0, (double s, CartItem i) => s + i.product.price * i.quantity);
+                0.0, (double s, CartItem i) => s + i.product.price * i.qtyValue);
     final double disAmt = forSave ? 0.0 : totalOriginal - totalRR;
     // 对齐 smdcapp: addamt = 做法加价金额总和（含打包费，非套餐商品）
     final double addamt =
@@ -1400,7 +1742,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       'retailamt': _rd2(totalOriginal),
       'dscamt': _rd2(disAmt > 0 ? disAmt : 0),
       'serviceamt': 0,
-      'lowamt': 0,
+      'lowamt': _rd2(_localLowAmt),
       'addamt': _rd2(addamt),
       'sid': sid,
       'spid': spid,
@@ -1459,6 +1801,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       if (!forSave) {
         filteredTmp['printkdflag'] = _printKd ? 1 : 0;
         filteredTmp['printcpdflag'] = _printCpd ? 1 : 0;
+        filteredTmp['printcpdflag2'] = _printCpdBranch ? 1 : 0;
         filteredTmp['sendprintflag'] = printType != '-1' ? '1' : '-1';
       }
       filteredTmp['roundamt'] = 0;
@@ -1466,7 +1809,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       filteredTmp['serviceamt'] = 0;
       filteredTmp['retailamt'] = _rd2(totalOriginal);
       filteredTmp['addamt'] = _rd2(addamt);
-      filteredTmp['lowamt'] = 0;
+      filteredTmp['lowamt'] = _rd2(_localLowAmt);
       filteredTmp['dscamt'] = _rd2(disAmt > 0 ? disAmt : 0);
       filteredTmp['lastbilltype'] = 7;
       filteredTmp['updatetime'] = now;
@@ -1503,7 +1846,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'serviceamt': 0,
         'retailamt': _rd2(totalOriginal),
         'addamt': _rd2(addamt),
-        'lowamt': 0,
+        'lowamt': _rd2(_localLowAmt),
         'dscamt': _rd2(disAmt > 0 ? disAmt : 0),
         'roundamt': 0,
         'lastbilltype': 7,
@@ -1513,6 +1856,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       if (!forSave) {
         fastTmp['printkdflag'] = _printKd ? 1 : 0;
         fastTmp['printcpdflag'] = _printCpd ? 1 : 0;
+        fastTmp['printcpdflag2'] = _printCpdBranch ? 1 : 0;
         fastTmp['sendprintflag'] = printType != '-1' ? '1' : '-1';
       }
       tableMaster['tmp'] = fastTmp;
@@ -1583,16 +1927,16 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'sid': sid,
         'productid': item.product.id,
         'productname': item.displayName,
-        'qty': item.isWeigh ? item.weighNum : item.quantity.toDouble(),
+        'qty': item.isWeigh ? item.weighNum : item.qtyValue,
         // 改价/改名改价后以改后价作为 sellprice 上传（对齐 smdcapp ChangeName/ChangePricePopup
         // 同步更新 sellprice），否则订单重算会回落到目录价，与单据/桌台记录金额不一致
-        'sellprice': _rd2(item.customPrice ?? item.product.price),
-        'rrprice': isComb ? _rd2(_combMainRrPrice(item)) : _rd2(item.discountedUnitPrice),
+        'sellprice': _rd2(item.customPrice ?? (item.product.price - item.unitCookExtra)),
+        'rrprice': isComb ? _rd2(_combMainRrPrice(item)) : _rd2(item.baseRrPrice),
         'rramt': _rd2(item.totalPrice),
-        'discount': item.discount,
+        'discount': item.uploadDiscount,
         // 基础促销（分类折扣/菜品折扣/特价菜）
-        'jcmbillid': item.jcmbillid,
-        'specpriceflag': item.specpriceflag,
+        'jcmbillid': item.uploadJcmbillid,
+        'specpriceflag': item.uploadSpecpriceflag,
         'promoprice': _rd2(item.promoPrice),
         // 场景促销赠品（买赠/满赠赠品，对齐 smdcapp DetailListBean cxmbillid/bxxpxxflag）
         'cxmbillid': item.cxmbillid,
@@ -1630,6 +1974,11 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         // 必点菜字段（对齐 smdcapp DetailListBean mustflag/mustType）
         'mustflag': item.mustflag,
         'mustType': item.mustType,
+        // R8/R46：敏感操作标识（赠送3/折扣4/改价5），主设备报表同样依赖
+        'opertype': item.opertype,
+        'operamt': _rd2(item.originTotalPrice > item.totalPrice
+            ? item.originTotalPrice - item.totalPrice
+            : 0),
         // 对齐 smdcapp DetailListBean: onlyid/seq/combflag 必传
         'onlyid': onlyid,
         'seq': newSeq,
@@ -1664,6 +2013,18 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       }
     }
     return detailList;
+  }
+
+  /// 记录敏感操作日志（R24）
+  void _logAction(String memo) {
+    final Map<String, dynamic>? tmp =
+        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    OrderLogUtils.instance.saveOrderLog(
+      saleid: widget.saleid,
+      billno: tmp?['localbillno']?.toString() ?? '',
+      memo: memo,
+      isUpload: true,
+    );
   }
 
   /// 格式化时间为 yyyy-MM-dd HH:mm:ss（对齐 smdcapp DateUtils.getTimeStamp）
@@ -1703,6 +2064,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
           resp.containsKey('Success') ? resp['Success'] == true : (resp['retcode'] == 0);
       if (success) {
         Toast.show('保存成功');
+        _logAction('保存菜品');
       } else {
         final String msg = resp['Message']?.toString() ?? resp['retmsg']?.toString() ?? '保存失败';
         Toast.show(msg);
@@ -1785,15 +2147,30 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                     label: '整单折扣',
                     onTap: () {
                       Navigator.pop(ctx);
+                      if (!PermissionUtils.check(PermissionUtils.appTotalDiscount, '整单折扣')) {
+                        return;
+                      }
                       _applyAllDiscount();
                     }),
+                // R28：暂结（进入结账页并直接开启暂结模式）
+                if (!StoreModeUtils.isFastMode())
+                  _OperationItem(
+                      icon: Icons.pause_presentation_outlined,
+                      label: '暂结',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _goZanjie();
+                      }),
                 // 整单挂起（对齐 smdcapp CartActionHandler.hangUpProductBatch，正餐模式专属）
                 if (!StoreModeUtils.isFastMode())
                   _OperationItem(
                     icon: Icons.pause_circle_outline,
-                    label: _allPendingSuspended ? '取消挂起' : '挂起',
+                    label: _allPendingSuspended
+                        ? '取消${ParamsSpUtils.getHangUpName()}'
+                        : ParamsSpUtils.getHangUpName(),
                     onTap: () {
                       Navigator.pop(ctx);
+                      if (!PermissionUtils.check(PermissionUtils.appHangUp, '挂起')) return;
                       _toggleAllSuspend();
                     },
                   ),
@@ -1869,6 +2246,41 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     }
   }
 
+  /// 暂结：带着当前待下单明细进入结账页并开启暂结模式（R28）
+  Future<void> _goZanjie() async {
+    if (_pendingItems.isEmpty) {
+      Toast.show('当前没有商品，请添加商品');
+      return;
+    }
+    await _calcLocalLowAmt();
+    if (!mounted) return;
+    final double originTotal = _pendingItems.fold<double>(
+        0, (double s, CartItem i) => s + i.originTotalPrice);
+    final double payAmt = _rd2(_grandTotal + _localLowAmt);
+    NavigatorUtils.push(
+      context,
+      Routes.settlePage,
+      arguments: <String, dynamic>{
+        'tableName': widget.tableName,
+        'persons': widget.persons,
+        'tableId': widget.tableId,
+        'tableCode': widget.tableCode,
+        'saleid': widget.saleid,
+        'serverId': widget.serverId,
+        'serverName': widget.serverName,
+        'remark': widget.remark,
+        'tableJson': widget.tableJson,
+        'detailList': _buildDetailList(),
+        'dishAmt': _rd2(originTotal),
+        'serviceAmt': 0,
+        'lowAmt': _rd2(_localLowAmt),
+        'disAmt': _rd2(originTotal - _grandTotal),
+        'payAmt': payAmt,
+        'autoZanjie': true,
+      },
+    );
+  }
+
   /// 待下单商品是否全部已挂起（决定整单挂起按钮文案）
   bool get _allPendingSuspended =>
       _pendingItems.isNotEmpty && _pendingItems.every((CartItem i) => i.isSuspended);
@@ -1885,7 +2297,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         i.isSuspended = !allHanging;
       }
     });
-    Toast.show(allHanging ? '已取消整桌挂起' : '已整桌挂起');
+    Toast.show(allHanging
+        ? '已取消整桌${ParamsSpUtils.getHangUpName()}'
+        : '已整桌${ParamsSpUtils.getHangUpName()}');
   }
 
   /// 整单折扣（对齐 smdcapp FastPrometionDiscountPopup）
@@ -1895,6 +2309,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     final DiscountResult? result = await DishDiscountSheet.show(
       context,
       dishName: '整单折扣',
+      showNumpad: true,
     );
     if (result == null || !mounted) return;
     final double discount = result.discount;
@@ -1902,15 +2317,37 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       Toast.show('请输入有效折扣');
       return;
     }
+    // R22：已参加满赠活动（含赠品）时不可再整单折扣
+    final bool hasFullGift = <CartItem>[..._pendingItems, ..._orderedItems]
+        .any((CartItem i) => i.bxxpxxflag == 4);
+    if (hasFullGift) {
+      Toast.show('已参加满赠活动，不能再操作整单折扣');
+      return;
+    }
+    // R44：超出角色整单折扣免密额度时要求经理授权
+    if (!await AuthLimitUtils.ensureOrderDiscount(context, discount: discount)) {
+      return;
+    }
+    if (!mounted) return;
+    int skipped = 0;
     setState(() {
       for (final CartItem item in _pendingItems) {
         // 对齐 smdcapp: 赠送/不可打折商品跳过
-        if (item.isGift) continue;
-        if (item.product.dscflag == 0) continue;
+        if (item.isGift || item.product.dscflag == 0) {
+          skipped++;
+          continue;
+        }
         item.discount = discount;
+        // R46：整单折扣逐行标记折扣操作
+        item.opertype = discount > 0 && discount < 100 ? 4 : 0;
       }
     });
-    Toast.show('整单折扣已应用');
+    // R60：未开启可折扣的菜品被跳过时给出提示
+    if (skipped > 0) {
+      Toast.show('整单折扣已应用，$skipped道不可打折菜品已跳过');
+    } else {
+      Toast.show('整单折扣已应用');
+    }
   }
 
   /// 整单操作前的菜品勾选（对齐 smdcapp OperationActivity2：整桌操作先勾选菜品）
@@ -1951,7 +2388,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
 
   /// 待下单菜品副标题（份数 + 规格做法 + 备注）
   String _pendingSubtitle(CartItem item) {
-    final double qty = item.isWeigh ? item.weighNum : item.quantity.toDouble();
+    final double qty = item.isWeigh ? item.weighNum : item.qtyValue;
     final List<String> parts = <String>['x${_formatPrice(qty)}'];
     if (item.specText.isNotEmpty) parts.add(item.specText);
     if (item.remark.isNotEmpty) parts.add('备注:${item.remark}');
@@ -2010,6 +2447,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       _pendingItems.remove(item);
       widget.cartItems.remove(item);
     }
+    _applyNthDiscount();
     CartEventBus.fireCartChanged();
   }
 
@@ -2265,9 +2703,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       if (item.isSuspended) _tag('挂', const Color(0xFF999999)),
       if (item.isBag) _tag('包', const Color(0xFF0055FF)),
     ];
-    // 赠送/打折时展示划线原价（原单价×计价数量）
-    final bool showOrigin = !refunded && (item.isGift || item.isDiscounted);
-    final double originTotal = item.unitPrice * item.priceQty;
+    // 赠送/打折/促销时展示划线原价（整份加价只计一次）
+    final bool showOrigin = !refunded && item.hasOriginPrice;
+    final double originTotal = item.originTotalPrice;
 
     final Widget mainRow = Container(
       color: refunded ? const Color(0xFFEAEEF6) : null,
@@ -2381,7 +2819,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                   width: 32,
                   child: Center(
                     child: Text(
-                      '${item.quantity}',
+                      _fmtQtyValue(item.qtyValue),
                       style: const TextStyle(
                           fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF1D2129)),
                     ),
@@ -2412,7 +2850,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                 color: const Color(0xFFF7F8FA),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Text('x${item.quantity}',
+              child: Text('x${_fmtQtyValue(item.qtyValue)}',
                   style: const TextStyle(
                       fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF86909C))),
             ),
@@ -2513,7 +2951,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                 ),
                 const SizedBox(width: 10),
                 Text(
-                  'x ${_formatPrice(c.qty * item.quantity)}',
+                  'x ${_formatPrice(c.qty * item.qtyValue)}',
                   style: const TextStyle(fontSize: 12, color: Color(0xFF1D2129)),
                 ),
               ],
@@ -2658,7 +3096,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
   Future<void> _showOrderedItemMenu(CartItem item) async {
     // 对齐 smdcapp PlacedOrderFragment2.openAction：已退完/退菜记录/团购商品不打开单品操作
     if (item.isRefunded || item.douyinflag == 1) return;
-    final double qty = item.isWeigh ? item.weighNum : item.quantity.toDouble();
+    final double qty = item.isWeigh ? item.weighNum : item.qtyValue;
     if (qty - item.subqty <= 0) {
       Toast.show('商品已退完不可以操作');
       return;
@@ -2677,10 +3115,17 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
 
   /// 处理菜品操作（对齐 smdcapp OperationPopup.OperationListener.onCallBack）
   Future<void> _handleItemOperation(String type, CartItem item) async {
+    _logAction('待下单操作:$type-${item.displayName}');
     switch (type) {
       case DishOperationType.discount:
+        if (!PermissionUtils.check(PermissionUtils.appDishDiscount, '打折')) return;
         if (item.isGift) {
           Toast.show('赠送商品不能打折');
+          return;
+        }
+        // R58：菜品档案未开启可折扣时禁止打折
+        if (item.product.dscflag == 0) {
+          Toast.show('该菜品不可打折');
           return;
         }
         final DiscountResult? result = await DishDiscountSheet.show(
@@ -2689,36 +3134,65 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
           currentDiscount: item.discount,
         );
         if (result != null) {
+          // R44：折扣超出角色免密额度时要求经理授权
+          final bool allowed = await AuthLimitUtils.ensureSingleDiscount(
+            context,
+            dishName: item.displayName,
+            discount: result.discount,
+          );
+          if (!allowed) return;
           setState(() {
             item.discount = result.discount;
             item.discountRemark = result.discount >= 100 ? '' : result.remark;
+            // R46：Web 订单明细报表按 opertype 显示折扣标识
+            item.opertype =
+                result.discount > 0 && result.discount < 100 ? 4 : 0;
           });
         }
 
       case DishOperationType.gift:
+        if (!PermissionUtils.check(PermissionUtils.appGive, '赠送')) return;
         // 已赠送：直接取消赠送（对齐 smdcapp handleGiveaway presentflag==1 分支）
         if (item.isGift) {
           setState(() {
             item.isGift = false;
             item.giftRemark = '';
+            item.opertype = 0;
           });
           Toast.show('已取消赠送');
+          return;
+        }
+        // R62：菜品档案未开启可赠送时禁止赠送
+        if (item.product.presentflag == 0) {
+          Toast.show('该菜品不允许赠送');
           return;
         }
         final GiveResult? giftResult = await DishGiveSheet.show(
           context,
           dishName: item.displayName,
-          maxNum: item.quantity.toDouble(),
+          maxNum: item.qtyValue,
           isGive: item.isGift,
         );
         if (giftResult != null) {
+          // R44：赠送金额超出角色免密额度时要求经理授权
+          final bool allowed = await AuthLimitUtils.ensureGiftAmt(
+            context,
+            dishName: item.displayName,
+            amt: item.unitPrice * giftResult.num,
+          );
+          if (!allowed) return;
           setState(() {
             item.isGift = true;
             item.giftRemark = giftResult.remark;
+            // R46：Web 订单明细报表按 opertype 显示赠送标识
+            item.opertype = 3;
+            // R26：手动赠送后满赠条件变化，移除原满赠赠品
+            _pendingItems.removeWhere((CartItem c) => c.bxxpxxflag == 4);
           });
         }
 
       case DishOperationType.changePrice:
+        if (!PermissionUtils.check(PermissionUtils.appChangePrice, '改价')) return;
         if (item.isGift) {
           Toast.show('赠送商品不能改价');
           return;
@@ -2730,21 +3204,33 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         );
         if (price != null) {
           setState(() {
-            if (price == item.product.price + item.extraPrice) {
+            if ((price - item.unitPrice).abs() < 0.005) {
               item.customPrice = null;
+              item.opertype = 0;
             } else {
               item.customPrice = price;
+              // 改价即最终价，清除整单折扣避免改价后再次被打折（R14）
+              item.discount = 100;
+              item.specpriceflag = 0;
+              item.jcmbillid = '';
+              item.promoPrice = 0;
+              // R46：Web 订单明细报表按 opertype 显示改价标识
+              item.opertype = 5;
             }
           });
         }
 
       case DishOperationType.suspend:
+        if (!PermissionUtils.check(PermissionUtils.appHangUp, '挂起')) return;
         // 对齐 smdcapp CartActionHandler.hangUpProduct：已挂起则取消挂起
         final bool nextSuspend = !item.isSuspended;
         setState(() => item.isSuspended = nextSuspend);
-        Toast.show(nextSuspend ? '已挂起' : '已取消挂起');
+        Toast.show(nextSuspend
+            ? '已${ParamsSpUtils.getHangUpName()}'
+            : '已取消${ParamsSpUtils.getHangUpName()}');
 
       case DishOperationType.bag:
+        if (!PermissionUtils.check(PermissionUtils.appBag, '打包')) return;
         // 已打包时直接取消，避免再次进入打包费输入弹窗。
         if (item.isBag) {
           setState(item.cancelBag);
@@ -2767,6 +3253,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         }
 
       case DishOperationType.remark:
+        if (!PermissionUtils.check(PermissionUtils.appRemark, '备注')) return;
         final String? remark = await DishRemarkSheet.show(
           context,
           dishName: item.displayName,
@@ -2777,6 +3264,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         }
 
       case DishOperationType.delete:
+        if (!PermissionUtils.check(PermissionUtils.appDeleteDish, '删除菜品')) return;
         // 对齐 smdcapp handleRemoveProduct：固定必点菜不能删除
         if (item.mustflag == 1 && item.mustType == 0) {
           Toast.show('必点菜不能删除');
@@ -3003,6 +3491,27 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: <Widget>[
+                        const Text('出品分单', style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
+                        const SizedBox(width: 2),
+                        Switch(
+                          value: _printCpdBranch,
+                          activeThumbColor: Colors.white,
+                          activeTrackColor: const Color(0xFF00BFA5),
+                          inactiveThumbColor: Colors.white,
+                          inactiveTrackColor: const Color(0xFFE5E6EB),
+                          onChanged: (bool v) {
+                            SpUtil.putBool('ENABLE_CPD_BRANCH', v);
+                            setState(() => _printCpdBranch = v);
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(width: 0.5, height: 16, color: const Color(0xFFE5E6EB)),
+                  Expanded(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: <Widget>[
                         const Text('客单', style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
                         const SizedBox(width: 2),
                         Switch(
@@ -3145,12 +3654,17 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     );
   }
 
-  /// 价格格式化
+  String _fmtQtyValue(double qty) {
+    if (qty == qty.roundToDouble()) return qty.toInt().toString();
+    return qty.toString();
+  }
+
+  /// 价格格式化（保留两位小数，避免 9.25 被四舍五入成 9.3）
   String _formatPrice(double price) {
     if (price == price.roundToDouble()) {
       return price.toInt().toString();
     }
-    return price.toStringAsFixed(1);
+    return price.toStringAsFixed(2);
   }
 
   /// 小标签（赠/折/挂，对齐 smdcapp DishesTagHelper 徽章样式）

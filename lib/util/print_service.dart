@@ -5,6 +5,7 @@ import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/res/constant_print_key.dart';
 import 'package:flutter_deer/util/log_utils.dart';
+import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:sp_util/sp_util.dart';
 
 /// 打印服务（对齐 smdcapp 打印体系）
@@ -114,18 +115,34 @@ class PrintService {
   Future<bool> triggerCookPrint({
     required String saleid,
     required String billno,
+    bool withKd = true,
+    bool withCpd = true,
+    bool withCpdBranch = false,
     bool withLabel = false,
   }) async {
     if (isPcPrint) {
-      // PC模式：下单时 printtype 参数已传给主设备，主设备自动处理厨打
-      // 无需额外调用
+      // PC模式：下单时 printtype/printkdflag/printcpdflag 已传给主设备，由 PC 出票
       return true;
     }
     if (isCloudPrint) {
-      final bool ok =
-          await cloudPrintNotice(saleid: saleid, billno: billno, opertype: '3');
+      // R28/R47：服务端 restPrint 支持按 saleid+opertype 重建票据。
+      // 15=客单，3=出品单，23=出品分单，14=杯贴
+      bool ok = false;
+      if (withKd) {
+        ok = await cloudReprint(
+                saleid: saleid, billno: billno, opertype: '15') ||
+            ok;
+      }
+      if (withCpd) {
+        ok = await cloudReprint(
+                saleid: saleid, billno: billno, opertype: '3') ||
+            ok;
+      }
+      if (withCpdBranch) {
+        await cloudReprint(saleid: saleid, billno: billno, opertype: '23');
+      }
       if (withLabel) {
-        await cloudPrintNotice(saleid: saleid, billno: billno, opertype: '14');
+        await cloudReprint(saleid: saleid, billno: billno, opertype: '14');
       }
       return ok;
     }
@@ -144,7 +161,8 @@ class PrintService {
       return _pcPrintPayInfo(data);
     }
     if (isCloudPrint) {
-      return cloudPrintNotice(saleid: saleid, billno: billno, opertype: '2');
+      // 结账单：服务端按 saleid 重建票据（restPrint），不再只发通知
+      return cloudReprint(saleid: saleid, billno: billno, opertype: '2');
     }
     return false;
   }
@@ -199,7 +217,8 @@ class PrintService {
         }, masterDevice: true);
         return true;
       }
-      return cloudPrintNotice(saleid: saleid, billno: billno, opertype: '8');
+      // 预打单：服务端按 saleid 重建票据（restPrint opertype=8）
+      return cloudReprint(saleid: saleid, billno: billno, opertype: '8');
     } catch (e) {
       Log.e('PrintService.prePrint error: $e');
       return false;
@@ -217,18 +236,38 @@ class PrintService {
   /// 押金单打印/补打（对齐 smdcapp JYJPopup.PcSendPrint / YJOrderActivity：
   /// PC 模式 POST /api/print/PrintDepositInfo，data=押金单 JSON）
   Future<bool> printDeposit(String data) async {
-    if (!ConnectionManager.pcAlive) {
-      return false;
+    // R23/R24：有主设备地址时优先走 PC 打印接口（云服务模式下前台仍可出押金单）；
+    // 无主设备时回退云打印（opertype=13 押金单）
+    final bool canPc = ConnectionManager.pcAlive ||
+        ConnectionManager.getLocalhost().startsWith('http');
+    if (canPc) {
+      try {
+        await requestForm(
+          HttpApi.pcPrintDepositInfo,
+          <String, dynamic>{'data': data},
+          masterDevice: true,
+        );
+        return true;
+      } catch (e) {
+        Log.e('PrintService.printDeposit pc error: $e');
+      }
     }
     try {
-      await requestForm(
-        HttpApi.pcPrintDepositInfo,
-        <String, dynamic>{'data': data},
-        masterDevice: true,
-      );
+      final Map<String, dynamic> bean =
+          json.decode(data) as Map<String, dynamic>;
+      final String saleid = bean['saleid']?.toString() ?? '';
+      final String billno = bean['billno']?.toString() ??
+          bean['billno']?.toString() ??
+          '';
+      if (saleid.isEmpty && billno.isEmpty) return false;
+      await requestForm(HttpApi.restPrint, <String, dynamic>{
+        'jobcontent': saleid.isNotEmpty ? saleid : billno,
+        'opertype': '13',
+        'billno': billno,
+      });
       return true;
     } catch (e) {
-      Log.e('PrintService.printDeposit error: $e');
+      Log.e('PrintService.printDeposit cloud error: $e');
       return false;
     }
   }
@@ -307,6 +346,95 @@ class PrintService {
   // ──────────── 内部方法 ─────────────────────────────────────────
 
   /// 云打印通知（对齐 smdcapp DishesApi printMsgNotice）
+  /// 云打印重打/补打（对齐 smdcapp OrderModel.restPrint：jobcontent=saleid）
+  ///
+  /// 服务端按 saleid + opertype 重建单据内容，支持 3出品单/6挂起单/7起菜单/
+  /// 13押金单/15客单/21转菜单 等类型。
+  Future<bool> cloudReprint({
+    required String saleid,
+    required String billno,
+    required String opertype,
+  }) async {
+    try {
+      await requestForm(HttpApi.restPrint, <String, dynamic>{
+        'jobcontent': saleid,
+        'opertype': opertype,
+        'billno': billno,
+      });
+      _offlineNotified = false;
+      retryPending();
+      return true;
+    } catch (e) {
+      Log.e('PrintService.cloudReprint error: $e');
+      // R25：打印机离线时提示并缓存任务，待后续打印恢复后补发
+      _cachePendingJob(saleid: saleid, billno: billno, opertype: opertype);
+      return false;
+    }
+  }
+
+  static const String _pendingPrintKey = 'pending_print_jobs';
+  static bool _offlineNotified = false;
+
+  /// 缓存未成功的打印任务（R25）
+  void _cachePendingJob({
+    required String saleid,
+    required String billno,
+    required String opertype,
+  }) {
+    if (saleid.isEmpty && billno.isEmpty) return;
+    try {
+      final String raw = SpUtil.getString(_pendingPrintKey) ?? '';
+      final List<dynamic> list =
+          raw.isEmpty ? <dynamic>[] : (json.decode(raw) as List<dynamic>);
+      final Map<String, dynamic> job = <String, dynamic>{
+        'saleid': saleid,
+        'billno': billno,
+        'opertype': opertype,
+        'time': DateTime.now().millisecondsSinceEpoch,
+      };
+      final bool exists = list.any((dynamic e) =>
+          e is Map &&
+          e['saleid'] == saleid &&
+          e['opertype'] == opertype &&
+          e['billno'] == billno);
+      if (!exists) {
+        list.add(job);
+        SpUtil.putString(_pendingPrintKey, json.encode(list));
+      }
+      if (!_offlineNotified) {
+        _offlineNotified = true;
+        Toast.show('打印机离线，打印任务已缓存，恢复后将自动补打');
+      }
+    } catch (_) {}
+  }
+
+  /// 补发缓存的打印任务（R25）
+  Future<void> retryPending() async {
+    try {
+      final String raw = SpUtil.getString(_pendingPrintKey) ?? '';
+      if (raw.isEmpty) return;
+      final List<dynamic> list = json.decode(raw) as List<dynamic>;
+      if (list.isEmpty) return;
+      final List<dynamic> remain = <dynamic>[];
+      for (final dynamic e in list) {
+        if (e is! Map) continue;
+        final String saleid = e['saleid']?.toString() ?? '';
+        final String billno = e['billno']?.toString() ?? '';
+        final String opertype = e['opertype']?.toString() ?? '';
+        try {
+          await requestForm(HttpApi.restPrint, <String, dynamic>{
+            'jobcontent': saleid,
+            'opertype': opertype,
+            'billno': billno,
+          });
+        } catch (_) {
+          remain.add(e);
+        }
+      }
+      SpUtil.putString(_pendingPrintKey, json.encode(remain));
+    } catch (_) {}
+  }
+
   Future<bool> cloudPrintNotice({
     required String saleid,
     required String billno,

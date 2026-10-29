@@ -102,4 +102,36 @@ class ParamsSpUtils {
 
   /// 支持的订单类型（对齐 smdcapp SpUtils.getSupportOrderTypes: SupportOrderTypes）1=线下
   static String getSupportOrderTypes() => getParam('SupportOrderTypes', defValue: '0');
+
+  /// 备注/原因必填类型（对齐 smdcapp SpUtils.getRemarkMustTypes: mustTypes）
+  /// 逗号分隔，如 "03,04"：03=打折原因 04=赠送原因
+  static String getRemarkMustTypes() => getParam('mustTypes', defValue: '-1');
+
+  /// 指定类型的原因是否必填
+  static bool isRemarkMust(String typeid) =>
+      getRemarkMustTypes().split(',').map((String s) => s.trim()).contains(typeid);
+
+  /// 挂起名称定义（对齐 smdcapp SpUtils.getSuspendedNameDefinition）：1挂起 2等叫
+  static String getSuspendedNameDefinition() =>
+      getParam('SuspendedNameDefinition', defValue: '1');
+
+  /// 挂起操作文案：[按钮, 标签, 单据, 动作]（对齐 smdcapp hangUpTypeMap）
+  static List<String> _hangUpTypeNames() {
+    if (getSuspendedNameDefinition() == '2') {
+      return const <String>['等叫', '等', '等叫单', '等叫'];
+    }
+    return const <String>['挂起', '挂', '挂起单', '挂菜'];
+  }
+
+  /// 按钮/弹窗文案：挂起 / 等叫
+  static String getHangUpName() => _hangUpTypeNames()[0];
+
+  /// 标签文案：挂 / 等
+  static String getHangUpLabelName() => _hangUpTypeNames()[1];
+
+  /// 单据名称：挂起单 / 等叫单
+  static String getHangUpTicketName() => _hangUpTypeNames()[2];
+
+  /// 动作名称：挂菜 / 等叫
+  static String getHangUpActionName() => _hangUpTypeNames()[3];
 }

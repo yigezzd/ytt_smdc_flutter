@@ -12,25 +12,86 @@ class PromotionInfo {
     required this.billname,
     this.discount = 0,
     this.amt = 0,
+    this.applytype = 0,
+    this.qty = 0,
+    this.giveqty = 0,
+    this.vipflag = '1',
+    this.ptList = const <Map<String, dynamic>>[],
   });
 
   factory PromotionInfo.fromJson(Map<String, dynamic> json) {
+    final dynamic rawPt =
+        json['prolsit'] ?? json['prolist'] ?? json['ptlist'] ?? json['ptList'];
+    final List<Map<String, dynamic>> ptList = rawPt is List
+        ? rawPt
+            .whereType<Map>()
+            .map((Map e) => e.cast<String, dynamic>())
+            .toList()
+        : <Map<String, dynamic>>[];
     return PromotionInfo(
       billid: json['billid']?.toString() ?? '',
       billtype: _toInt(json['billtype']),
       billname: json['billname']?.toString() ?? json['name']?.toString() ?? '',
       discount: _toDouble(json['discount']),
       amt: _toDouble(json['amt']),
+      applytype: _toInt(json['applytype']),
+      qty: _toDouble(json['qty']),
+      giveqty: _toDouble(json['giveqty']),
+      vipflag: json['vipflag']?.toString() ?? '1',
+      ptList: ptList,
     );
   }
 
   final String billid;
 
-  /// 活动类型（对齐 smdcapp BilidType：5满量 6满减 8满折 等）
+  /// 活动类型（对齐 smdcapp BilidType：1分类 2菜品 3特价 4买赠 5满量 6满减 7满赠 8满折）
   final int billtype;
   final String billname;
   final double discount;
   final double amt;
+
+  /// 适用类型：0=全部商品 1=按分类 2=按商品
+  final int applytype;
+  final double qty;
+  final double giveqty;
+  final String vipflag;
+
+  /// 活动适用商品/分类（prolsit）
+  final List<Map<String, dynamic>> ptList;
+
+  /// 当前订单明细是否包含活动商品（R8：无匹配商品不展示活动）
+  bool matchesDetails(List<Map<String, dynamic>> details) {
+    if (billtype == 4 || billtype == 7) {
+      // 买赠/满赠：无赠品列表时不可用
+      return ptList.isNotEmpty;
+    }
+    if (applytype == 0 || ptList.isEmpty) return true;
+    for (final Map<String, dynamic> d in details) {
+      final String typeid = d['typeid']?.toString() ?? '';
+      final String productid = d['productid']?.toString() ?? '';
+      for (final Map<String, dynamic> pt in ptList) {
+        final String ptType = pt['typeid']?.toString() ?? '';
+        final String ptProduct = pt['productid']?.toString() ?? '';
+        if (applytype == 1 && ptType.isNotEmpty && typeid.isNotEmpty) {
+          if (typeid == ptType ||
+              typeid.startsWith(ptType) ||
+              ptType.startsWith(typeid)) {
+            return true;
+          }
+        }
+        if (applytype == 2 && ptProduct.isNotEmpty && productid == ptProduct) {
+          return true;
+        }
+        // applytype 缺失时按商品或分类任一匹配
+        if (applytype == 0 &&
+            ((ptProduct.isNotEmpty && productid == ptProduct) ||
+                (ptType.isNotEmpty && typeid == ptType))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
 
   /// 活动类型描述
   String get typeText {
@@ -153,13 +214,21 @@ class PromotionHelper {
   static Future<List<PromotionInfo>> fetchPromotions({
     required List<Map<String, dynamic>> details,
     String vipid = '',
+    String saleid = '',
+    double amt = 0,
+    String qty = '',
+    int promoflag = 0,
   }) async {
     try {
       final Map<String, dynamic> resp = await requestForm(
         HttpApi.getSalesPromotionList,
         <String, dynamic>{
+          'saleid': saleid,
+          'amt': amt.toStringAsFixed(2),
+          'qty': qty,
           'details': jsonEncode(details),
           'vipid': vipid,
+          'promoflag': '$promoflag',
           'client': 'APP',
         },
         showError: false,
@@ -174,7 +243,20 @@ class PromotionHelper {
       } else if (data is List) {
         list = data.whereType<Map<String, dynamic>>().toList();
       }
-      return list.map(PromotionInfo.fromJson).toList();
+      final List<PromotionInfo> promotions =
+          list.map(PromotionInfo.fromJson).toList();
+      // R8：剔除当前订单没有对应菜品的活动（满赠/买赠除外，赠品由活动详情决定）
+      final List<PromotionInfo> filtered = promotions
+          .where((PromotionInfo p) => p.billtype == 5 ||
+              p.billtype == 6 ||
+              p.billtype == 8 ||
+              p.matchesDetails(details))
+          .toList();
+      FileLogWriter.instance.writeToFile(
+          '促销列表: 返回${promotions.length}个，过滤后${filtered.length}个 '
+          '${filtered.map((PromotionInfo p) => '${p.billname}(类型${p.billtype}/适用${p.applytype}/商品${p.ptList.length})').join(' ')}',
+          tag: '促销');
+      return filtered;
     } catch (_) {
       return <PromotionInfo>[];
     }
@@ -245,27 +327,105 @@ class PromotionHelper {
     required List<Map<String, dynamic>> details,
     required String billid,
     String vipid = '',
+    String saleid = '',
+    double amt = 0,
+    String qty = '',
+  }) async {
+    final PromotionApplyResult? result = await calcPromotion(
+      details: details,
+      billid: billid,
+      vipid: vipid,
+      saleid: saleid,
+      amt: amt,
+      qty: qty,
+    );
+    return result?.totalDiscount ?? 0;
+  }
+
+  /// 计算促销并返回明细折扣（对齐 smdcapp getAmountAfterDiscountBilidType5/6）
+  ///
+  /// 5/8/9/10 等类型服务端返回明细数组（含 discount），6 返回满减金额。
+  static Future<PromotionApplyResult?> calcPromotion({
+    required List<Map<String, dynamic>> details,
+    required String billid,
+    String vipid = '',
+    String saleid = '',
+    double amt = 0,
+    String qty = '',
   }) async {
     try {
       final Map<String, dynamic> resp = await requestForm(
         HttpApi.amountAfterDiscount,
         <String, dynamic>{
-          'details': jsonEncode(details),
           'billid': billid,
+          'saleid': saleid,
+          'amt': amt.toStringAsFixed(2),
+          'qty': qty,
+          'details': jsonEncode(details),
           'vipid': vipid,
           'client': 'APP',
         },
         showError: false,
       );
       final dynamic data = resp['data'] ?? resp['Data'];
-      if (data is Map<String, dynamic>) {
-        return _toDouble(data['dscamt'] ?? data['discountamt'] ?? data['amt']);
+      if (data is List) {
+        final List<Map<String, dynamic>> list = data
+            .whereType<Map>()
+            .map((Map e) => e.cast<String, dynamic>())
+            .toList();
+        double total = 0;
+        for (final Map<String, dynamic> d in list) {
+          total += _toDouble(d['discountamt']);
+        }
+        return PromotionApplyResult(
+          details: list,
+          totalDiscount: total,
+        );
       }
-      return _toDouble(data);
-    } catch (_) {
-      return 0;
+      if (data is Map) {
+        final dynamic list = data['list'] ?? data['details'];
+        if (list is List) {
+          final List<Map<String, dynamic>> rows = list
+              .whereType<Map>()
+              .map((Map e) => e.cast<String, dynamic>())
+              .toList();
+          double total = 0;
+          for (final Map<String, dynamic> d in rows) {
+            total += _toDouble(d['discountamt']);
+          }
+          return PromotionApplyResult(details: rows, totalDiscount: total);
+        }
+        return PromotionApplyResult(
+          details: const <Map<String, dynamic>>[],
+          totalDiscount: _toDouble(
+              data['dscamt'] ?? data['discountamt'] ?? data['amt'] ?? data),
+        );
+      }
+      // 满减等返回纯数字
+      return PromotionApplyResult(
+        details: const <Map<String, dynamic>>[],
+        totalDiscount: _toDouble(data),
+      );
+    } catch (e) {
+      FileLogWriter.instance
+          .writeToFile('促销计算失败 billid=$billid: $e', tag: '促销');
+      return null;
     }
   }
+}
+
+/// 促销计算结果（明细折扣或整单满减）
+class PromotionApplyResult {
+  const PromotionApplyResult({
+    required this.details,
+    required this.totalDiscount,
+  });
+
+  /// 服务端返回的明细（含 discount/onlyid/productid）
+  final List<Map<String, dynamic>> details;
+
+  /// 整单优惠金额
+  final double totalDiscount;
 }
 
 int _toInt(dynamic v) {
