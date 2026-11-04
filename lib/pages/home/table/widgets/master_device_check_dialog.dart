@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_deer/components/confirm_dialog.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
@@ -8,8 +9,7 @@ class MasterDeviceCheckDialog extends StatefulWidget {
   const MasterDeviceCheckDialog({super.key});
 
   @override
-  State<MasterDeviceCheckDialog> createState() =>
-      _MasterDeviceCheckDialogState();
+  State<MasterDeviceCheckDialog> createState() => _MasterDeviceCheckDialogState();
 }
 
 class _MasterDeviceCheckDialogState extends State<MasterDeviceCheckDialog> {
@@ -24,10 +24,9 @@ class _MasterDeviceCheckDialogState extends State<MasterDeviceCheckDialog> {
     return PopScope(
       // 与 smdcapp 一致：必须选择"连接云服务"或"重连主设备"，不允许返回键关闭
       canPop: false,
-      child: Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+      child: Center(
+        child: DialogCard(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
@@ -49,19 +48,23 @@ class _MasterDeviceCheckDialogState extends State<MasterDeviceCheckDialog> {
 
   /// 顶部标题"提示" + 关闭按钮
   Widget _buildTitle() {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final bool showClose = !ConnectionManager.isMasterOnly;
     return Row(
       children: <Widget>[
-        const Expanded(
+        if (showClose) const SizedBox(width: 26),
+        Expanded(
           child: Text(
             '提示',
+            textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: Color(0xFF1D2129),
+              fontSize: 17,
+              fontWeight: FontWeight.w600,
+              color: isDark ? Colors.white : const Color(0xFF1D2129),
             ),
           ),
         ),
-        if (!ConnectionManager.isMasterOnly)
+        if (showClose)
           GestureDetector(
             onTap: _reconnecting ? null : () => Navigator.of(context).pop(),
             child: const Padding(
@@ -75,14 +78,17 @@ class _MasterDeviceCheckDialogState extends State<MasterDeviceCheckDialog> {
 
   /// 连接链路示意图：PC → × → WiFi → × → 平板（对齐 smdcapp 插图）
   Widget _buildLinkDiagram() {
+    final Color iconColor = Theme.of(context).brightness == Brightness.dark
+        ? const Color(0xFFC9CDD4)
+        : const Color(0xFF3B3B3B);
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: <Widget>[
-        const Icon(Icons.computer, size: 44, color: Color(0xFF3B3B3B)),
+        Icon(Icons.computer, size: 44, color: iconColor),
         _buildLinkSegment(hasError: true),
-        const Icon(Icons.wifi, size: 40, color: Color(0xFF3B3B3B)),
+        Icon(Icons.wifi, size: 40, color: iconColor),
         _buildLinkSegment(hasError: true),
-        const Icon(Icons.tablet_mac, size: 40, color: Color(0xFF3B3B3B)),
+        Icon(Icons.tablet_mac, size: 40, color: iconColor),
       ],
     );
   }
@@ -111,17 +117,18 @@ class _MasterDeviceCheckDialogState extends State<MasterDeviceCheckDialog> {
 
   /// 警告行：⚠️ 无法连接到主设备
   Widget _buildWarning() {
-    return const Row(
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: <Widget>[
-        Icon(Icons.error_outline, size: 18, color: _brandRed),
-        SizedBox(width: 6),
+        const Icon(Icons.error_outline, size: 18, color: _brandRed),
+        const SizedBox(width: 6),
         Text(
           '无法连接到主设备',
           style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.bold,
-            color: Color(0xFF1D2129),
+            color: isDark ? Colors.white : const Color(0xFF1D2129),
           ),
         ),
       ],
@@ -152,7 +159,9 @@ class _MasterDeviceCheckDialogState extends State<MasterDeviceCheckDialog> {
     return Row(
       children: <Widget>[
         Expanded(
-          child: GestureDetector(
+          child: DialogActionButton(
+            text: masterOnly ? '重新登录' : '连接云服务',
+            primary: false,
             onTap: _reconnecting
                 ? null
                 : () {
@@ -164,56 +173,15 @@ class _MasterDeviceCheckDialogState extends State<MasterDeviceCheckDialog> {
                     Navigator.of(context).pop(true);
                     Toast.show('已切换为云服务模式');
                   },
-            child: Container(
-              height: 42,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(21),
-                border: Border.all(color: const Color(0xFFDDDDDD)),
-              ),
-              child: Center(
-                child: Text(
-                  masterOnly ? '重新登录' : '连接云服务',
-                  style: const TextStyle(fontSize: 14, color: Color(0xFF333333)),
-                ),
-              ),
-            ),
           ),
         ),
         const SizedBox(width: 12),
         // 重连主设备：重新探活，成功关闭弹窗，失败保留弹窗可继续重试
         Expanded(
-          child: GestureDetector(
-            onTap: _reconnecting ? null : _reconnect,
-            child: Container(
-              height: 42,
-              decoration: BoxDecoration(
-                color: _reconnecting
-                    ? _brandRed.withOpacity(0.6)
-                    : _brandRed,
-                borderRadius: BorderRadius.circular(21),
-              ),
-              child: Center(
-                child: _reconnecting
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor:
-                              AlwaysStoppedAnimation<Color>(Colors.white),
-                        ),
-                      )
-                    : const Text(
-                        '重连主设备',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-              ),
-            ),
+          child: DialogActionButton(
+            text: '重连主设备',
+            loading: _reconnecting,
+            onTap: _reconnect,
           ),
         ),
       ],

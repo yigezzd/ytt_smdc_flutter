@@ -59,9 +59,7 @@ void _logApi(
   try {
     path = Uri.parse(url).path;
   } catch (_) {}
-  final String paramsText = params == null
-      ? ''
-      : (params is String ? params : json.encode(params));
+  final String paramsText = params == null ? '' : (params is String ? params : json.encode(params));
 
   if (success && _ignoredLogPaths.any(path.contains)) return;
 
@@ -113,8 +111,7 @@ Future<Map<String, dynamic>> request(
   try {
     final String storeStr = SpUtil.getString(Constant.store) ?? '';
     if (storeStr.isNotEmpty) {
-      final Map<String, dynamic> storeMap =
-          jsonDecode(storeStr) as Map<String, dynamic>;
+      final Map<String, dynamic> storeMap = jsonDecode(storeStr) as Map<String, dynamic>;
       sid = storeMap['id']?.toString() ?? '';
       spid = storeMap['spid']?.toString() ?? '';
     }
@@ -125,8 +122,7 @@ Future<Map<String, dynamic>> request(
   try {
     final String userStr = SpUtil.getString(Constant.user) ?? '';
     if (userStr.isNotEmpty) {
-      final Map<String, dynamic> userMap =
-          jsonDecode(userStr) as Map<String, dynamic>;
+      final Map<String, dynamic> userMap = jsonDecode(userStr) as Map<String, dynamic>;
       userid = userMap['userid']?.toString() ?? userMap['id']?.toString();
     }
   } catch (_) {}
@@ -157,7 +153,7 @@ Future<Map<String, dynamic>> request(
       if (userid != null && userid.isNotEmpty) 'userid': userid,
     };
   }
-  
+
   // 构建外层请求体（公共参数 + params）
   // 仅当 params 为 Map 时注入 client 字段；字符串等原始值直接透传（如 getSupplierInfo 传 id）
   if (params is Map<String, dynamic>) {
@@ -185,15 +181,13 @@ Future<Map<String, dynamic>> request(
     stopwatch.stop();
     final int elapsed = stopwatch.elapsedMilliseconds;
     final String content = response.data.toString();
-    final Map<String, dynamic> jsonMap =
-        json.decode(content) as Map<String, dynamic>;
+    final Map<String, dynamic> jsonMap = json.decode(content) as Map<String, dynamic>;
 
     if (jsonMap.containsKey('retcode')) {
       final dynamic retcode = jsonMap['retcode'];
       final String retmsg = jsonMap['retmsg']?.toString() ?? '请求失败';
       if (retcode == 0) {
-        _logApi(fullUrl, params, 'retcode=0',
-            success: true, elapsedMs: elapsed, response: content);
+        _logApi(fullUrl, params, 'retcode=0', success: true, elapsedMs: elapsed, response: content);
         return jsonMap;
       }
       if (retcode == -2 || retcode == -3) {
@@ -212,8 +206,7 @@ Future<Map<String, dynamic>> request(
     }
     // 兼容非 retcode 格式（如拦截器包装的 code/message）
     if (jsonMap['code'] == 0) {
-      _logApi(fullUrl, params, 'code=0',
-          success: true, elapsedMs: elapsed, response: content);
+      _logApi(fullUrl, params, 'code=0', success: true, elapsedMs: elapsed, response: content);
       return jsonMap;
     }
     final String msg = jsonMap['message']?.toString() ?? '请求失败';
@@ -301,7 +294,7 @@ void _handleLoginExpired(String retmsg) {
   });
 }
 
-/// 清除缓存但保留"记住账号密码"相关数据
+/// 清除会话缓存，保留记住密码与本机参数设置
 void _clearCachePreservingRemember() {
   // 字符串类型的记住密码 key
   final rememberKeys = <String, String>{};
@@ -321,6 +314,32 @@ void _clearCachePreservingRemember() {
 
   // 布尔类型的记住密码开关（单独处理，避免类型不匹配）
   final bool? rememberPwdEnabled = SpUtil.getBool(Constant.rememberPwdEnabled);
+  const localSettingKeys = <String>[
+    Constant.serverType,
+    'print_bill',
+    Constant.settleDy,
+    'full_payment',
+    'ENABLE_NFC',
+    'ENABLE_KD',
+    'ENABLE_PRODUCT_NUM',
+    'WeightTwoConfirm',
+    'KQ_ZJ',
+    'ClockTableFlag',
+    'qy_print',
+    'setting_ShowWaiter',
+    'setting_product_is_scans',
+    'setting_show_display_waiter',
+    'setting_show_public_cook',
+    'setting_check_down_goods',
+    'setting_single_cook',
+  ];
+  final localSettings = <String, dynamic>{};
+  for (final key in localSettingKeys) {
+    final value = SpUtil.getDynamic(key);
+    if (value != null) {
+      localSettings[key] = value;
+    }
+  }
 
   SpUtil.clear();
 
@@ -333,6 +352,17 @@ void _clearCachePreservingRemember() {
   if (rememberPwdEnabled != null) {
     SpUtil.putBool(Constant.rememberPwdEnabled, rememberPwdEnabled);
   }
+  localSettings.forEach((key, value) {
+    if (value is String) {
+      SpUtil.putString(key, value);
+    } else if (value is bool) {
+      SpUtil.putBool(key, value);
+    } else if (value is int) {
+      SpUtil.putInt(key, value);
+    } else if (value is double) {
+      SpUtil.putDouble(key, value);
+    }
+  });
 }
 
 /// 主动退出登录：清除缓存（保留记住密码）并跳转登录页
@@ -396,8 +426,7 @@ Future<Map<String, dynamic>> _buildSignedParams(
   // url_info：域名后的路径，如 YttSvr/app/yttlogin
   // 对齐 smdcapp NetInterceptor：tabledown 和 reserve/findList 不发送 url_info
   final String path = Uri.parse(fullUrl).path.replaceFirst(RegExp('^/'), '');
-  if (!fullUrl.contains('app/update/tabledown') &&
-      !fullUrl.contains('reserve/findList')) {
+  if (!fullUrl.contains('app/update/tabledown') && !fullUrl.contains('reserve/findList')) {
     all['url_info'] = path;
   }
 
@@ -407,8 +436,7 @@ Future<Map<String, dynamic>> _buildSignedParams(
   try {
     final String storeStr = SpUtil.getString(Constant.store) ?? '';
     if (storeStr.isNotEmpty) {
-      final Map<String, dynamic> storeMap =
-          jsonDecode(storeStr) as Map<String, dynamic>;
+      final Map<String, dynamic> storeMap = jsonDecode(storeStr) as Map<String, dynamic>;
       sid = storeMap['id']?.toString() ?? '0';
       spid = storeMap['spid']?.toString() ?? '0';
     }
@@ -418,8 +446,7 @@ Future<Map<String, dynamic>> _buildSignedParams(
   try {
     final String userStr = SpUtil.getString(Constant.user) ?? '';
     if (userStr.isNotEmpty) {
-      final Map<String, dynamic> userMap =
-          jsonDecode(userStr) as Map<String, dynamic>;
+      final Map<String, dynamic> userMap = jsonDecode(userStr) as Map<String, dynamic>;
       operid = userMap['userid']?.toString() ?? userMap['id']?.toString() ?? '0';
       opername = userMap['name']?.toString() ?? userMap['username']?.toString() ?? '';
     }
@@ -484,18 +511,14 @@ Future<Map<String, dynamic>> requestForm(
   bool showError = true,
   bool masterDevice = false,
 }) async {
-  final String baseUrl =
-      ConnectionManager.resolveBaseUrl(masterDevice: masterDevice);
+  final String baseUrl = ConnectionManager.resolveBaseUrl(masterDevice: masterDevice);
   String fullUrl = url.startsWith('http') ? url : '$baseUrl$url';
   // 规范化路径中的双斜杠（避免 baseUrl 尾部 / 与接口前导 / 重叠），与 smdcapp 保持一致
   final Uri parsed = Uri.parse(fullUrl);
-  fullUrl = parsed
-      .replace(path: parsed.path.replaceAll(RegExp('/{2,}'), '/'))
-      .toString();
+  fullUrl = parsed.replace(path: parsed.path.replaceAll(RegExp('/{2,}'), '/')).toString();
 
   // 追加公共参数并计算签名
-  final Map<String, dynamic> signedData =
-      await _buildSignedParams(formData, fullUrl);
+  final Map<String, dynamic> signedData = await _buildSignedParams(formData, fullUrl);
 
   final Stopwatch stopwatch = Stopwatch()..start();
   try {
@@ -509,8 +532,7 @@ Future<Map<String, dynamic>> requestForm(
     stopwatch.stop();
     final int elapsed = stopwatch.elapsedMilliseconds;
     final String content = response.data.toString();
-    final Map<String, dynamic> jsonMap =
-        json.decode(content) as Map<String, dynamic>;
+    final Map<String, dynamic> jsonMap = json.decode(content) as Map<String, dynamic>;
 
     // 主设备响应格式：PCRootDataBean（Success/Message/Data）
     if (jsonMap.containsKey('Success')) {
@@ -524,8 +546,7 @@ Future<Map<String, dynamic>> requestForm(
       if (showError && message.isNotEmpty) {
         Toast.show(message);
       }
-      _logApi(fullUrl, signedData, 'Message=$message',
-          elapsedMs: elapsed, response: content);
+      _logApi(fullUrl, signedData, 'Message=$message', elapsedMs: elapsed, response: content);
       throw _ApiException(jsonMap);
     }
 
@@ -548,8 +569,7 @@ Future<Map<String, dynamic>> requestForm(
     }
     // 兼容非 retcode 格式
     if (jsonMap['code'] == 0) {
-      _logApi(fullUrl, signedData, 'code=0',
-          success: true, elapsedMs: elapsed, response: content);
+      _logApi(fullUrl, signedData, 'code=0', success: true, elapsedMs: elapsed, response: content);
       return jsonMap;
     }
     final String msg = jsonMap['message']?.toString() ?? '请求失败';
@@ -647,8 +667,7 @@ Future<bool> checkMasterDeviceAlive({bool updateConnection = true}) async {
     );
     stopwatch.stop();
     final String content = response.data.toString();
-    final Map<String, dynamic> jsonMap =
-        json.decode(content) as Map<String, dynamic>;
+    final Map<String, dynamic> jsonMap = json.decode(content) as Map<String, dynamic>;
     final dynamic data = jsonMap['Data'];
     if (jsonMap['Success'] != true || data is! Map) {
       _logApi(fullUrl, signedData, '主设备响应失败或缺少门店信息',

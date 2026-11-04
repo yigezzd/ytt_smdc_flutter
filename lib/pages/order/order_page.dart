@@ -88,6 +88,7 @@ class OrderPage extends StatefulWidget {
     this.saleid = '',
     this.tableJson,
     this.fastMode = false,
+    this.lockAcquired = false,
   });
 
   final String tableId;
@@ -104,6 +105,12 @@ class OrderPage extends StatefulWidget {
 
   /// 是否快餐模式（对齐 smdcapp DishesHomeAct2 快餐点餐：无桌台、标题“快餐点餐”、显示模式切换图标）
   final bool fastMode;
+
+  /// 进入本页前是否刚由本机完成锁台（待下单桌台“开始点菜”流程）
+  ///
+  /// 为 true 时不再重复查锁，避免刚写入的锁状态尚未同步导致误判为他人锁；
+  /// 退出时由本页负责解锁。
+  final bool lockAcquired;
 
   @override
   State<OrderPage> createState() => _OrderPageState();
@@ -189,9 +196,14 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   /// 锁台事件订阅（R2）
   StreamSubscription<Map<String, dynamic>>? _lockSubscription;
 
+  /// 本机是否持有该桌台的锁（仅持有方退出时解锁，避免误放他人锁）
+  bool _lockAcquired = false;
+
+  /// 页面是否已销毁（锁台请求跨过退出时机时兜底释放）
+  bool _disposed = false;
+
   String get _currentSaleid {
-    final String tmpSaleid =
-        widget.tableJson?['tmp']?['saleid']?.toString() ?? '';
+    final String tmpSaleid = widget.tableJson?['tmp']?['saleid']?.toString() ?? '';
     return tmpSaleid.isNotEmpty ? tmpSaleid : widget.saleid;
   }
 
@@ -226,6 +238,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _disposed = true;
     _lockSubscription?.cancel();
     _releaseTableLock();
     _listScrollController.removeListener(_onListScroll);
@@ -238,37 +251,97 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   }
 
   /// 进入点菜页自动锁台（对齐 smdcapp DishesHomeAct2：tmp.lockflag==0 时 postTableLock(1)）
+  ///
+  /// 锁台前先查最新锁状态：已被其他设备/员工锁定时提示并返回桌台，不能直接覆盖；
+  /// 查询失败同样阻断，避免后进入方静默进入。
   Future<void> _autoLockTable() async {
     if (widget.fastMode || widget.tableId.isEmpty) return;
     if (!TableConcurrencyGuard.lockEnabled) return;
     final dynamic tmp = widget.tableJson?['tmp'];
-    final int lockflag =
-        tmp is Map ? int.tryParse(tmp['lockflag']?.toString() ?? '') ?? 0 : 0;
-    if (lockflag == 1) return;
+    final String areaid = widget.tableJson?['areaid']?.toString() ?? '';
+
+    if (widget.lockAcquired) {
+      // 上一页刚按本机身份锁台，直接视为已持有，退出时释放
+      _lockAcquired = true;
+      if (tmp is Map) tmp['lockflag'] = 1;
+      return;
+    }
+
+    TableLockState state;
+    try {
+      state = await TableConcurrencyGuard.fetchLockState(
+        widget.tableId,
+        areaid: areaid,
+      );
+    } catch (_) {
+      if (!mounted) return;
+      await ConfirmDialog.show(
+        context,
+        content: '获取桌台状态失败，请返回桌台重试',
+        singleButton: true,
+      );
+      if (mounted) {
+        Navigator.of(context).popUntil((Route<dynamic> route) => route.isFirst);
+      }
+      return;
+    }
+    if (!mounted) return;
+
+    if (state.locked) {
+      if (TableConcurrencyGuard.isLockedBySelf(state)) {
+        // 锁由本机其他页面持有（如订单详情加菜），本页不重复加锁，也不在退出时解锁
+        if (tmp is Map) tmp['lockflag'] = 1;
+        return;
+      }
+      await ConfirmDialog.show(
+        context,
+        content: '${TableConcurrencyGuard.lockConflictMessage(state)}，请刷新桌台后重试',
+        singleButton: true,
+      );
+      if (mounted) {
+        Navigator.of(context).popUntil((Route<dynamic> route) => route.isFirst);
+      }
+      TableEventBus.fireTableChanged();
+      return;
+    }
+
     final bool ok = await TableConcurrencyGuard.postTableLock(
       tableId: widget.tableId,
       lock: true,
       tableJson: widget.tableJson,
+      tableName: widget.tableName,
       autoflag: 1,
     );
-    if (!ok || !mounted) return;
+    if (!ok) return;
+    _lockAcquired = true;
+    if (_disposed) {
+      // 请求返回前页面已退出，立即释放，避免残留锁
+      _releaseTableLock();
+      return;
+    }
+    if (!mounted) return;
     if (tmp is Map) tmp['lockflag'] = 1;
     TableEventBus.fireTableChanged();
   }
 
   /// 退出点菜页自动解锁（对齐 smdcapp finishView：postTableLock(0)）
   void _releaseTableLock() {
+    if (!_lockAcquired) return;
     if (widget.fastMode || widget.tableId.isEmpty) return;
     if (!TableConcurrencyGuard.lockEnabled) return;
+    _lockAcquired = false;
     TableConcurrencyGuard.postTableLock(
       tableId: widget.tableId,
       lock: false,
       tableJson: widget.tableJson,
+      tableName: widget.tableName,
       autoflag: 1,
     );
   }
 
   void _onLockedByOtherExit() {
+    // 已被其他设备接管/解锁，不能再按本机身份解锁，否则会误放对方的锁
+    _lockAcquired = false;
     if (!mounted) return;
     Navigator.of(context).popUntil((Route<dynamic> route) => route.isFirst);
     TableEventBus.fireTableChanged();
@@ -310,8 +383,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
       // 二级分类向上归并到一级（对齐 smdcapp：点菜页左栏只展示一级分类，
       // 挂在二级分类下的菜品需归并到其父分类，否则整批菜品不显示）
-      final Map<String, String> categoryParentMap =
-          await OrderRepository.fetchCategoryParentMap();
+      final Map<String, String> categoryParentMap = await OrderRepository.fetchCategoryParentMap();
 
       // 按 typeid 分组
       final Map<String, List<DishProduct>> grouped = <String, List<DishProduct>>{};
@@ -333,8 +405,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       // R5：保留后台全部分类（含暂无菜品的分类，仅展示分类标题不展示占位区），
       // 避免分类被过滤后看起来"菜不见了"
       final List<DishCategory> validCategories = <DishCategory>[
-        if (recommendProducts.isNotEmpty)
-          DishCategory(typeid: _kRecommendTypeId, name: '推荐菜'),
+        if (recommendProducts.isNotEmpty) DishCategory(typeid: _kRecommendTypeId, name: '推荐菜'),
         ...categories,
       ];
 
@@ -386,8 +457,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
   /// 加载桌台会员并按会员价重算购物车（R11/R26/R49）
   Future<void> _loadMemberAndApply() async {
-    final Map<String, dynamic>? tmp =
-        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final Map<String, dynamic>? tmp = widget.tableJson?['tmp'] as Map<String, dynamic>?;
     final String vipid = tmp?['vipid']?.toString() ?? '';
     if (vipid.isEmpty) return;
     try {
@@ -425,8 +495,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   /// 否则 1；扣除购物车已有数量后补足差额（对齐 smdcapp gapQty 逻辑）。
   Future<void> _initMustDishes() async {
     try {
-      final Map<String, dynamic>? tmp =
-          widget.tableJson?['tmp'] as Map<String, dynamic>?;
+      final Map<String, dynamic>? tmp = widget.tableJson?['tmp'] as Map<String, dynamic>?;
       // 对齐 smdcapp initMust：isMust = mustfreeflag != "1" || dcMode == 0
       final String mustfreeflag = tmp?['mustfreeflag']?.toString() ?? '0';
       final int dcMode =
@@ -434,9 +503,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       if (!(mustfreeflag != '1' || dcMode == 0)) return;
       // 对齐 smdcapp CartGoodsModel.addMust：仅待下单桌台（tablestatus==1）校验必点菜，
       // 已有下单记录的桌台（后续加菜）不再重复计算
-      if (tmp != null &&
-          tmp['tablestatus'] != null &&
-          _mustToInt(tmp['tablestatus']) != 1) {
+      if (tmp != null && tmp['tablestatus'] != null && _mustToInt(tmp['tablestatus']) != 1) {
         return;
       }
 
@@ -467,9 +534,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           if (raw is! Map<String, dynamic>) continue;
           final String pid = raw['productid']?.toString() ?? '';
           if (pid.isEmpty) continue;
-          final double baseQty = _mustToDouble(raw['mustqty']) < 1
-              ? 1.0
-              : _mustToDouble(raw['mustqty']);
+          final double baseQty =
+              _mustToDouble(raw['mustqty']) < 1 ? 1.0 : _mustToDouble(raw['mustqty']);
           final double requiredQty =
               perPerson ? baseQty * (personNum < 1 ? 1 : personNum) : baseQty;
           // 扣除购物车已有数量（对齐 smdcapp ProductMustValidator：退菜不计入）
@@ -495,12 +561,10 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   /// 必点菜条目转购物车条目（对齐 smdcapp ShoppingCartUtil.mustToProduct + toDetalListBean）
   ///
   /// [mustType] 0=固定必点（getFixedMandatoryItems）、1=可选必点（MustPopup2 选中项）。
-  CartItem _mustProductToCartItem(Map<String, dynamic> raw, double qty,
-      {int mustType = 0}) {
+  CartItem _mustProductToCartItem(Map<String, dynamic> raw, double qty, {int mustType = 0}) {
     final String pid = raw['productid']?.toString() ?? '';
     final DishProduct? dish = _findDishProduct(pid);
-    final bool isComb = _mustToInt(raw['combflag']) == 1 ||
-        (dish != null && dish.combflag == 1);
+    final bool isComb = _mustToInt(raw['combflag']) == 1 || (dish != null && dish.combflag == 1);
     final Product product = dish != null
         ? Product(
             id: dish.productid,
@@ -519,8 +583,18 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
             presentflag: dish.presentflag,
             chooseqtyflag: dish.chooseqtyflag,
             minsaleflag: dish.minsaleflag,
+            moreeatflag: dish.moreeatflag,
             printflag: dish.printflag,
             labelflag: dish.labelflag,
+            barcode: dish.barcode,
+            code: dish.code,
+            inprice: dish.inprice,
+            servicefeeflag: dish.servicefeeflag,
+            sellclearflag: dish.sellclearflag,
+            stockqty: dish.stockqty,
+            curflag: dish.curflag,
+            specflag: dish.specflag,
+            cookflag: dish.cookflag,
           )
         : Product(
             id: pid,
@@ -538,6 +612,11 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     item.typeid = dish?.typeid ?? raw['typeid']?.toString() ?? '';
     item.typename = dish?.typename ?? raw['typename']?.toString() ?? '';
     item.unit = dish?.unit ?? raw['unit']?.toString() ?? '';
+    // 必点菜多规格：配置行带 specid/specname（对齐 smdcapp “必点菜有多规格的，返回没有详情”分支）
+    item.specid = raw['specid']?.toString() ?? '';
+    item.specName = (raw['specname']?.toString() ?? '').isNotEmpty
+        ? raw['specname'].toString()
+        : (raw['spec']?.toString() ?? '');
     item.mustType = mustType;
     return item;
   }
@@ -585,9 +664,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
             if (raw is! Map<String, dynamic>) continue;
             final String pid = raw['productid']?.toString() ?? '';
             if (pid.isEmpty) continue;
-            final double baseQty = _mustToDouble(raw['mustqty']) < 1
-                ? 1.0
-                : _mustToDouble(raw['mustqty']);
+            final double baseQty =
+                _mustToDouble(raw['mustqty']) < 1 ? 1.0 : _mustToDouble(raw['mustqty']);
             final double requiredQty =
                 perPerson ? baseQty * (newPersonnum < 1 ? 1 : newPersonnum) : baseQty;
             // 必点菜当前有效数量（统计口径对齐 smdcapp：mustflag==1，退菜不计）
@@ -610,11 +688,11 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
               double excessQty = currentQty - requiredQty;
               if (excessQty <= 0) continue;
               final List<CartItem> matched = _cartItems
-                  .where((CartItem c) => c.product.id == pid &&
-                      c.mustflag == 1 && !c.isRefunded && !c.isGift)
+                  .where((CartItem c) =>
+                      c.product.id == pid && c.mustflag == 1 && !c.isRefunded && !c.isGift)
                   .toList()
-                ..sort((CartItem a, CartItem b) =>
-                    (a.isCombo ? 1 : 0).compareTo(b.isCombo ? 1 : 0));
+                ..sort(
+                    (CartItem a, CartItem b) => (a.isCombo ? 1 : 0).compareTo(b.isCombo ? 1 : 0));
               for (final CartItem c in matched) {
                 if (excessQty <= 0) break;
                 if (c.quantity <= excessQty) {
@@ -675,11 +753,9 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
             }
           }
           final CartItem item = _savedDetailToCartItem(d, combChildren);
-          final int index = _cartItems
-              .indexWhere((CartItem c) => c.uniqueKey == item.uniqueKey);
+          final int index = _cartItems.indexWhere((CartItem c) => c.uniqueKey == item.uniqueKey);
           if (index >= 0) {
-            final double totalQty =
-                _cartItems[index].qtyValue + item.qtyValue;
+            final double totalQty = _cartItems[index].qtyValue + item.qtyValue;
             _cartItems[index].quantity = totalQty.floor();
             _cartItems[index].extraQty = totalQty - totalQty.floor();
           } else {
@@ -699,13 +775,10 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   /// smdcapp：masterBean = getMasterBeanPC(tableInfo, downPrice(空), 0, 0, 0, tmp.remark)，
   /// 金额均为 0，localbillno 缺省 "temp"。
   String _buildRestoreMasterJson() {
-    final Map<String, dynamic>? tmp =
-        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final Map<String, dynamic>? tmp = widget.tableJson?['tmp'] as Map<String, dynamic>?;
     final String now = _mustNowStr();
     final Map<String, dynamic> master = <String, dynamic>{
-      'tableid': widget.tableId.isNotEmpty
-          ? widget.tableId
-          : (tmp?['tableid']?.toString() ?? '-1'),
+      'tableid': widget.tableId.isNotEmpty ? widget.tableId : (tmp?['tableid']?.toString() ?? '-1'),
       'tablename': widget.tableName,
       'remark': tmp?['remark']?.toString() ?? '',
       'amt': 0,
@@ -774,8 +847,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   /// 已保存明细转购物车条目（对齐 smdcapp mustToProduct + sperRemark 拼接 + addCart）
   ///
   /// [combChildren] 套餐主行对应的明细行（对齐 smdcapp DetailListBean.itemList）
-  CartItem _savedDetailToCartItem(
-      Map<String, dynamic> d, List<Map<String, dynamic>> combChildren) {
+  CartItem _savedDetailToCartItem(Map<String, dynamic> d, List<Map<String, dynamic>> combChildren) {
     final double qty = _mustToDouble(d['qty']);
     final double sellprice = _mustToDouble(d['sellprice']);
     final double rrprice = _mustToDouble(d['rrprice']);
@@ -793,15 +865,26 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
             price: sellprice,
             printflag: _mustToInt(d['printflag']),
             labelflag: _mustToInt(d['labelflag']),
+            barcode: d['productcode']?.toString() ?? '',
+            code: d['productno']?.toString() ?? '',
+            inprice: _mustToDouble(d['costprice']),
+            servicefeeflag: _mustToInt(d['servicefeeflag']),
+            sellclearflag: _mustToInt(d['sellclearflag']),
+            stockqty: _mustToDouble(d['stockqty']),
+            curflag: _mustToInt(d['curflag']),
+            specflag: _mustToInt(d['specflag']),
+            cookflag: _mustToInt(d['cookflag']),
+            moreeatflag: _mustToInt(d['moreeatflag']),
+            dscflag: _mustToInt(d['dscflag']) == 0 ? 0 : 1,
+            minsaleflag: _mustToInt(d['minsaleflag']),
+            chooseqtyflag: _mustToInt(d['chooseqtyflag']),
           );
 
     // 对齐 smdcapp：specname + cooktext 用“、”拼接作为规格做法描述
-    final String specname =
-        d['spec']?.toString() ?? d['specname']?.toString() ?? '';
+    final String specname = d['spec']?.toString() ?? d['specname']?.toString() ?? '';
     final String cooktext = d['cooktext']?.toString() ?? '';
-    String specText = specname.isEmpty
-        ? cooktext
-        : (cooktext.isEmpty ? specname : '$specname、$cooktext');
+    String specText =
+        specname.isEmpty ? cooktext : (cooktext.isEmpty ? specname : '$specname、$cooktext');
 
     // 套餐：从子行重建选中明细（对齐 smdcapp test3 归组）；
     // specText 重建为 sku 串仅作购物车合并键（对齐 smdcapp getSetMealSku），
@@ -819,19 +902,22 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           combaddamt: caddamt / mainQty,
           groupid: c['combgroupid']?.toString() ?? '',
           combsetproductid: c['combsetproductid']?.toString() ?? '',
+          specid: c['specid']?.toString() ?? '',
           specname: c['specname']?.toString() ?? c['spec']?.toString() ?? '',
           sellprice: _mustToDouble(c['sellprice']),
           unit: c['unit']?.toString() ?? '',
+          typeid: c['typeid']?.toString() ?? '',
+          typename: c['typename']?.toString() ?? '',
+          productcode: c['productcode']?.toString() ?? '',
+          curflag: _mustToInt(c['curflag']),
           cookText: c['cooktext']?.toString() ?? '',
           cookExtra: _mustToDouble(c['cookaddamt']) / mainQty,
           printflag: _mustToInt(c['printflag']),
           labelflag: _mustToInt(c['labelflag']),
-        )
-          ..cooks = parseSelectedCooks(c['cooklist'] ?? c['cookList']));
+        )..cooks = parseSelectedCooks(c['cooklist'] ?? c['cookList']));
       }
-      specText = combItems
-          .map((ComboSelectedItem c) => '${c.productname}x${_fmtQty(c.qty)}')
-          .join(',');
+      specText =
+          combItems.map((ComboSelectedItem c) => '${c.productname}x${_fmtQty(c.qty)}').join(',');
     }
 
     // 服务端 cookaddamt 含打包费（对齐 smdcapp：打包绑定为整份加价做法计入 cookaddamt），
@@ -844,9 +930,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       product: product,
       quantity: weighflag == 1 ? 1 : (qty > 0 ? qty.toInt() : 1),
       specText: specText,
-      extraPrice: isComb
-          ? (_mustToDouble(d['combaddamt']) / (qty > 0 ? qty : 1))
-          : cookAdd,
+      extraPrice: isComb ? (_mustToDouble(d['combaddamt']) / (qty > 0 ? qty : 1)) : cookAdd,
       weighNum: weighflag == 1 ? (weighnum > 0 ? weighnum : qty) : 0,
       combItems: combItems,
     );
@@ -859,15 +943,20 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     item.bagPrice = bagPrice;
     item.isBag = _mustToInt(d['bagstatus']) == 1 || item.bagPrice > 0;
     // 报表需要的分类/单位字段（R2）：优先取保存快照，回退商品目录
-    item.typeid = (d['typeid']?.toString() ?? '').isNotEmpty
-        ? d['typeid'].toString()
-        : (dish?.typeid ?? '');
+    item.typeid =
+        (d['typeid']?.toString() ?? '').isNotEmpty ? d['typeid'].toString() : (dish?.typeid ?? '');
     item.typename = (d['typename']?.toString() ?? '').isNotEmpty
         ? d['typename'].toString()
         : (dish?.typename ?? '');
-    item.unit = (d['unit']?.toString() ?? '').isNotEmpty
-        ? d['unit'].toString()
-        : (dish?.unit ?? '');
+    item.unit =
+        (d['unit']?.toString() ?? '').isNotEmpty ? d['unit'].toString() : (dish?.unit ?? '');
+    // 规格与规格ID按保存快照还原（保存接口字段可能是 spec/specname 任一）
+    item.specName = (d['specname']?.toString() ?? '').isNotEmpty
+        ? d['specname'].toString()
+        : (d['spec']?.toString() ?? '');
+    item.specid = d['specid']?.toString() ?? '';
+    // 做法描述还原（再次下单上传 cooktext，销售明细表做法名称依赖）
+    item.cookText = d['cooktext']?.toString() ?? '';
     // 恢复做法明细（下单/再次保存时转 cooklist 上传，杯贴打印用）
     item.cooks = parseSelectedCooks(d['cooklist'] ?? d['cookList']);
     final double discount = _mustToDouble(d['discount']);
@@ -980,9 +1069,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
   // ==================== 购物车逻辑 ====================
 
-  int get _totalCount => _cartItems
-      .fold<double>(0, (double sum, CartItem item) => sum + item.qtyValue)
-      .round();
+  int get _totalCount =>
+      _cartItems.fold<double>(0, (double sum, CartItem item) => sum + item.qtyValue).round();
 
   double get _totalPrice =>
       _cartItems.fold(0, (double sum, CartItem item) => sum + item.totalPrice);
@@ -1001,8 +1089,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           (_productCountMap[item.product.id] ?? 0) + item.qtyValue.ceil();
       final String? typeid = _productTypeIdMap[item.product.id];
       if (typeid != null) {
-        _categoryCountMap[typeid] =
-            (_categoryCountMap[typeid] ?? 0) + item.qtyValue.ceil();
+        _categoryCountMap[typeid] = (_categoryCountMap[typeid] ?? 0) + item.qtyValue.ceil();
       }
     }
   }
@@ -1026,7 +1113,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
   /// 加购（无规格商品）
   /// 对齐 smdcapp CartGoodsModel: setting_check_down_goods 开启时，重复点菜弹确认
-  Future<void> _addToCart(DishProduct dish, {int? quantity, String specText = '', double extraPrice = 0}) async {
+  Future<void> _addToCart(DishProduct dish,
+      {double? quantity, String specText = '', double extraPrice = 0}) async {
     if (!_ensureSaleTime(dish)) return;
     // R4/R5/R6：加购前拉取该分类最新商品与沽清状态，避免 Web 停用/改价/沽清后仍能点菜
     await _refreshRealtimeSnapshot(dish.typeid);
@@ -1037,24 +1125,22 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       Toast.show('菜品【${dish.name}】已停用，无法点餐');
       return;
     }
-    final bool simpleDish = dish.specflag == 0 &&
-        dish.combflag == 0 &&
-        dish.weighflag == 0 &&
-        dish.curflag == 0;
+    final bool simpleDish =
+        dish.specflag == 0 && dish.combflag == 0 && dish.weighflag == 0 && dish.curflag == 0;
     final double? latestPrice = simpleDish ? latest?.sellprice : null;
     // 本单已点数量（限点校验 + 起售/增售判断共用）
     final double currentQty = _cartItems
         .where((CartItem item) => item.product.id == dish.productid)
         .fold(0.0, (double sum, CartItem item) => sum + item.qtyValue);
     // 起售/增售数量（对齐 smdcapp SelectProductFragment：首次加起售数量，之后加增售数量）
-    int step = quantity ?? (currentQty <= 0 ? dish.startQty : dish.addQty).round();
+    double step = quantity ?? (currentQty <= 0 ? dish.startQty : dish.addQty);
     // R67：菜品开启“点菜时选择数量”时先弹窗录入数量
     if (dish.chooseqtyflag == 1 && quantity == null) {
       final String? input = await InputDialog.show(
         context,
         title: dish.name,
         hintText: '请输入数量',
-        initialValue: '${step < 1 ? 1 : step}',
+        initialValue: _fmtQty(step),
         maxLines: 1,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
         inputFormatters: <TextInputFormatter>[
@@ -1070,7 +1156,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         Toast.show('请输入正确数量');
         return;
       }
-      step = qty.round() < 1 ? 1 : qty.round();
+      step = qty;
     }
     // R5：沽清剩余数量实时校验（按商品维度；多规格商品在规格弹窗内校验）
     if (simpleDish) {
@@ -1104,8 +1190,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     }
     final Product product = _toProduct(dish);
     bool repriced = false;
-    if (latestPrice != null &&
-        (latestPrice - product.price).abs() > 0.005) {
+    if (latestPrice != null && (latestPrice - product.price).abs() > 0.005) {
       product.price = latestPrice;
       repriced = true;
     }
@@ -1113,18 +1198,18 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       final String key = '${product.id}_$specText';
       // 必点菜行数量独立管理（对齐 smdcapp 必点行 mustflag=1 不参与普通加购合并）；
       // 第N份促销拆分行不参与合并，否则会把促销数量并入普通行
-      final int index = _cartItems.indexWhere((CartItem item) =>
-          item.uniqueKey == key && item.mustflag != 1 && !item.isNthPromo);
+      final int index = _cartItems.indexWhere(
+          (CartItem item) => item.uniqueKey == key && item.mustflag != 1 && !item.isNthPromo);
       if (index >= 0) {
-        _cartItems[index].quantity += step;
+        _setCartItemQty(_cartItems[index], _cartItems[index].qtyValue + step);
         if (repriced) _applyLatestPrice(_cartItems[index], latestPrice!);
       } else {
         final CartItem item = CartItem(
           product: product,
-          quantity: step,
           specText: specText,
           extraPrice: extraPrice,
         );
+        _setCartItemQty(item, step);
         item.typeid = dish.typeid;
         item.typename = dish.typename;
         item.unit = dish.unit;
@@ -1154,8 +1239,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   Future<void> _refreshRealtimeSnapshot(String typeid) async {
     final DateTime now = DateTime.now();
     final _RealtimeProductSnapshot? cached = _realtimeSnapshots[typeid];
-    final bool productFresh = cached != null &&
-        now.difference(cached.at) < const Duration(seconds: 2);
+    final bool productFresh =
+        cached != null && now.difference(cached.at) < const Duration(seconds: 2);
     if (!productFresh) {
       try {
         final List<DishProduct> products =
@@ -1170,13 +1255,12 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         }
       } catch (_) {}
     }
-    final bool warnFresh = _warnSnapshotAt != null &&
-        now.difference(_warnSnapshotAt!) < const Duration(seconds: 2);
+    final bool warnFresh =
+        _warnSnapshotAt != null && now.difference(_warnSnapshotAt!) < const Duration(seconds: 2);
     if (warnFresh) return;
     _warnSnapshotAt = now;
     try {
-      final List<Map<String, dynamic>> warns =
-          await OrderRepository.fetchWarnList();
+      final List<Map<String, dynamic>> warns = await OrderRepository.fetchWarnList();
       _guQingLeftMap.clear();
       for (final Map<String, dynamic> w in warns) {
         final String pid = w['productid']?.toString() ?? '';
@@ -1184,10 +1268,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         final String specid = w['specid']?.toString() ?? '';
         // 规格级沽清交给规格弹窗校验，这里只缓存商品级剩余
         if (specid.isNotEmpty) continue;
-        final double warnqty =
-            double.tryParse(w['warnqty']?.toString() ?? '0') ?? 0;
-        final double saleqty =
-            double.tryParse(w['saleqty']?.toString() ?? '0') ?? 0;
+        final double warnqty = double.tryParse(w['warnqty']?.toString() ?? '0') ?? 0;
+        final double saleqty = double.tryParse(w['saleqty']?.toString() ?? '0') ?? 0;
         _guQingLeftMap[pid] = warnqty - saleqty;
       }
       if (mounted) setState(() {});
@@ -1196,7 +1278,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
   /// 规格商品加购（对齐 smdcapp addCart 逻辑）
   void _addSpecToCart(DishProduct dish, SpecCookSubmit data) {
-    final int quantity = data.quantity;
+    final double quantity = data.quantity;
     final String specText = data.specText;
     final double wholeExtra = data.wholeExtra;
     // 限点校验（对齐 smdcapp DialogHelper）
@@ -1224,30 +1306,41 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       presentflag: dish.presentflag,
       chooseqtyflag: dish.chooseqtyflag,
       minsaleflag: dish.minsaleflag,
+      moreeatflag: dish.moreeatflag,
       printflag: dish.printflag,
       labelflag: dish.labelflag,
+      barcode: dish.barcode,
+      code: dish.code,
+      inprice: dish.inprice,
+      servicefeeflag: dish.servicefeeflag,
+      sellclearflag: dish.sellclearflag,
+      stockqty: dish.stockqty,
+      curflag: dish.curflag,
+      specflag: dish.specflag,
+      cookflag: dish.cookflag,
     );
     setState(() {
       final String key = '${product.id}_$specText';
       // 必点菜行数量独立管理（对齐 smdcapp 必点行 mustflag=1 不参与普通加购合并）；
       // 第N份促销拆分行不参与合并
-      final int index = _cartItems.indexWhere((CartItem item) =>
-          item.uniqueKey == key && item.mustflag != 1 && !item.isNthPromo);
+      final int index = _cartItems.indexWhere(
+          (CartItem item) => item.uniqueKey == key && item.mustflag != 1 && !item.isNthPromo);
       if (index >= 0) {
-        _cartItems[index].quantity += quantity;
+        _setCartItemQty(_cartItems[index], _cartItems[index].qtyValue + quantity);
       } else {
         final CartItem item = CartItem(
           product: product,
-          quantity: quantity,
           specText: specText,
           extraPrice: wholeExtra,
         );
+        _setCartItemQty(item, quantity);
         item.unitCookExtra = data.unitExtra;
         item.typeid = dish.typeid;
         item.typename = dish.typename;
         item.unit = dish.unit;
         // 规格与做法分列存储，下单时按 smdcapp 字段分别上传
         item.specName = data.specName;
+        item.specid = data.specid;
         item.cookText = data.cookText;
         item.cooks = List<SelectedCook>.from(data.cooks);
         PromotionManager.instance.applyToCartItem(item);
@@ -1487,15 +1580,25 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       presentflag: dish.presentflag,
       chooseqtyflag: dish.chooseqtyflag,
       minsaleflag: dish.minsaleflag,
+      moreeatflag: dish.moreeatflag,
       printflag: dish.printflag,
       labelflag: dish.labelflag,
+      barcode: dish.barcode,
+      code: dish.code,
+      inprice: dish.inprice,
+      servicefeeflag: dish.servicefeeflag,
+      sellclearflag: dish.sellclearflag,
+      stockqty: dish.stockqty,
+      curflag: dish.curflag,
+      specflag: dish.specflag,
+      cookflag: dish.cookflag,
     );
     setState(() {
       final String key = '${product.id}_${result.specText}';
       // 必点菜行数量独立管理（对齐 smdcapp 必点行 mustflag=1 不参与普通加购合并）；
       // 第N份促销拆分行不参与合并
-      final int index = _cartItems.indexWhere((CartItem item) =>
-          item.uniqueKey == key && item.mustflag != 1 && !item.isNthPromo);
+      final int index = _cartItems.indexWhere(
+          (CartItem item) => item.uniqueKey == key && item.mustflag != 1 && !item.isNthPromo);
       if (index >= 0) {
         _cartItems[index].quantity += result.quantity;
       } else {
@@ -1526,6 +1629,15 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       context,
       cartItems: _cartItems,
       onAdd: (CartItem item) {
+        final double step = _findDishProduct(item.product.id)?.addQty ?? 1;
+        void addQuantity() {
+          setState(() {
+            _setCartItemQty(item, item.qtyValue + step);
+            _applyNthDiscount();
+            _rebuildCountMap();
+          });
+        }
+
         // R80：必点菜允许增加数量，但需二次确认（对齐安卓“允许并提示是否继续”）
         if (item.mustflag == 1) {
           ConfirmDialog.show(
@@ -1533,11 +1645,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
             content: '该菜品为必点菜，修改数量可能影响必点规则，是否继续？',
           ).then((bool ok) {
             if (!ok || !mounted) return;
-            setState(() {
-              item.quantity++;
-              _applyNthDiscount();
-              _rebuildCountMap();
-            });
+            addQuantity();
           });
           return;
         }
@@ -1548,15 +1656,11 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         }
         // R73：购物车加数量实时校验沽清
         final double? left = _guQingLeftMap[item.product.id];
-        if (left != null && item.qtyValue + 1 > left) {
+        if (left != null && item.qtyValue + step > left) {
           Toast.show('库存不足，剩余${_fmtQty(left)}');
           return;
         }
-        setState(() {
-          item.quantity++;
-          _applyNthDiscount();
-          _rebuildCountMap();
-        });
+        addQuantity();
       },
       onRemove: (CartItem item) {
         // 必点菜数量受规则约束，不允许减少
@@ -1564,15 +1668,15 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           Toast.show('必点菜不能减少数量');
           return;
         }
+        final DishProduct? dish = _findDishProduct(item.product.id);
+        final double start = dish?.startQty ?? 1;
+        final double add = dish?.addQty ?? 1;
+        final double next = double.parse((item.qtyValue - add).toStringAsFixed(3));
         setState(() {
-          // 有小数部分先去掉小数，否则整数部分减 1
-          if (item.extraQty > 0) {
-            item.extraQty = 0;
-          } else {
-            item.quantity--;
-          }
-          if (item.qtyValue <= 0) {
+          if (item.qtyValue <= start || next < start) {
             _cartItems.remove(item);
+          } else {
+            _setCartItemQty(item, next);
           }
           _applyNthDiscount();
           _rebuildCountMap();
@@ -1632,8 +1736,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       context,
       title: item.displayName,
       hintText: item.isWeigh ? '请输入重量' : '请输入数量',
-      initialValue:
-          item.isWeigh ? _fmtQty(item.weighNum) : _fmtQty(item.qtyValue),
+      initialValue: item.isWeigh ? _fmtQty(item.weighNum) : _fmtQty(item.qtyValue),
       maxLines: 1,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       inputFormatters: <TextInputFormatter>[
@@ -1670,32 +1773,29 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     setState(() {
       // 优先减非必点、非促销的普通行，避免普通减购触碰必点菜/第N份促销行
       int index = _cartItems.indexWhere((CartItem item) =>
-          item.product.id == dish.productid &&
-          item.mustflag != 1 &&
-          !item.isNthPromo);
+          item.product.id == dish.productid && item.mustflag != 1 && !item.isNthPromo);
       if (index < 0) {
         // 只剩促销行时允许减促销行（下一轮重算会合并还原）
-        index = _cartItems.indexWhere((CartItem item) =>
-            item.product.id == dish.productid && item.mustflag != 1);
+        index = _cartItems
+            .indexWhere((CartItem item) => item.product.id == dish.productid && item.mustflag != 1);
       }
       if (index < 0) {
-        final int mustIndex = _cartItems.indexWhere(
-            (CartItem item) => item.product.id == dish.productid);
+        final int mustIndex =
+            _cartItems.indexWhere((CartItem item) => item.product.id == dish.productid);
         if (mustIndex >= 0) {
           Toast.show('必点菜不能操作');
         }
         return;
       }
       // 起售/增售数量（对齐 smdcapp SelectProductFragment：减后低于起售数量则直接删除）
-      final int start = dish.startQty.round();
-      final int add = dish.addQty.round();
+      final double start = dish.startQty;
+      final double add = dish.addQty;
       final double rowQty = _cartItems[index].qtyValue;
-      if (rowQty <= start || rowQty - add < start) {
+      final double next = double.parse((rowQty - add).toStringAsFixed(3));
+      if (rowQty <= start || next < start) {
         _cartItems.removeAt(index);
       } else {
-        final double next = rowQty - add;
-        _cartItems[index].quantity = next.floor();
-        _cartItems[index].extraQty = next - next.floor();
+        _setCartItemQty(_cartItems[index], next);
       }
       _applyNthDiscount();
       _rebuildCountMap();
@@ -1719,8 +1819,18 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       presentflag: dish.presentflag,
       chooseqtyflag: dish.chooseqtyflag,
       minsaleflag: dish.minsaleflag,
+      moreeatflag: dish.moreeatflag,
       printflag: dish.printflag,
       labelflag: dish.labelflag,
+      barcode: dish.barcode,
+      code: dish.code,
+      inprice: dish.inprice,
+      servicefeeflag: dish.servicefeeflag,
+      sellclearflag: dish.sellclearflag,
+      stockqty: dish.stockqty,
+      curflag: dish.curflag,
+      specflag: dish.specflag,
+      cookflag: dish.cookflag,
     );
   }
 
@@ -1774,12 +1884,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     // 回显购物车已有的可选必点菜（对齐 MustPopup2：可选必点行 qty>0 按 productid 匹配）
     final Map<String, double> preselected = <String, double>{};
     for (final CartItem item in _cartItems) {
-      if (item.mustflag == 1 &&
-          item.mustType == 1 &&
-          !item.isRefunded &&
-          item.quantity > 0) {
-        preselected[item.product.id] =
-            (preselected[item.product.id] ?? 0) + item.quantity;
+      if (item.mustflag == 1 && item.mustType == 1 && !item.isRefunded && item.quantity > 0) {
+        preselected[item.product.id] = (preselected[item.product.id] ?? 0) + item.quantity;
       }
     }
 
@@ -1808,8 +1914,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
   /// 当前桌台人数（优先 tmp.personnum，回退开台人数）
   int _currentPersonNum() {
-    final Map<String, dynamic>? tmp =
-        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final Map<String, dynamic>? tmp = widget.tableJson?['tmp'] as Map<String, dynamic>?;
     final int tmpPerson = _mustToInt(tmp?['personnum']);
     return tmpPerson > 0 ? tmpPerson : _persons;
   }
@@ -1823,9 +1928,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     for (final Map<String, dynamic> group in optionalGroups) {
       final dynamic rawList = group['mustproductlist'];
       if (rawList is! List || rawList.isEmpty) continue;
-      final double required = _mustToInt(group['musttype']) == 0
-          ? (personNum < 1 ? 1 : personNum).toDouble()
-          : 1.0;
+      final double required =
+          _mustToInt(group['musttype']) == 0 ? (personNum < 1 ? 1 : personNum).toDouble() : 1.0;
       double totalSelections = 0;
       for (final dynamic raw in rawList) {
         if (raw is! Map<String, dynamic>) continue;
@@ -1962,8 +2066,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                   iconSize: 22,
                   color: isDark ? Colors.white : const Color(0xFF4E5969),
                   icon: const Icon(Icons.menu),
-                  onPressed: () => NavigatorUtils.push(
-                      context, SettingRouter.personalCenterPage),
+                  onPressed: () => NavigatorUtils.push(context, SettingRouter.personalCenterPage),
                 ),
               ),
               // 中间: 标题（对齐 smdcapp titleTextView “快餐点餐”）
@@ -2086,8 +2189,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       return;
     }
     // 正餐模式桌台信息校验（对齐 smdcapp：提示后仍继续弹窗）
-    if (StoreModeUtils.getCurrentStoreModel() ==
-            StoreModeUtils.storeModelNormal &&
+    if (StoreModeUtils.getCurrentStoreModel() == StoreModeUtils.storeModelNormal &&
         widget.tableJson == null) {
       Toast.show('桌台信息为空，请刷新数据后再试');
     }
@@ -2116,14 +2218,28 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       return;
     }
 
-    // 真实券数量（对齐 smdcapp verifyBean.realcount）
-    final double realcount =
-        double.tryParse(bean['realcount']?.toString() ?? '') ??
-            (double.tryParse(bean['count']?.toString() ?? '') ?? 1);
+    // 真实券数量（对齐 smdcapp verifyBean.realcount：弹窗核销数量步进器结果）
+    final double realcount = result.realcount > 0
+        ? result.realcount
+        : (double.tryParse(bean['realcount']?.toString() ?? '') ??
+            (double.tryParse(bean['count']?.toString() ?? '') ?? 1));
+    // 核销凭证只取前 realcount 张（对齐 smdcapp certificates.take(realcount) + 逗号拼接；
+    // 原实现 List.toString 会带上 [ ] 与空格，服务端无法识别）
+    final List<String> certs = <String>[];
+    final dynamic rawCerts = bean['certificates'];
+    if (rawCerts is List) {
+      for (final dynamic c in rawCerts) {
+        final String v = c?.toString() ?? '';
+        if (v.isNotEmpty) certs.add(v);
+      }
+    }
+    final int certCount = realcount >= 1 ? realcount.floor() : 1;
+    final String certificatesText = certs.isNotEmpty
+        ? certs.take(certCount).join(',')
+        : (bean['certificates']?.toString() ?? '');
     final String querytoken = _genDouyinOnlyId();
 
-    final Map<String, dynamic>? tmp =
-        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final Map<String, dynamic>? tmp = widget.tableJson?['tmp'] as Map<String, dynamic>?;
     final String saleid = tmp?['saleid']?.toString() ?? widget.saleid;
     final String billno = tmp?['localbillno']?.toString() ?? '';
 
@@ -2146,7 +2262,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         <String, dynamic>{
           'verify_token': bean['verify_token']?.toString() ?? '',
           'order_id': bean['order_id']?.toString() ?? '',
-          'certificates': bean['certificates']?.toString() ?? '',
+          'certificates': certificatesText,
           'saleid': saleid,
           'billno': billno,
           'cashid': UserHelper.getUserid(),
@@ -2154,10 +2270,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           'marketcode': bean['code']?.toString() ?? '',
           'marketname': bean['name']?.toString() ?? '',
           'dytype': bean['dytype']?.toString() ?? '1',
-          'productprice': (double.tryParse(
-                      bean['dealprice']?.toString() ?? '') ??
-                  0)
-              .toString(),
+          'productprice': (double.tryParse(bean['dealprice']?.toString() ?? '') ?? 0).toString(),
           'businesstype': businesstype,
         },
         showError: false,
@@ -2174,8 +2287,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       // 核销成功：选中商品加购物车（对齐 smdcapp onVerifyDishesEvent 加购分支）
       setState(() {
         for (final Map<String, dynamic> d in result.selectedDetails) {
-          final double qty =
-              (double.tryParse(d['qty']?.toString() ?? '') ?? 1) * realcount;
+          final double qty = (double.tryParse(d['qty']?.toString() ?? '') ?? 1) * realcount;
           final bool isComb = d['combflag']?.toString() == '1';
           final List<ComboSelectedItem> combItems = <ComboSelectedItem>[];
           if (isComb) {
@@ -2190,25 +2302,54 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                   productname: g['productname']?.toString() ?? '',
                   qty: double.tryParse(g['qty']?.toString() ?? '') ?? 1,
                   groupid: g['groupid']?.toString() ?? '',
+                  specid: g['specid']?.toString() ?? '',
                   specname: g['specname']?.toString() ?? '',
                   sellprice: double.tryParse(g['price']?.toString() ?? '') ?? 0,
                   unit: g['unit']?.toString() ?? '',
+                  typeid: g['typeid']?.toString() ?? '',
+                  typename: g['typename']?.toString() ?? '',
+                  productcode: g['productcode']?.toString() ?? '',
+                  curflag: _mustToInt(g['curflag']),
                 ));
               }
             }
           }
+          final String specName = d['specname']?.toString() ?? '';
+          final String cookText = d['cookText']?.toString() ?? '';
+          final List<SelectedCook> selectedCooks = parseSelectedCooks(d['cooklist']);
           final CartItem item = CartItem(
             product: Product(
               id: d['productid']?.toString() ?? '',
               name: d['productname']?.toString() ?? '',
               price: double.tryParse(d['price']?.toString() ?? '') ?? 0,
               dscflag: 1,
+              barcode: d['productcode']?.toString() ?? '',
+              code: d['productno']?.toString() ?? '',
+              inprice: _mustToDouble(d['costprice']),
+              servicefeeflag: _mustToInt(d['servicefeeflag']),
+              sellclearflag: _mustToInt(d['sellclearflag']),
+              stockqty: _mustToDouble(d['stockqty']),
+              curflag: _mustToInt(d['curflag']),
+              specflag: _mustToInt(d['specflag']),
+              cookflag: _mustToInt(d['cookflag']),
+              moreeatflag: _mustToInt(d['moreeatflag']),
+              minsaleflag: _mustToInt(d['minsaleflag']),
             ),
             quantity: qty.toInt() < 1 ? 1 : qty.toInt(),
+            specText: <String>[specName, cookText].where((String s) => s.isNotEmpty).join('、'),
+            extraPrice: _mustToDouble(d['cookWholeExtra']),
             combItems: combItems,
           )
             ..douyinflag = 1
-            ..querytoken = querytoken;
+            ..querytoken = querytoken
+            ..typeid = d['typeid']?.toString() ?? ''
+            ..typename = d['typename']?.toString() ?? ''
+            ..unit = d['unit']?.toString() ?? ''
+            ..specName = specName
+            ..specid = d['specid']?.toString() ?? ''
+            ..cookText = cookText
+            ..cooks = selectedCooks
+            ..unitCookExtra = _mustToDouble(d['cookUnitExtra']);
           _cartItems.add(item);
         }
         _rebuildCountMap();
@@ -2230,8 +2371,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     String two(int n) => n.toString().padLeft(2, '0');
     final String ts = '${now.year}${two(now.month)}${two(now.day)}'
         '${two(now.hour)}${two(now.minute)}${two(now.second)}';
-    const String base =
-        'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const String base = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     final math.Random rnd = math.Random();
     final StringBuffer sb = StringBuffer();
     for (int i = 0; i < 6; i++) {
@@ -2304,63 +2444,70 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
   /// 搜索框组件（Row 布局，扫码图标固定在最右侧不被挤动）
   Widget _buildSearchField(bool isDark) {
-    return Container(
-      height: 36,
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF5F5F5),
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Row(
-        children: <Widget>[
-          const SizedBox(width: 10),
-          Icon(Icons.search, size: 18, color: isDark ? const Color(0xFF999999) : const Color(0xFF9CA3AF)),
-          const SizedBox(width: 6),
-          Flexible(
-            child: TextField(
-              controller: _searchController,
-              onChanged: _onSearchChanged,
-              style: TextStyle(
-                fontSize: 13,
-                color: isDark ? Colors.white : const Color(0xFF1D2129),
-              ),
-              textInputAction: TextInputAction.search,
-              decoration: InputDecoration(
-                hintText: '请输入菜品名称或检索码',
-                hintStyle: TextStyle(
+    // TextFieldTapRegion：整个搜索条视为输入区域内，点内部图标不触发收键盘
+    return TextFieldTapRegion(
+      child: Container(
+        height: 36,
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF5F5F5),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Row(
+          children: <Widget>[
+            const SizedBox(width: 10),
+            Icon(Icons.search,
+                size: 18, color: isDark ? const Color(0xFF999999) : const Color(0xFF9CA3AF)),
+            const SizedBox(width: 6),
+            Flexible(
+              child: TextField(
+                controller: _searchController,
+                onChanged: _onSearchChanged,
+                // 点搜索框以外的任意区域（空白、分类、菜品、底栏）收起键盘
+                onTapOutside: (_) => NavigatorUtils.unfocus(),
+                style: TextStyle(
                   fontSize: 13,
-                  color: isDark ? const Color(0xFF666666) : const Color(0xFF9CA3AF),
+                  color: isDark ? Colors.white : const Color(0xFF1D2129),
                 ),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  hintText: '请输入菜品名称或检索码',
+                  hintStyle: TextStyle(
+                    fontSize: 13,
+                    color: isDark ? const Color(0xFF666666) : const Color(0xFF9CA3AF),
+                  ),
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                ),
               ),
             ),
-          ),
-          // 清除图标（仅有文本时显示，不会挤动扫描图标）
-          if (_searchKeyword.isNotEmpty)
+            // 清除图标（仅有文本时显示，不会挤动扫描图标）
+            if (_searchKeyword.isNotEmpty)
+              GestureDetector(
+                onTap: () {
+                  _searchController.clear();
+                  _onSearchChanged('');
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Icon(Icons.cancel,
+                      size: 16, color: isDark ? const Color(0xFF666666) : const Color(0xFFBDBDBD)),
+                ),
+              ),
+            // 扫描图标（始终固定在最右侧）
             GestureDetector(
-              onTap: () {
-                _searchController.clear();
-                _onSearchChanged('');
-              },
+              onTap: _scanBarcode,
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                child: Icon(Icons.cancel, size: 16, color: isDark ? const Color(0xFF666666) : const Color(0xFFBDBDBD)),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: SvgPicture.asset(
+                  'assets/svg/scan.svg',
+                  width: 20,
+                  height: 20,
+                ),
               ),
             ),
-          // 扫描图标（始终固定在最右侧）
-          GestureDetector(
-            onTap: _scanBarcode,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: SvgPicture.asset(
-                'assets/svg/scan.svg',
-                width: 20,
-                height: 20,
-              ),
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -2370,14 +2517,12 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     // 附加费（对齐 smdcapp 修改模式：OpenTableAmtFlag=1 时只读展示 tmp.additionid 对应名称）
     String additionName = '';
     if (ParamsSpUtils.getOpenTableAmtFlag() == '1') {
-      final String additionId =
-          widget.tableJson?['tmp']?['additionid']?.toString() ?? '';
+      final String additionId = widget.tableJson?['tmp']?['additionid']?.toString() ?? '';
       if (additionId.isEmpty) {
         additionName = '无';
       } else {
         try {
-          final TableTypeEntity? type =
-              await TableTypeDao.instance.getByCreateid(additionId);
+          final TableTypeEntity? type = await TableTypeDao.instance.getByCreateid(additionId);
           additionName = type?.name ?? '无';
         } catch (_) {
           additionName = '无';
@@ -2385,10 +2530,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       }
       if (!mounted) return;
     }
-    final TextEditingController personCtrl =
-        TextEditingController(text: '$_persons');
-    final TextEditingController remarkCtrl =
-        TextEditingController(text: _remark);
+    final TextEditingController personCtrl = TextEditingController(text: '$_persons');
+    final TextEditingController remarkCtrl = TextEditingController(text: _remark);
     final String serverId = _serverId;
     String serverName = _serverName.isNotEmpty ? _serverName : '系统管理员';
     String selectedServerId = serverId;
@@ -2516,7 +2659,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                     const SizedBox(height: 16),
                     Row(
                       children: <Widget>[
-                        const Text('附加费：', style: TextStyle(fontSize: 15, color: Color(0xFF4E5969))),
+                        const Text('附加费：',
+                            style: TextStyle(fontSize: 15, color: Color(0xFF4E5969))),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Container(
@@ -2552,7 +2696,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                             decoration: InputDecoration(
                               hintText: '请输入备注',
                               hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFC9CDD4)),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                              contentPadding:
+                                  const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(6),
                                 borderSide: const BorderSide(color: Color(0xFFE5E6EB)),
@@ -2588,7 +2733,10 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                             child: const Center(
                               child: Text(
                                 '取消',
-                                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF4E5969)),
+                                style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF4E5969)),
                               ),
                             ),
                           ),
@@ -2601,8 +2749,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                           onTap: submitting
                               ? null
                               : () async {
-                                  final int personNum =
-                                      int.tryParse(personCtrl.text.trim()) ?? 0;
+                                  final int personNum = int.tryParse(personCtrl.text.trim()) ?? 0;
                                   if (personNum <= 0) {
                                     Toast.show('请输入正确的人数！');
                                     return;
@@ -2916,28 +3063,110 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   /// 而服务端 C# 模型期望 string。smdcapp 重新序列化时只保留其 Java 模型定义的字段，
   /// 因此我们必须同样过滤，否则多余字段导致 .NET 空引用。
   static const Set<String> _kTmpFields = <String>{
-    'vipname', 'saleid', 'vipid', 'preprintflag', 'detailList', 'mustfreeflag',
-    'cashid', 'uniflowno', 'cdflag', 'servicetimerange', 'servicediscount',
-    'tabletypeid', 'additionid', 'servicebegintime', 'serviceendtime', 'operid',
-    'opername', 'opermachno', 'tablestatus', 'containweight', 'amt', 'retailamt',
-    'roundamt', 'serviceamt', 'lowamt', 'remark', 'personnum', 'spid', 'serverid',
-    'vipno', 'localbillno', 'sid', 'vipmobile', 'billtype', 'lastbilltype',
-    'dataiflag', 'billdate', 'servername', 'tableid', 'id', 'tablecode', 'billno',
-    'unitableid', 'unitableno', 'unitablename', 'machno', 'tablename', 'hangflag',
-    'lockflag', 'withdrawmemo', 'dscamt', 'addamt', 'payment', 'printkdflag',
-    'printcpdflag', 'sendprintflag', 'confirmqty', 'createtime', 'updatetime',
+    'vipname',
+    'saleid',
+    'vipid',
+    'preprintflag',
+    'detailList',
+    'mustfreeflag',
+    'cashid',
+    'uniflowno',
+    'cdflag',
+    'servicetimerange',
+    'servicediscount',
+    'tabletypeid',
+    'additionid',
+    'servicebegintime',
+    'serviceendtime',
+    'operid',
+    'opername',
+    'opermachno',
+    'tablestatus',
+    'containweight',
+    'amt',
+    'retailamt',
+    'roundamt',
+    'serviceamt',
+    'lowamt',
+    'remark',
+    'personnum',
+    'spid',
+    'serverid',
+    'vipno',
+    'localbillno',
+    'sid',
+    'vipmobile',
+    'billtype',
+    'lastbilltype',
+    'dataiflag',
+    'billdate',
+    'servername',
+    'tableid',
+    'id',
+    'tablecode',
+    'billno',
+    'unitableid',
+    'unitableno',
+    'unitablename',
+    'machno',
+    'tablename',
+    'hangflag',
+    'lockflag',
+    'withdrawmemo',
+    'dscamt',
+    'addamt',
+    'payment',
+    'printkdflag',
+    'printcpdflag',
+    'sendprintflag',
+    'confirmqty',
+    'createtime',
+    'updatetime',
     'appVersionName',
   };
 
   /// smdcapp TableInfoBean 定义的 masterTmpDto 外层字段白名单。
   static const Set<String> _kTableFields = <String>{
-    'tabletypename', 'createtime', 'code', 'areaname', 'tabletypeid', 'tablestatus',
-    'operid', 'spid', 'sid', 'createname', 'stopflag', 'areaid', 'person', 'flag',
-    'dieshesType', 'createid', 'opername', 'isalltype', 'tmp', 'name', 'billtype',
-    'tableid', 'isort', 'id', 'updatetime', 'unicount', 'status', 'lowtype',
-    'serviceamt', 'dataitableid', 'trueflag', 'reservationflag', 'lowamt',
-    'minsalesamtflag', 'servicetype', 'virtulflag', 'excesstime', 'exceedtype',
-    'virtualflag', 'newtableid',
+    'tabletypename',
+    'createtime',
+    'code',
+    'areaname',
+    'tabletypeid',
+    'tablestatus',
+    'operid',
+    'spid',
+    'sid',
+    'createname',
+    'stopflag',
+    'areaid',
+    'person',
+    'flag',
+    'dieshesType',
+    'createid',
+    'opername',
+    'isalltype',
+    'tmp',
+    'name',
+    'billtype',
+    'tableid',
+    'isort',
+    'id',
+    'updatetime',
+    'unicount',
+    'status',
+    'lowtype',
+    'serviceamt',
+    'dataitableid',
+    'trueflag',
+    'reservationflag',
+    'lowamt',
+    'minsalesamtflag',
+    'servicetype',
+    'virtulflag',
+    'excesstime',
+    'exceedtype',
+    'virtualflag',
+    'newtableid',
   };
 
   /// 按 smdcapp 模型字段白名单过滤 masterTmpDto，丢弃桌台列表原始 JSON 中的多余字段。
@@ -2986,8 +3215,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
               'name': widget.tableName,
               'code': widget.tableCode,
             };
-        final Map<String, dynamic> tableBean =
-            _deepMerge(_defaultMasterTmpDto(), actual);
+        final Map<String, dynamic> tableBean = _deepMerge(_defaultMasterTmpDto(), actual);
 
         // 更新 tmp 中的字段（对齐 smdcapp objectClone.tmp.serverid = ...)
         final Map<String, dynamic> tmp = tableBean['tmp'] is Map
@@ -3057,10 +3285,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
             // 底部预留购物车栏高度，否则最后几个分类会被购物车栏遮住、无法滚动到可见区域
             padding: EdgeInsets.only(
               top: 8,
-              bottom: 8 +
-                  _kCartBarHeight +
-                  MediaQuery.of(context).padding.bottom +
-                  12,
+              bottom: 8 + _kCartBarHeight + MediaQuery.of(context).padding.bottom + 12,
             ),
             itemCount: _categories.length,
             itemBuilder: (BuildContext context, int index) {
@@ -3151,11 +3376,13 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Icon(Icons.error_outline, size: 48, color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4)),
+            Icon(Icons.error_outline,
+                size: 48, color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4)),
             const SizedBox(height: 12),
             Text(
               _errorMsg!,
-              style: TextStyle(fontSize: 13, color: isDark ? const Color(0xFF999999) : const Color(0xFF86909C)),
+              style: TextStyle(
+                  fontSize: 13, color: isDark ? const Color(0xFF999999) : const Color(0xFF86909C)),
             ),
             const SizedBox(height: 16),
             GestureDetector(
@@ -3178,7 +3405,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       return Center(
         child: Text(
           '暂无菜品数据',
-          style: TextStyle(fontSize: 14, color: isDark ? const Color(0xFF999999) : const Color(0xFF86909C)),
+          style: TextStyle(
+              fontSize: 14, color: isDark ? const Color(0xFF999999) : const Color(0xFF86909C)),
         ),
       );
     }
@@ -3190,9 +3418,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       final DishCategory cat = _categories[i];
       final List<DishProduct> allProducts = _groupedProducts[cat.typeid] ?? <DishProduct>[];
       // 搜索过滤
-      final List<DishProduct> products = _searchKeyword.isEmpty
-          ? allProducts
-          : allProducts.where(_matchSearch).toList();
+      final List<DishProduct> products =
+          _searchKeyword.isEmpty ? allProducts : allProducts.where(_matchSearch).toList();
 
       // 搜索时隐藏无结果分类
       if (products.isEmpty && _searchKeyword.isNotEmpty) continue;
@@ -3261,11 +3488,13 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Icon(Icons.search_off, size: 48, color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4)),
+            Icon(Icons.search_off,
+                size: 48, color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4)),
             const SizedBox(height: 12),
             Text(
               '未找到“$_searchKeyword”相关菜品',
-              style: TextStyle(fontSize: 13, color: isDark ? const Color(0xFF999999) : const Color(0xFF86909C)),
+              style: TextStyle(
+                  fontSize: 13, color: isDark ? const Color(0xFF999999) : const Color(0xFF86909C)),
             ),
           ],
         ),
@@ -3526,6 +3755,7 @@ class _DishProductCard extends StatelessWidget {
   final DishProduct product;
   final int count;
   final bool isDark;
+
   /// 是否显示数字角标（对齐 smdcapp ENABLE_PRODUCT_NUM）
   final bool showNum;
 
@@ -3542,16 +3772,14 @@ class _DishProductCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // 沽清剩余基数：优先沽清接口 leftqty，其次商品自带 sellclearflag/stockqty
-    final double? guQingBase = guQingLeft ??
-        (product.sellclearflag == 1 ? product.stockqty : null);
+    final double? guQingBase = guQingLeft ?? (product.sellclearflag == 1 ? product.stockqty : null);
     // 动态剩余 = 基数 - 购物车已点（对齐 smdcapp CartGoodsModel.syncDisplayStock）
     final double leftQty = guQingBase == null ? 0 : math.max(0, guQingBase - count);
     // 对齐 smdcapp DishesHomeAct2 情况 A：多规格商品即使商品级沽清也不在卡片上拦截，
     // 仍显示"选规格"入口，售罄判定下放到规格弹窗内按规格粒度校验，
     // 否则一个规格无库存导致商品级库存耗尽时，其它有库存规格也无法再下单
-    final bool soldOut = product.specflag == 1
-        ? false
-        : (guQingBase == null ? product.isSoldOut : leftQty <= 0);
+    final bool soldOut =
+        product.specflag == 1 ? false : (guQingBase == null ? product.isSoldOut : leftQty <= 0);
     // 商品级沽清已耗尽（多规格商品隐藏剩余角标，对齐 smdcapp rlStockNum.toGone）
     final bool stockExhausted = guQingBase != null && leftQty <= 0;
 
@@ -3663,8 +3891,7 @@ class _DishProductCard extends StatelessWidget {
                             '(限点${_fmtQty(product.maxsellqty)}${product.unit})',
                             style: const TextStyle(fontSize: 11, color: _kBrandRed),
                           ),
-                        if (product.maxsellqty > 0 && product.mprice1 > 0)
-                          const SizedBox(width: 6),
+                        if (product.maxsellqty > 0 && product.mprice1 > 0) const SizedBox(width: 6),
                         if (product.mprice1 > 0)
                           Text(
                             '(会员:¥${_fmtPrice(product.mprice1)})',
@@ -3754,7 +3981,8 @@ class _DishProductCard extends StatelessWidget {
                 child: Text(
                   // 对齐 smdcapp：curflag==1 显示“选择”，weighflag==1 显示“选重量”
                   product.isTimePrice ? '选择' : '选重量',
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
+                  style: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
                 ),
               ),
             )
@@ -3768,9 +3996,8 @@ class _DishProductCard extends StatelessWidget {
   /// 全屏查看商品图片并支持双指缩放（R64）
   void _previewProductImage(BuildContext context) {
     if (product.imageurl.isEmpty) return;
-    final String url = product.imageurl.startsWith('http')
-        ? product.imageurl
-        : '$_kImgAddress${product.imageurl}';
+    final String url =
+        product.imageurl.startsWith('http') ? product.imageurl : '$_kImgAddress${product.imageurl}';
     showDialog<void>(
       context: context,
       barrierColor: Colors.black,
@@ -3847,7 +4074,8 @@ class _DishProductCard extends StatelessWidget {
             ),
             child: Text(
               '${_fmtQty(product.startQty)}${product.unit}起售',
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
+              style:
+                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
             ),
           ),
         );
@@ -3921,6 +4149,12 @@ String _fmtPrice(double v) {
 }
 
 /// 格式化数量显示（对齐 smdcapp PriceUtil.formatQty）
+void _setCartItemQty(CartItem item, double qty) {
+  final double normalized = double.parse(qty.toStringAsFixed(3));
+  item.quantity = normalized.floor();
+  item.extraQty = normalized - item.quantity;
+}
+
 String _fmtQty(double v) {
   if (v == v.roundToDouble()) return v.toInt().toString();
   return v.toStringAsFixed(2).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');

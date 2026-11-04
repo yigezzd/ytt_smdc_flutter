@@ -18,6 +18,7 @@ import 'package:flutter_deer/pages/home/table/widgets/open_table_dialog.dart';
 import 'package:flutter_deer/pages/home/table/widgets/status_filter_bar.dart';
 import 'package:flutter_deer/pages/home/table/widgets/table_card.dart';
 import 'package:flutter_deer/pages/home/table/widgets/table_operation_dialog.dart';
+import 'package:flutter_deer/pages/home/table/widgets/union_tables_dialog.dart';
 import 'package:flutter_deer/pages/login/login_router.dart';
 import 'package:flutter_deer/res/colors.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
@@ -532,12 +533,15 @@ class _TablePageState extends State<TablePage>
     _checkingTableTap = true;
     // R2：先取该桌台最新状态/锁台标志，避免使用列表缓存导致后进入的设备未提示
     TableInfo target = table;
+    TableLockState lockState;
     try {
-      final TableInfo? latest = await TableConcurrencyGuard.fetchLatest(
+      // 云服务取最新桌台锁标记；PC 主设备模式额外实时询问 PC 是否正在操作
+      lockState = await TableConcurrencyGuard.fetchLockState(
         table.tableid,
         areaid: table.areaid,
       );
       if (!mounted) return;
+      final TableInfo? latest = lockState.table;
       if (latest != null) {
         target = latest;
         // 同步列表里的桌台数据，保证卡片状态与本次操作一致
@@ -548,14 +552,23 @@ class _TablePageState extends State<TablePage>
           _tables[index] = latest;
         }
       }
+    } catch (_) {
+      if (mounted) {
+        await ConfirmDialog.show(
+          context,
+          content: '获取桌台状态失败，请重试',
+          singleButton: true,
+        );
+      }
+      return;
     } finally {
       _checkingTableTap = false;
     }
     if (!mounted) return;
 
-    if (target.isLocked) {
+    if (lockState.locked) {
       // 锁台桌台 → 弹出解锁确认弹窗（对齐 smdcapp TipDialog 解锁流程）
-      await _showUnlockConfirmDialog(target);
+      await _showUnlockConfirmDialog(target, lockState);
       return;
     }
 
@@ -660,10 +673,13 @@ class _TablePageState extends State<TablePage>
   }
 
   /// 锁台桌台点击确认弹窗（对齐 smdcapp TipDialog：解锁会强制退出其它设备）
-  Future<void> _showUnlockConfirmDialog(TableInfo table) async {
+  Future<void> _showUnlockConfirmDialog(
+    TableInfo table,
+    TableLockState lockState,
+  ) async {
     final bool confirmed = await ConfirmDialog.show(
       context,
-      content: '当前桌台正在其它设备上操作，解锁会强制退出其它桌台，可能会造成未保存数据丢失，是否继续解锁？',
+      content: TableConcurrencyGuard.unlockConfirmMessage(lockState),
     );
     if (confirmed && mounted) {
       _unlockTable(table);
@@ -673,39 +689,14 @@ class _TablePageState extends State<TablePage>
   /// 解锁桌台（对齐 smdcapp TableDao.lockFlagTable(table, 0, 0)）
   Future<void> _unlockTable(TableInfo table) async {
     try {
-      final bool useMaster = ConnectionManager.pcAlive;
-      if (useMaster) {
-        // 主设备模式：对齐 smdcapp DishesApi /api/table/TableLock，flag=0 解锁
-        final Map<String, dynamic> tableBean = TableDataUtils.buildFullTableBean(
-          rawJson: table.rawJson,
-          fallback: <String, dynamic>{
-            'tableid': table.tableid,
-            'name': table.name,
-            'code': table.code,
-          },
-        );
-        tableBean['newtableid'] = table.tableid;
-        if (tableBean['tmp'] is Map) {
-          (tableBean['tmp'] as Map<String, dynamic>)['lockflag'] = 0;
-        }
-        final Map<String, dynamic> pcMaster = <String, dynamic>{
-          'tableMasterTmpDto': tableBean,
-          'flag': 0,
-          'autoflag': 0,
-        };
-        await requestForm(
-          HttpApi.pcTableLock,
-          <String, dynamic>{'tablemaster': jsonEncode(pcMaster)},
-          masterDevice: true,
-        );
-      } else {
-        // 云服务模式：对齐 smdcapp /YttSvr/app/sale/lockFlagTable，lockflag=0 解锁
-        await requestForm(HttpApi.lockFlagTable, <String, dynamic>{
-          'tableid': table.tableid,
-          'lockflag': '0',
-          'autoflag': '0',
-        });
-      }
+      final bool ok = await TableConcurrencyGuard.postTableLock(
+        tableId: table.tableid,
+        lock: false,
+        tableJson: table.rawJson,
+        tableName: table.name,
+        autoflag: 0,
+      );
+      if (!ok) throw StateError('解锁台失败');
       if (!mounted) {
         return;
       }
@@ -1006,39 +997,7 @@ class _TablePageState extends State<TablePage>
       final List<TableInfo> merged =
           list.map(TableInfo.fromJson).toList();
       if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (BuildContext dialogCtx) => AlertDialog(
-          title: const Text('并台桌台'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: merged.map((TableInfo t) {
-              final String amount = (t.tmp?.amt ?? 0).toStringAsFixed(2);
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Row(
-                  children: <Widget>[
-                    Expanded(
-                      child: Text(
-                        '${t.name}（${t.status.label}）',
-                        style: const TextStyle(fontSize: 14),
-                      ),
-                    ),
-                    Text('¥$amount',
-                        style: const TextStyle(fontSize: 14, color: Color(0xFFE13426))),
-                  ],
-                ),
-              );
-            }).toList(),
-          ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogCtx).pop(),
-              child: const Text('关闭'),
-            ),
-          ],
-        ),
-      );
+      await UnionTablesDialog.show(context, merged);
     } catch (_) {
       Toast.show('获取并台桌台失败');
     }

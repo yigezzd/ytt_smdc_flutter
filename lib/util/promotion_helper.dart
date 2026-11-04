@@ -117,6 +117,7 @@ class PromotionGift {
     required this.name,
     this.unit = '',
     this.typeid = '',
+    this.typename = '',
     this.sellprice = 0,
   });
 
@@ -126,6 +127,7 @@ class PromotionGift {
       name: json['name']?.toString() ?? json['productname']?.toString() ?? '',
       unit: json['unit']?.toString() ?? '',
       typeid: json['typeid']?.toString() ?? '',
+      typename: json['typename']?.toString() ?? '',
       sellprice: _toDouble(json['sellprice']),
     );
   }
@@ -134,6 +136,7 @@ class PromotionGift {
   final String name;
   final String unit;
   final String typeid;
+  final String typename;
   final double sellprice;
 
   /// 弹窗内已选数量（临时变量，对齐 smdcapp ProductBean.selectNum）

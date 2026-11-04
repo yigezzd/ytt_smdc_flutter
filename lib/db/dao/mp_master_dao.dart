@@ -28,6 +28,32 @@ class MPMasterDao extends BaseDao<MPMasterEntity> {
     return row == null ? null : fromMap(row);
   }
 
+  /// 按多个 billid 批量查询（不校验活动有效期，用于订单侧规则复检）
+  Future<List<MPMasterEntity>> byBillids({
+    required List<String> billids,
+    required int spid,
+  }) async {
+    if (billids.isEmpty) return <MPMasterEntity>[];
+    if (kIsWeb) {
+      // Web 无 sqflite，改读 tabledown 内存缓存
+      final Set<String> ids = billids.toSet();
+      final List<Map<String, dynamic>> rows =
+          await TableDownloadManager.readTableData(table);
+      return rows
+          .where((Map<String, dynamic> m) =>
+              _asInt(m['spid']) == spid &&
+              ids.contains(m['billid']?.toString()))
+          .map(fromMap)
+          .toList();
+    }
+    final placeholders = billids.map((_) => '?').join(',');
+    final rows = await db.queryList(
+      'SELECT * FROM $table WHERE spid = ? AND billid IN ($placeholders)',
+      <Object?>[spid, ...billids],
+    );
+    return rows.map(fromMap).toList();
+  }
+
   /// 重置所有记录的 status 为 1
   Future<void> updateAll() async {
     await db.queryList("UPDATE $table SET status = 1");

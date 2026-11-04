@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
-final RegExp _bagCookTokenPattern =
-    RegExp(r'^打包(?:\([￥¥][^)]*\))?$');
+final RegExp _bagCookTokenPattern = RegExp(r'^打包(?:\([￥¥][^)]*\))?$');
 
 /// 移除做法文本中的打包标识，避免取消打包后继续展示或上传旧标识。
 String stripBagCookText(String text) {
@@ -62,9 +61,8 @@ class SelectedCook {
   String get desc {
     final StringBuffer sb = StringBuffer(name);
     if (ptype != 0 && price > 0) {
-      final String priceStr = price == price.roundToDouble()
-          ? price.toInt().toString()
-          : price.toStringAsFixed(2);
+      final String priceStr =
+          price == price.roundToDouble() ? price.toInt().toString() : price.toStringAsFixed(2);
       sb.write('(¥$priceStr)');
     }
     if (qty > 1) {
@@ -122,8 +120,18 @@ class Product {
     this.presentflag = 1,
     this.chooseqtyflag = 0,
     this.minsaleflag = 1,
+    this.moreeatflag = 0,
     this.printflag = 0,
     this.labelflag = 0,
+    this.barcode = '',
+    this.code = '',
+    this.inprice = 0,
+    this.servicefeeflag = 1,
+    this.sellclearflag = 0,
+    this.stockqty = 0,
+    this.curflag = 0,
+    this.specflag = 0,
+    this.cookflag = 0,
   });
 
   final String id;
@@ -167,11 +175,41 @@ class Product {
   /// 是否计入低消 1=计入 0=不计入（对齐 smdcapp minsaleflag）
   final int minsaleflag;
 
+  /// 一菜多吃标记（对齐 smdcapp moreeatflag）
+  final int moreeatflag;
+
   /// 厨打标记（对齐 smdcapp printflag）：1=需要厨打 0=不厨打
   final int printflag;
 
   /// 打印标签/杯贴标记（对齐 smdcapp labelflag）：1=打杯贴 0=不打
   final int labelflag;
+
+  /// 商品编号（对齐 smdcapp DetailListBean.productcode = 商品档案 barcode）
+  final String barcode;
+
+  /// 商品条码（对齐 smdcapp DetailListBean.productno = 商品档案 code）
+  final String code;
+
+  /// 成本价（对齐 smdcapp DetailListBean.costprice = 商品档案 inprice）
+  final double inprice;
+
+  /// 服务费标记（对齐 smdcapp DetailListBean.servicefeeflag）
+  final int servicefeeflag;
+
+  /// 沽清标记（对齐 smdcapp DetailListBean.sellclearflag）
+  final int sellclearflag;
+
+  /// 沽清库存（对齐 smdcapp DetailListBean.stockqty）
+  final double stockqty;
+
+  /// 时价菜标记（对齐 smdcapp DetailListBean.curflag）
+  final int curflag;
+
+  /// 多规格标记（对齐 smdcapp DetailListBean.specflag）
+  final int specflag;
+
+  /// 多做法标记（对齐 smdcapp DetailListBean.cookflag）
+  final int cookflag;
 
   bool get hasSpec => specGroups.isNotEmpty;
 }
@@ -197,14 +235,20 @@ class ComboSelectedItem {
     this.combaddamt = 0,
     this.groupid = '',
     this.combsetproductid = '',
+    this.specid = '',
     this.specname = '',
     this.sellprice = 0,
     this.unit = '',
+    this.typeid = '',
+    this.typename = '',
+    this.productcode = '',
+    this.curflag = 0,
     this.cookText = '',
     this.cookExtra = 0,
     this.printflag = 0,
     this.labelflag = 0,
   });
+
   /// 子商品ID（对齐 combproductid 之外的明细商品 productid）
   final String productid;
 
@@ -223,6 +267,9 @@ class ComboSelectedItem {
   /// 套餐明细配置ID（对齐 combsetproductid）
   final String combsetproductid;
 
+  /// 子商品规格ID（对齐 smdcapp getSetMealInfo d.setSpecid）
+  final String specid;
+
   /// 子商品规格名（对齐 smdcapp d.setSpec(specname)）
   final String specname;
 
@@ -231,6 +278,18 @@ class ComboSelectedItem {
 
   /// 单位
   final String unit;
+
+  /// 商品分类ID（对齐 smdcapp getSetMealInfo d.setTypeid）
+  final String typeid;
+
+  /// 商品分类名称（对齐 smdcapp getSetMealInfo d.setTypename）
+  final String typename;
+
+  /// 商品编号（对齐 smdcapp getSetMealInfo d.setProductcode）
+  final String productcode;
+
+  /// 时价菜标记（对齐 smdcapp getSetMealInfo d.setCurflag）
+  final int curflag;
 
   /// 明细做法描述（对齐 smdcapp 明细 cooktext，如 "微辣、加葱"）
   String cookText;
@@ -282,6 +341,9 @@ class CartItem {
 
   /// 规格名（仅规格，不含做法；对齐 smdcapp DetailListBean.spec，下单时上传到 spec）
   String specName = '';
+
+  /// 规格ID（对齐 smdcapp DetailListBean.specid，下单时上传，报表规格/单位关联依赖）
+  String specid = '';
 
   /// 做法描述（仅做法，不含规格；对齐 smdcapp DetailListBean.cooktext，下单时上传到 cooktext）
   String cookText = '';
@@ -354,6 +416,10 @@ class CartItem {
 
   /// 单品备注（对齐 smdcapp singleRemark）
   String remark = '';
+
+  /// 购物车展示用备注：单品备注 + 打折原因（手输或所选）
+  String get cartRemark =>
+      <String>[remark, discountRemark].where((String s) => s.isNotEmpty).join('，');
 
   /// 服务员名称（对齐 smdcapp salesname）
   String waiterName = '';
@@ -444,8 +510,18 @@ class CartItem {
         presentflag: product.presentflag,
         chooseqtyflag: product.chooseqtyflag,
         minsaleflag: product.minsaleflag,
+        moreeatflag: product.moreeatflag,
         printflag: product.printflag,
         labelflag: product.labelflag,
+        barcode: product.barcode,
+        code: product.code,
+        inprice: product.inprice,
+        servicefeeflag: product.servicefeeflag,
+        sellclearflag: product.sellclearflag,
+        stockqty: product.stockqty,
+        curflag: product.curflag,
+        specflag: product.specflag,
+        cookflag: product.cookflag,
       ),
       quantity: qty,
       specText: specText,
@@ -454,6 +530,7 @@ class CartItem {
     );
     copy.unitCookExtra = unitCookExtra;
     copy.specName = specName;
+    copy.specid = specid;
     copy.cookText = cookText;
     copy.cooks = List<SelectedCook>.from(cooks);
     copy.opertype = opertype;
@@ -525,9 +602,8 @@ class CartItem {
   String typename = '';
 
   /// 显示名称（优先自定义名称）
-  String get displayName => (customName != null && customName!.isNotEmpty)
-      ? customName!
-      : product.name;
+  String get displayName =>
+      (customName != null && customName!.isNotEmpty) ? customName! : product.name;
 
   /// 是否称重商品（对齐 smdcapp weighflag==1 且 weighNum>0）
   bool get isWeigh => weighNum > 0;
@@ -547,9 +623,7 @@ class CartItem {
   /// 单份基础价（不含规格/做法加价）：第N份促销 > 特价菜 > 常规价
   double get baseUnitPrice {
     final double regular = (product.price - unitCookExtra).clamp(0, double.infinity);
-    return isNthPromo && nthPrice > 0
-        ? nthPrice
-        : (promoPrice > 0 ? promoPrice : regular);
+    return isNthPromo && nthPrice > 0 ? nthPrice : (promoPrice > 0 ? promoPrice : regular);
   }
 
   /// 未打折前的单份实际价格（改价/会员价 > 促销基础价 + 单份做法加价）
@@ -586,8 +660,13 @@ class CartItem {
   /// 上传用的活动ID：会员价优先生效时清空促销活动
   String get uploadJcmbillid => memberUnitPrice != null ? '' : jcmbillid;
 
-  /// 上传用的折扣率：会员价优先生效时按原价上传（会员价体现在 rrprice）
-  double get uploadDiscount => memberUnitPrice != null ? 100 : discount;
+  /// 上传用的折扣率：会员价按会员价/菜品基础原价换算（对齐 smdcapp PriceEngine）
+  double get uploadDiscount {
+    if (memberUnitPrice == null) return discount;
+    final double base = product.price - unitCookExtra;
+    if (base <= 0) return 100;
+    return double.parse((memberUnitPrice! / base * 100).toStringAsFixed(2));
+  }
 
   /// 是否有可展示的原价（赠送/手工折扣/基础促销/第N份促销）
   bool get hasOriginPrice =>
@@ -601,8 +680,8 @@ class CartItem {
   ///
   /// 整份加价/打包费按行整份计入（对齐 smdcapp cookaddamt = ptype2×qty + ptype1 + bag），
   /// 不随数量翻倍；赠送商品仅计打包费（对齐 smdcapp isBag ? bagPrice : 0）
-  double get totalPrice => orderedAmt ??
-      (isGift ? bagPrice : discountedUnitPrice * priceQty + extraPrice + bagPrice);
+  double get totalPrice =>
+      orderedAmt ?? (isGift ? bagPrice : discountedUnitPrice * priceQty + extraPrice + bagPrice);
 
   double get totalOriginalPrice => (product.originalPrice ?? product.price) * quantity;
 

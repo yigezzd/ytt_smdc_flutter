@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_deer/components/confirm_dialog.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
@@ -91,8 +92,7 @@ class _LoginPageState extends State<LoginPage> {
           _employeeController.text.isNotEmpty &&
           _pwdController.text.isNotEmpty;
     } else {
-      return _phoneController.text.isNotEmpty &&
-          _phonePwdController.text.isNotEmpty;
+      return _phoneController.text.isNotEmpty && _phonePwdController.text.isNotEmpty;
     }
   }
 
@@ -171,13 +171,14 @@ class _LoginPageState extends State<LoginPage> {
       } else {
         // 单商户或无列表：直接登录（与 smdcapp 一致，单商户不传 userid）
         if (stores.length == 1) {
-          final Map<String, dynamic> store =
-              Map<String, dynamic>.from(stores[0] as Map);
+          final Map<String, dynamic> store = Map<String, dynamic>.from(stores[0] as Map);
           // 保存 sid / spid
-          SpUtil.putString(Constant.store, json.encode({
-            'id': store['sid']?.toString() ?? '0',
-            'spid': store['spid']?.toString() ?? '0',
-          }));
+          SpUtil.putString(
+              Constant.store,
+              json.encode({
+                'id': store['sid']?.toString() ?? '0',
+                'spid': store['spid']?.toString() ?? '0',
+              }));
         }
         _doLogin('');
       }
@@ -214,8 +215,7 @@ class _LoginPageState extends State<LoginPage> {
     try {
       final result = await requestForm(HttpApi.yttLogin, params);
       final raw = result['data'];
-      final Map<String, dynamic> data =
-          raw is Map ? Map<String, dynamic>.from(raw) : result;
+      final Map<String, dynamic> data = raw is Map ? Map<String, dynamic>.from(raw) : result;
 
       // 保存登录信息
       SpUtil.putString(Constant.token, data['token']?.toString() ?? '');
@@ -266,16 +266,15 @@ class _LoginPageState extends State<LoginPage> {
 
       // 保存 role 折扣权限上限（对齐 smdcapp: monthdiscountamt/prodiscount/orderdiscount/progiveamt）
       if (data['role'] is Map) {
-        final Map<String, dynamic> role =
-            Map<String, dynamic>.from(data['role'] as Map);
+        final Map<String, dynamic> role = Map<String, dynamic>.from(data['role'] as Map);
         SpUtil.putDouble(Constant.monthDiscountAmt,
             double.tryParse(role['monthdiscountamt']?.toString() ?? '') ?? 0);
-        SpUtil.putDouble(Constant.proDiscount,
-            double.tryParse(role['prodiscount']?.toString() ?? '') ?? 0);
-        SpUtil.putDouble(Constant.orderDiscount,
-            double.tryParse(role['orderdiscount']?.toString() ?? '') ?? 0);
-        SpUtil.putDouble(Constant.proGiveAmt,
-            double.tryParse(role['progiveamt']?.toString() ?? '') ?? 0);
+        SpUtil.putDouble(
+            Constant.proDiscount, double.tryParse(role['prodiscount']?.toString() ?? '') ?? 0);
+        SpUtil.putDouble(
+            Constant.orderDiscount, double.tryParse(role['orderdiscount']?.toString() ?? '') ?? 0);
+        SpUtil.putDouble(
+            Constant.proGiveAmt, double.tryParse(role['progiveamt']?.toString() ?? '') ?? 0);
       }
 
       // 保存最大单号（对齐 smdcapp: SpUtils.billNoMax）
@@ -287,24 +286,21 @@ class _LoginPageState extends State<LoginPage> {
       ConnectionManager.saveLocalhost(data['localhost']?.toString() ?? '');
 
       // 保存 RabbitMQ 推送配置（对齐 smdcapp LoginModel: rabbitaddress/mach/store）
-      SpUtil.putString(Constant.rabbitAddress,
-          data['rabbitaddress']?.toString() ?? 'ysp01.yun8609.net');
-      SpUtil.putInt(Constant.rabbitPort,
-          int.tryParse(data['rabbitport']?.toString() ?? '') ?? 5672);
+      SpUtil.putString(
+          Constant.rabbitAddress, data['rabbitaddress']?.toString() ?? 'ysp01.yun8609.net');
+      SpUtil.putInt(
+          Constant.rabbitPort, int.tryParse(data['rabbitport']?.toString() ?? '') ?? 5672);
       if (data['mach'] is Map) {
-        SpUtil.putString(Constant.machNo,
-            (data['mach'] as Map)['code']?.toString() ?? '');
+        SpUtil.putString(Constant.machNo, (data['mach'] as Map)['code']?.toString() ?? '');
       }
       if (data['store'] is Map) {
-        final Map<String, dynamic> store =
-            Map<String, dynamic>.from(data['store'] as Map);
+        final Map<String, dynamic> store = Map<String, dynamic>.from(data['store'] as Map);
         SpUtil.putString(Constant.storeCode, store['code']?.toString() ?? '');
         SpUtil.putString(Constant.businessNumber, store['account']?.toString() ?? '');
         final int savedSpid = int.tryParse(store['spid']?.toString() ?? '') ?? 0;
         // sid 取 store.id（对齐 http_helper/_currentSidSpid 约定；store 无 sid 字段）
-        final int savedSid = int.tryParse(
-                store['id']?.toString() ?? store['sid']?.toString() ?? '') ??
-            0;
+        final int savedSid =
+            int.tryParse(store['id']?.toString() ?? store['sid']?.toString() ?? '') ?? 0;
         SpUtil.putInt('spid', savedSpid);
         SpUtil.putInt('sid', savedSid);
         // 商业模式（对齐 smdcapp saveStoreData: miniverflag 1=快餐 2=正餐）
@@ -322,8 +318,7 @@ class _LoginPageState extends State<LoginPage> {
 
       // 保存 pstore（总店）功能标志（对齐 smdcapp LoginBean.pstore）
       if (data['pstore'] is Map) {
-        final Map<String, dynamic> pstore =
-            Map<String, dynamic>.from(data['pstore'] as Map);
+        final Map<String, dynamic> pstore = Map<String, dynamic>.from(data['pstore'] as Map);
         SpUtil.putString(Constant.pstoreVipflag, pstore['vipflag']?.toString() ?? '');
         SpUtil.putString(Constant.pstoreTakeoutflag, pstore['takeoutflag']?.toString() ?? '');
         SpUtil.putString(Constant.pstoreMiniverflag, pstore['miniverflag']?.toString() ?? '');
@@ -333,16 +328,12 @@ class _LoginPageState extends State<LoginPage> {
 
       // 保存 mach（设备）完整字段（对齐 smdcapp LoginBean.mach）
       if (data['mach'] is Map) {
-        final Map<String, dynamic> mach =
-            Map<String, dynamic>.from(data['mach'] as Map);
-        SpUtil.putString(Constant.machTerminalsnLeshua,
-            mach['terminalsn_leshua']?.toString() ?? '');
-        SpUtil.putString(Constant.machGettakeoutorder,
-            mach['gettakeoutorder']?.toString() ?? '');
-        SpUtil.putString(Constant.machMasterflag,
-            mach['masterflag']?.toString() ?? '');
-        SpUtil.putString(Constant.machClienttype,
-            mach['clienttype']?.toString() ?? '');
+        final Map<String, dynamic> mach = Map<String, dynamic>.from(data['mach'] as Map);
+        SpUtil.putString(
+            Constant.machTerminalsnLeshua, mach['terminalsn_leshua']?.toString() ?? '');
+        SpUtil.putString(Constant.machGettakeoutorder, mach['gettakeoutorder']?.toString() ?? '');
+        SpUtil.putString(Constant.machMasterflag, mach['masterflag']?.toString() ?? '');
+        SpUtil.putString(Constant.machClienttype, mach['clienttype']?.toString() ?? '');
       }
 
       ConnectionManager.beginSession();
@@ -353,9 +344,8 @@ class _LoginPageState extends State<LoginPage> {
           await SpUtil.remove(Constant.accessToken);
           if (mounted) {
             final String host = ConnectionManager.getLocalhost();
-            Toast.show(host.isEmpty || !host.startsWith('http')
-                ? '主设备ip地址获取失败，请检查主设备'
-                : '主设备连接失败，请重试');
+            Toast.show(
+                host.isEmpty || !host.startsWith('http') ? '主设备ip地址获取失败，请检查主设备' : '主设备连接失败，请重试');
           }
           return;
         }
@@ -385,29 +375,29 @@ class _LoginPageState extends State<LoginPage> {
 
   /// 多商户选择弹窗（参考 smdcapp SelectStorePopup）
   void _showStoreSelectionDialog(List<dynamic> stores) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => Dialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12.0),
-        ),
-        child: Container(
-          padding: const EdgeInsets.all(16.0),
-          constraints: const BoxConstraints(maxHeight: 420),
+      builder: (ctx) => Center(
+        child: DialogCard(
+          width: 320,
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               // 标题
               Row(
                 children: [
-                  const Expanded(
+                  const SizedBox(width: 26),
+                  Expanded(
                     child: Text(
                       '选择商户',
+                      textAlign: TextAlign.center,
                       style: TextStyle(
-                        fontSize: 16.0,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF333333),
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                        color: isDark ? Colors.white : const Color(0xFF1D2129),
                       ),
                     ),
                   ),
@@ -416,7 +406,10 @@ class _LoginPageState extends State<LoginPage> {
                       Navigator.of(ctx).pop();
                       setState(() => _isLoading = false);
                     },
-                    child: const Icon(Icons.close, size: 22, color: Color(0xFF999999)),
+                    child: const Padding(
+                      padding: EdgeInsets.all(4),
+                      child: Icon(Icons.close, size: 18, color: Color(0xFF999999)),
+                    ),
                   ),
                 ],
               ),
@@ -426,7 +419,8 @@ class _LoginPageState extends State<LoginPage> {
                 style: const TextStyle(fontSize: 13.0, color: Color(0xFF999999)),
               ),
               const SizedBox(height: 12.0),
-              Flexible(
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 420),
                 child: ListView.separated(
                   shrinkWrap: true,
                   padding: EdgeInsets.zero,
@@ -451,10 +445,12 @@ class _LoginPageState extends State<LoginPage> {
                         Navigator.of(ctx).pop();
                         final userid = store['userid']?.toString() ?? '';
                         // 保存 sid / spid
-                        SpUtil.putString(Constant.store, json.encode({
-                          'id': store['sid']?.toString() ?? '0',
-                          'spid': store['spid']?.toString() ?? '0',
-                        }));
+                        SpUtil.putString(
+                            Constant.store,
+                            json.encode({
+                              'id': store['sid']?.toString() ?? '0',
+                              'spid': store['spid']?.toString() ?? '0',
+                            }));
                         _doLogin(userid);
                       },
                       child: Padding(
@@ -483,10 +479,10 @@ class _LoginPageState extends State<LoginPage> {
                                     displayText,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 14.0,
                                       fontWeight: FontWeight.w600,
-                                      color: Color(0xFF333333),
+                                      color: isDark ? Colors.white : const Color(0xFF333333),
                                     ),
                                   ),
                                   if (subText.isNotEmpty) ...[
@@ -502,8 +498,7 @@ class _LoginPageState extends State<LoginPage> {
                                 ],
                               ),
                             ),
-                            const Icon(Icons.chevron_right,
-                                color: Color(0xFFCCCCCC), size: 22),
+                            const Icon(Icons.chevron_right, color: Color(0xFFCCCCCC), size: 22),
                           ],
                         ),
                       ),
@@ -853,9 +848,7 @@ class _LoginPageState extends State<LoginPage> {
                 width: 1.5,
               ),
             ),
-            child: _rememberPwd
-                ? const Icon(Icons.check, size: 12.0, color: Colors.white)
-                : null,
+            child: _rememberPwd ? const Icon(Icons.check, size: 12.0, color: Colors.white) : null,
           ),
           const SizedBox(width: 6.0),
           const Text(
@@ -925,9 +918,7 @@ class _LoginPageState extends State<LoginPage> {
                 width: 1.5,
               ),
             ),
-            child: _agreed
-                ? const Icon(Icons.check, size: 12.0, color: Colors.white)
-                : null,
+            child: _agreed ? const Icon(Icons.check, size: 12.0, color: Colors.white) : null,
           ),
         ),
         const SizedBox(width: 6.0),
@@ -943,7 +934,7 @@ class _LoginPageState extends State<LoginPage> {
                   recognizer: TapGestureRecognizer()
                     ..onTap = () {
                       NavigatorUtils.goAssetHtmlPage(
-                        context, '用户协议', 'assets/data/user_agreement.html');
+                          context, '用户协议', 'assets/data/user_agreement.html');
                     },
                 ),
                 const TextSpan(text: '和'),
@@ -953,7 +944,7 @@ class _LoginPageState extends State<LoginPage> {
                   recognizer: TapGestureRecognizer()
                     ..onTap = () {
                       NavigatorUtils.goAssetHtmlPage(
-                        context, '隐私政策', 'assets/data/privacy_policy.html');
+                          context, '隐私政策', 'assets/data/privacy_policy.html');
                     },
                 ),
               ],
@@ -992,14 +983,12 @@ class _LoginPageState extends State<LoginPage> {
     if (_loginType == 1) {
       _merchantController.text = SpUtil.getString(Constant.rememberMerchantCode) ?? '';
       _employeeController.text = SpUtil.getString(Constant.rememberMerchantAccount) ?? '';
-      _pwdController.text = _rememberPwd
-          ? (SpUtil.getString(Constant.rememberMerchantPwd) ?? '')
-          : '';
+      _pwdController.text =
+          _rememberPwd ? (SpUtil.getString(Constant.rememberMerchantPwd) ?? '') : '';
     } else {
       _phoneController.text = SpUtil.getString(Constant.rememberPhone) ?? '';
-      _phonePwdController.text = _rememberPwd
-          ? (SpUtil.getString(Constant.rememberPhonePwd) ?? '')
-          : '';
+      _phonePwdController.text =
+          _rememberPwd ? (SpUtil.getString(Constant.rememberPhonePwd) ?? '') : '';
     }
   }
 

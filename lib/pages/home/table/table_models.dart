@@ -168,6 +168,9 @@ class TableDetail {
     this.remark = '',
     this.additionid = '',
     this.containweight = 0,
+    this.operid = '',
+    this.opername = '',
+    this.opermachno = '',
   });
 
   factory TableDetail.fromJson(Map<String, dynamic> json) {
@@ -189,6 +192,9 @@ class TableDetail {
       remark: json['remark']?.toString() ?? '',
       additionid: json['additionid']?.toString() ?? '',
       containweight: _toInt(json['containweight']),
+      operid: json['operid']?.toString() ?? '',
+      opername: json['opername']?.toString() ?? '',
+      opermachno: json['opermachno']?.toString() ?? '',
     );
   }
 
@@ -238,6 +244,15 @@ class TableDetail {
   /// 二次称重标识：0不显示 1未称重 2已称重（对齐 smdcapp TableDetailBean.containweight）
   final int containweight;
 
+  /// 最后操作人id（锁台后为锁台操作人，对齐 smdcapp TableDetailBean.operid）
+  final String operid;
+
+  /// 最后操作人名称（对齐 smdcapp TableDetailBean.opername）
+  final String opername;
+
+  /// 最后操作机号（锁台后为锁台设备机号，对齐 smdcapp TableDetailBean.opermachno）
+  final String opermachno;
+
   /// 二次称重标签：0=不显示（对齐 smdcapp TableInfoAdapter 展示条件）
   String get weighText {
     if (containweight == 1) return '未称';
@@ -264,6 +279,9 @@ class TableDetail {
         'remark': remark,
         'additionid': additionid,
         'containweight': containweight,
+        'operid': operid,
+        'opername': opername,
+        'opermachno': opermachno,
       };
 }
 

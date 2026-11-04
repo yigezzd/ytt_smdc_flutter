@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_deer/components/confirm_dialog.dart';
 import 'package:flutter_deer/res/constant_print_key.dart';
 import 'package:flutter_deer/res/resources.dart';
 import 'package:flutter_deer/util/print_service.dart';
@@ -191,30 +192,19 @@ class _PrintSettingPageState extends State<PrintSettingPage> {
   }
 
   /// 更换打印方式（对齐 smdcapp PrintSetActivity 确认更换逻辑）
-  void _onPrinterTypeChanged(String type) {
+  Future<void> _onPrinterTypeChanged(String type) async {
     if (type == _printerType) return;
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('消息提示'),
-        content: const Text('确认更换打印方式吗?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              setState(() => _printerType = type);
-              PrintService.instance.setPrinterType(type);
-              // 清除蓝牙地址（对齐 smdcapp 切换时清除）
-              SpUtil.putString(ConstantPrintKey.bluetoothAddr, '');
-              SpUtil.putString(ConstantPrintKey.bluetoothName, '');
-              Toast.show('已切换为$type');
-            },
-            child: const Text('确定'),
-          ),
-        ],
-      ),
+    final bool confirmed = await ConfirmDialog.show(
+      context,
+      content: '确认更换打印方式吗?',
     );
+    if (!confirmed || !mounted) return;
+    setState(() => _printerType = type);
+    PrintService.instance.setPrinterType(type);
+    // 清除蓝牙地址（对齐 smdcapp 切换时清除）
+    SpUtil.putString(ConstantPrintKey.bluetoothAddr, '');
+    SpUtil.putString(ConstantPrintKey.bluetoothName, '');
+    Toast.show('已切换为$type');
   }
 
   /// 纸规格变更（对齐 smdcapp PrintSetActivity rb58/rb80 逻辑）

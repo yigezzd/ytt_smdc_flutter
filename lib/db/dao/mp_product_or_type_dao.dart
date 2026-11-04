@@ -45,11 +45,11 @@ class MpProductOrTypeDao extends BaseDao<MpProductOrTypeEntity> {
     return rows.map(fromMap).toList();
   }
 
-  /// 按多个 billid 批量查询
+  /// 按多个 billid 批量查询（sid 为空时不按门店过滤）
   Future<List<MpProductOrTypeEntity>> byBillids({
     required List<String> billids,
     required int spid,
-    required int sid,
+    int? sid,
   }) async {
     if (billids.isEmpty) {
       return [];
@@ -62,16 +62,20 @@ class MpProductOrTypeDao extends BaseDao<MpProductOrTypeEntity> {
       return rows
           .where((Map<String, dynamic> m) =>
               _asInt(m['spid']) == spid &&
-              _asInt(m['sid']) == sid &&
+              (sid == null || _asInt(m['sid']) == sid) &&
               ids.contains(m['billid']?.toString()))
           .map(fromMap)
           .toList();
     }
     final placeholders = billids.map((_) => '?').join(',');
-    final rows = await db.queryList(
-      'SELECT * FROM $table WHERE spid = ? AND sid = ? AND billid IN ($placeholders)',
-      [spid, sid, ...billids],
-    );
+    final List<Object?> args = <Object?>[spid, ...billids];
+    String sql =
+        'SELECT * FROM $table WHERE spid = ? AND billid IN ($placeholders)';
+    if (sid != null) {
+      sql += ' AND sid = ?';
+      args.add(sid);
+    }
+    final rows = await db.queryList(sql, args);
     return rows.map(fromMap).toList();
   }
 

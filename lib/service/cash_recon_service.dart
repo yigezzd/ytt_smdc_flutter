@@ -50,8 +50,9 @@ class CashReconService {
           if (local.list.isNotEmpty || local.sumdata.isNotEmpty) {
             return local;
           }
-        } catch (_) {
+        } catch (e) {
           // 本地不可用时回退云端
+          debugPrint('本地交班汇总失败，回退云端: $e');
         }
         return _loadHandoverCloud();
       }
@@ -135,8 +136,9 @@ class CashReconService {
     String selltime = await dao.getSaleMaterMaxTime(
         maxTime: maxTime, spid: spid, sid: sid, machno: machno);
     if (selltime.isEmpty) {
-      // 没有交班时间就取第一次结账时间；仍空则取今天 00:00:00
-      selltime = '${_today()} 00:00:00';
+      // 对齐 HandWordActivity.getloginTime：上次交班后暂无新业务时，班次起点
+      // 直接取上次交班时间，避免回退到当天 0 点把交班前的数据重复统计进本班次
+      selltime = maxTime.isNotEmpty ? maxTime : '${_today()} 00:00:00';
     }
     final String vipMoneytime = await dao.getVipMoneyMaterMaxTime(
         maxTime: maxTime, spid: spid, sid: sid, machno: machno);
@@ -159,7 +161,8 @@ class CashReconService {
     };
 
     // 3. 销售汇总（对齐 214-220 行，数字兜底）
-    final Map<String, dynamic>? summarydata = await dao.getSummaryData(
+    // rawQuery 返回的 Map 只读，先拷贝再规整
+    final Map<String, dynamic>? summaryRow = await dao.getSummaryData(
       logintime: logintime,
       logouttime: logouttime,
       spid: spid,
@@ -167,6 +170,9 @@ class CashReconService {
       machno: machno,
       cashid: operid,
     );
+    final Map<String, dynamic>? summarydata = summaryRow == null
+        ? null
+        : Map<String, dynamic>.from(summaryRow);
     if (summarydata != null) {
       for (final String key in <String>[
         'billnum',
@@ -180,15 +186,18 @@ class CashReconService {
       }
     }
 
-    // 4. 交班 4 段 UNION 汇总（对齐 223-231 行，数字兜底）
-    final List<Map<String, dynamic>> list = await dao.reportOnShiftByMachno(
+    // 4. 交班 4 段 UNION 汇总（对齐 223-231 行，数字兜底；rawQuery 行只读，先拷贝）
+    final List<Map<String, dynamic>> list =
+        (await dao.reportOnShiftByMachno(
       logintime: logintime,
       logouttime: logouttime,
       spid: spid,
       sid: sid,
       machno: machno,
       cashid: operid,
-    );
+    ))
+            .map((Map<String, dynamic> m) => Map<String, dynamic>.from(m))
+            .toList();
     for (final Map<String, dynamic> map in list) {
       map['resaleamt'] = _toDouble(map['resaleamt']);
       map['saleamt'] = _toDouble(map['saleamt']);
@@ -198,23 +207,30 @@ class CashReconService {
       map['payableamt'] = _toDouble(map['payableamt']);
     }
 
-    // 5. 销售流水列表（对齐 236-242 行）
+    // 5. 销售流水列表（对齐 236-242 行；rawQuery 行只读，先拷贝）
     final List<Map<String, dynamic>> salejdklist =
-        await dao.salejdklistByMachno(
+        (await dao.salejdklistByMachno(
       logintime: logintime,
       logouttime: logouttime,
       spid: spid,
       sid: sid,
       machno: machno,
       cashid: operid,
-    );
+    ))
+            .map((Map<String, dynamic> m) => Map<String, dynamic>.from(m))
+            .toList();
     for (final Map<String, dynamic> map in salejdklist) {
       map['dscamt'] = _toDouble(map['dscamt']);
       map['amt'] = _toDouble(map['amt']);
       map['retailamt'] = _toDouble(map['retailamt']);
       map['roundamt'] = _toDouble(map['roundamt']);
     }
-    master['salecnt'] = salejdklist.length;
+    // 总单数不含撤单记录（撤单笔数/金额单独统计 withdrawcnt/withdrawamt，
+    // 对齐 244-251 行 salenum）
+    master['salecnt'] = salejdklist
+        .where((Map<String, dynamic> m) => !(
+            m['opertype']?.toString() == '3' && m['status']?.toString() == '3'))
+        .length;
 
     // 6. 金额汇总（对齐 244-368 行；币种抹零参数 AmountHandleType，
     //    list 中 payid 字段实际不存在，两分支对 itype==1 的统计行为等价）
@@ -271,16 +287,30 @@ class CashReconService {
     master['reserveamt'] = reserveamt;
     master['allpayableamt'] = allpayableamt;
 
-    // 退菜/折扣/支付笔数（对齐 333-368 行）
-    final List<Map<String, dynamic>> returnlist = salejdklist
-        .where((Map<String, dynamic> m) => m['opertype']?.toString() == '3')
+    // 退款统计（对齐 339-342 行 getReturnSummary：退菜明细 presentflag=2，
+    // 排除撤单流水和 billflag=2 原单，金额取绝对值；与撤单统计互相独立）
+    final Map<String, dynamic>? returnsumdata = await dao.getReturnSummary(
+      logintime: logintime,
+      logouttime: logouttime,
+      spid: spid,
+      sid: sid,
+      machno: machno,
+      cashid: operid,
+    );
+    master['returncnt'] = _toDouble(returnsumdata?['returncnt']);
+    master['returnamt'] = _toDouble(returnsumdata?['returnamt']).abs();
+    // 撤单统计（对齐 343-355 行：status=3 且 opertype=3 整单撤单，
+    // 撤单主表金额为负，取绝对值即原单应收金额）
+    final List<Map<String, dynamic>> withdrawlist = salejdklist
+        .where((Map<String, dynamic> m) =>
+            m['opertype']?.toString() == '3' && m['status']?.toString() == '3')
         .toList();
-    master['returncnt'] = returnlist.length;
-    double returnamt = 0;
-    for (final Map<String, dynamic> r in returnlist) {
-      returnamt = _rd2(returnamt + _toDouble(r['amt']));
+    double withdrawamt = 0;
+    for (final Map<String, dynamic> w in withdrawlist) {
+      withdrawamt = _rd2(withdrawamt + _toDouble(w['amt']).abs());
     }
-    master['returnamt'] = returnamt;
+    master['withdrawcnt'] = withdrawlist.length;
+    master['withdrawamt'] = withdrawamt;
     double dscamt = 0;
     for (final Map<String, dynamic> r in salejdklist) {
       dscamt = _rd2(dscamt + _toDouble(r['dscamt']));
@@ -325,8 +355,8 @@ class CashReconService {
       cashid: operid,
     );
 
-    // 10. 预订金（对齐 398-406 行；t_reserve_master 为空表）
-    final Map<String, dynamic>? reserveSumdata = await dao.reserveSumdata(
+    // 10. 预订金（对齐 398-406 行；t_reserve_master 为空表；rawQuery 行只读，先拷贝）
+    final Map<String, dynamic>? reserveRow = await dao.reserveSumdata(
       logintime: logintime,
       logouttime: logouttime,
       spid: spid,
@@ -334,6 +364,9 @@ class CashReconService {
       machno: machno,
       cashid: operid,
     );
+    final Map<String, dynamic>? reserveSumdata = reserveRow == null
+        ? null
+        : Map<String, dynamic>.from(reserveRow);
     if (reserveSumdata != null) {
       reserveSumdata['reservepayamt'] = _toDouble(reserveSumdata['reservepayamt']);
       master.addAll(reserveSumdata);
@@ -383,6 +416,7 @@ class CashReconService {
         sid: _getSid(),
         operid: _getUserId(),
         opername: _getUserName(),
+        opercode: _getUserCode(),
         machno: SpUtil.getString(Constant.machNo) ?? '',
         store: SpUtil.getString(Constant.storeCode) ?? '',
       );
@@ -551,6 +585,18 @@ class CashReconService {
             userMap['name']?.toString() ?? userMap['username']?.toString() ?? '';
         final String code = userMap['code']?.toString() ?? '';
         return code.isNotEmpty ? '$name($code)' : name;
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  String _getUserCode() {
+    try {
+      final String userStr = SpUtil.getString(Constant.user) ?? '';
+      if (userStr.isNotEmpty) {
+        final Map<String, dynamic> userMap =
+            jsonDecode(userStr) as Map<String, dynamic>;
+        return userMap['code']?.toString() ?? '';
       }
     } catch (_) {}
     return '';

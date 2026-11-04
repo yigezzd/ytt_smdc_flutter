@@ -48,7 +48,7 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
   void _loadSettings() {
     _serverType = ConnectionManager.getServerType();
     _printBill = SpUtil.getBool('print_bill') ?? false;
-    _settlePrint = SpUtil.getBool(Constant.settleDy, defValue: true) ?? true;
+    _settlePrint = SpUtil.getBool(Constant.settleDy, defValue: false) ?? false;
     _fullPayment = SpUtil.getBool('full_payment', defValue: true) ?? true;
     _enableNfc = SpUtil.getBool('ENABLE_NFC') ?? false;
     _enableKd = SpUtil.getBool('ENABLE_KD', defValue: true) ?? true;

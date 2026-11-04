@@ -68,6 +68,7 @@ class HandoverRecordDao {
     required String sid,
     required String operid,
     required String opername,
+    required String opercode,
     required String machno,
     required String store,
   }) async {
@@ -80,7 +81,7 @@ class HandoverRecordDao {
     }
     row['spid'] = spid;
     row['sid'] = sid;
-    row['flowid'] = _genFlowId(operid);
+    row['flowid'] = _genFlowId(opercode);
     row['flowno'] = flowno;
     row['createtime'] =
         DateFormat('yyyy-MM-dd HH:mm:ss').format(DateTime.now());
@@ -122,7 +123,8 @@ class HandoverRecordDao {
     }
   }
 
-  /// 生成 flowid（对齐 StringUtils.getMainId：yyMMddHHmmssSSS + 操作码后2位 + 3位随机）
+  /// 生成 flowid（对齐 StringUtils.getMainId(opercode)：
+  /// yyMMddHHmmssSSS + 操作员 code 后2位 + 3位随机）
   String _genFlowId(String operid) {
     final String time = DateFormat('yyMMddHHmmssSSS').format(DateTime.now());
     String code = operid;

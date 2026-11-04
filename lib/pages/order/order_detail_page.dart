@@ -12,7 +12,13 @@ import 'package:flutter_deer/components/dish_select_sheet.dart';
 import 'package:flutter_deer/components/edit_table_info_sheet.dart';
 import 'package:flutter_deer/components/member_search_sheet.dart';
 import 'package:flutter_deer/components/table_select_sheet.dart';
+import 'package:flutter_deer/db/dao/mp_master_dao.dart';
+import 'package:flutter_deer/db/dao/mp_product_or_type_dao.dart';
+import 'package:flutter_deer/db/dao/mp_rule_dao.dart';
 import 'package:flutter_deer/db/dao/table_type_dao.dart';
+import 'package:flutter_deer/db/entity/mp_master_entity.dart';
+import 'package:flutter_deer/db/entity/mp_product_or_type_entity.dart';
+import 'package:flutter_deer/db/entity/mp_rule_entity.dart';
 import 'package:flutter_deer/db/entity/table_type_entity.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_api.dart';
@@ -81,6 +87,9 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
 
   /// 订单明细列表（DetailListBean JSON 数组）
   List<Map<String, dynamic>> _detailList = <Map<String, dynamic>>[];
+
+  /// 已在本地取消、待随下次更新上传删除的明细行（deleteflag=1）
+  final List<Map<String, dynamic>> _deletedRows = <Map<String, dynamic>>[];
 
   /// 展示列表（对齐 smdcapp CombHelper.formatCombList：套餐子行挂在主行下，不平级展示）
   List<Map<String, dynamic>> _displayList = <Map<String, dynamic>>[];
@@ -272,9 +281,32 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
               raw['mprice1'] = lf['mprice1'];
               raw['mprice2'] = lf['mprice2'];
               raw['mprice3'] = lf['mprice3'];
+              // 对齐 smdcapp initOrderInfo：是否可赠送以本地商品档案为准，
+              // 避免旧单据明细缺失/误写 propresentflag 导致整单赠送被误判跳过
+              raw['propresentflag'] = lf['presentflag'];
               // 对齐 smdcapp initOrderInfo：typeid 以本地商品为准，保证分类折扣能命中
               final String localTypeid = lf['typeid']?.toString() ?? '';
               if (localTypeid.isNotEmpty) raw['typeid'] = localTypeid;
+              // 主设备/部分服务端明细不回传分类名与单位，按本地商品档案补齐，
+              // 否则结账 t_sale_detail 落库为空，菜品销售明细表分类/单位列无数据
+              final String localTypename = lf['typename']?.toString() ?? '';
+              if ((raw['typename']?.toString() ?? '').isEmpty &&
+                  localTypename.isNotEmpty) {
+                raw['typename'] = localTypename;
+              }
+              final String localUnit = lf['unit']?.toString() ?? '';
+              if ((raw['unit']?.toString() ?? '').isEmpty &&
+                  localUnit.isNotEmpty) {
+                raw['unit'] = localUnit;
+              }
+            }
+            // 规格名称双向补齐（报表按 spec 或 specname 取值）
+            final String spec = raw['spec']?.toString() ?? '';
+            final String specname = raw['specname']?.toString() ?? '';
+            if (spec.isEmpty && specname.isNotEmpty) {
+              raw['spec'] = specname;
+            } else if (specname.isEmpty && spec.isNotEmpty) {
+              raw['specname'] = spec;
             }
           }
         }
@@ -582,6 +614,281 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       memberDiscount: member?.discount.toDouble() ?? 100,
       clearMemberMark: clearMemberMark,
     );
+  }
+
+  /// 满赠赠品门槛复检（bxxpxxflag=4 + cxmbillid）
+  ///
+  /// 退菜/改价/折扣等操作后，若订单现价合计低于满赠活动档位金额，
+  /// 自动取消对应赠品；仅低于更高档位时按档位削减赠品数量。
+  /// 取消行转为 deleteflag=1 的待删除行，随本次更新上传。
+  Future<bool> _pruneInvalidFullGiftRows() async {
+    final List<Map<String, dynamic>> gifts =
+        _detailList.where(_isActiveFullGiftRow).toList();
+    if (gifts.isEmpty) {
+      return false;
+    }
+
+    final Set<String> billidSet = <String>{};
+    for (final Map<String, dynamic> gift in gifts) {
+      final String billid = gift['cxmbillid']?.toString() ?? '';
+      if (billid.isNotEmpty) {
+        billidSet.add(billid);
+      }
+    }
+    if (billidSet.isEmpty) {
+      return false;
+    }
+
+    int spid = UserHelper.getSpid();
+    if (spid == 0) {
+      spid = int.tryParse(UserHelper.getSpidStr()) ?? 0;
+    }
+    if (spid == 0) {
+      FileLogWriter.instance
+          .writeToFile('满赠门槛校验跳过: spid=0', tag: '促销');
+      return false;
+    }
+
+    final List<MpRuleEntity> rules;
+    try {
+      rules = await MpRuleDao.instance.byBillids(
+        billids: billidSet.toList(),
+        spid: spid,
+      );
+    } catch (e) {
+      FileLogWriter.instance.writeToFile('满赠门槛校验失败: $e', tag: '促销');
+      return false;
+    }
+    if (rules.isEmpty) {
+      FileLogWriter.instance.writeToFile(
+          '满赠门槛校验跳过: 未找到活动规则 bills=${billidSet.join(",")}',
+          tag: '促销');
+      return false;
+    }
+
+    final Map<String, List<MpRuleEntity>> rulesByBill =
+        <String, List<MpRuleEntity>>{};
+    for (final MpRuleEntity rule in rules) {
+      if (rule.giveqty <= 0) {
+        continue;
+      }
+      rulesByBill
+          .putIfAbsent(rule.billid, () => <MpRuleEntity>[])
+          .add(rule);
+    }
+
+    // 活动主表（applytype）与参与商品/分类：服务端按活动范围只统计参与菜品
+    final List<MPMasterEntity> masters;
+    final List<MpProductOrTypeEntity> promoItems;
+    try {
+      masters = await MPMasterDao.instance.byBillids(
+        billids: billidSet.toList(),
+        spid: spid,
+      );
+      promoItems = await MpProductOrTypeDao.instance.byBillids(
+        billids: billidSet.toList(),
+        spid: spid,
+      );
+    } catch (e) {
+      FileLogWriter.instance
+          .writeToFile('满赠门槛校验失败(活动/范围): $e', tag: '促销');
+      return false;
+    }
+    final Map<String, MPMasterEntity> masterByBill =
+        <String, MPMasterEntity>{};
+    for (final MPMasterEntity master in masters) {
+      masterByBill[master.billid] = master;
+    }
+    final Map<String, Set<String>> conditionTypeIds =
+        <String, Set<String>>{};
+    final Map<String, Set<String>> conditionProductIds =
+        <String, Set<String>>{};
+    for (final MpProductOrTypeEntity item in promoItems) {
+      if (_toInt(item.saletype) != 1) {
+        continue;
+      }
+      if (item.typeid.isNotEmpty) {
+        conditionTypeIds
+            .putIfAbsent(item.billid, () => <String>{})
+            .add(item.typeid);
+      }
+      if (item.productid.isNotEmpty) {
+        conditionProductIds
+            .putIfAbsent(item.billid, () => <String>{})
+            .add(item.productid);
+      }
+    }
+
+    final List<Map<String, dynamic>> removed = <Map<String, dynamic>>[];
+    final List<String> removedNames = <String>[];
+    bool trimmed = false;
+
+    for (final String billid in billidSet) {
+      final List<MpRuleEntity> tiers =
+          rulesByBill[billid] ?? const <MpRuleEntity>[];
+      if (tiers.isEmpty) {
+        continue;
+      }
+      final MPMasterEntity? master = masterByBill[billid];
+      if (master == null || master.billtype != 7) {
+        FileLogWriter.instance.writeToFile(
+            '满赠门槛校验跳过: 活动$billid 主表缺失或非满赠', tag: '促销');
+        continue;
+      }
+      final Set<String> typeIds =
+          conditionTypeIds[billid] ?? const <String>{};
+      final Set<String> productIds =
+          conditionProductIds[billid] ?? const <String>{};
+      final int applytype = master.applytype > 0 ? master.applytype : 0;
+      if (applytype > 0 && typeIds.isEmpty && productIds.isEmpty) {
+        FileLogWriter.instance.writeToFile(
+            '满赠门槛校验跳过: 活动$billid 未找到参与商品/分类', tag: '促销');
+        continue;
+      }
+      final double currentAmt = _calcFullGiftMatchAmt(
+        applytype: applytype,
+        typeIds: typeIds,
+        productIds: productIds,
+      );
+
+      // 取当前金额满足的最高档位；无任何档位满足则不允许赠送
+      double matchedAmt = -1;
+      double allowedQty = 0;
+      for (final MpRuleEntity tier in tiers) {
+        // amt<=0 视为无金额门槛（始终满足）
+        final double tierAmt = tier.amt > 0 ? tier.amt : 0;
+        if (tierAmt > currentAmt + 0.005) {
+          continue;
+        }
+        if (tierAmt > matchedAmt + 0.0001) {
+          matchedAmt = tierAmt;
+          allowedQty = tier.giveqty;
+        } else if ((tierAmt - matchedAmt).abs() <= 0.0001 &&
+            tier.giveqty > allowedQty) {
+          allowedQty = tier.giveqty;
+        }
+      }
+
+      final List<Map<String, dynamic>> activityGifts = gifts
+          .where((Map<String, dynamic> gift) =>
+              (gift['cxmbillid']?.toString() ?? '') == billid)
+          .toList();
+      double givenQty = 0;
+      for (final Map<String, dynamic> gift in activityGifts) {
+        final double net =
+            _toDouble(gift['qty']) - _toDouble(gift['subqty']);
+        if (net > 0) {
+          givenQty += net;
+        }
+      }
+      if (givenQty <= allowedQty + 0.0001) {
+        continue;
+      }
+
+      double excess = givenQty - allowedQty;
+      for (final Map<String, dynamic> gift in activityGifts.reversed) {
+        if (excess <= 0.0001) {
+          break;
+        }
+        final double qty = _toDouble(gift['qty']);
+        final double subqty = _toDouble(gift['subqty']);
+        final double net = qty - subqty;
+        if (net <= 0) {
+          continue;
+        }
+        if (net <= excess + 0.0001) {
+          removed.add(gift);
+          final String name = gift['productname']?.toString() ?? '';
+          if (name.isNotEmpty) {
+            removedNames.add(name);
+          }
+          excess -= net;
+        } else {
+          final double nextQty = qty - excess;
+          gift['qty'] = nextQty > subqty ? nextQty : subqty;
+          gift['rramt'] = 0;
+          gift['updateflag'] = 1;
+          trimmed = true;
+          excess = 0;
+        }
+      }
+
+      FileLogWriter.instance.writeToFile(
+          '满赠门槛校验: 活动$billid 当前金额$currentAmt 满足档$matchedAmt '
+          '可赠$allowedQty 已赠$givenQty',
+          tag: '促销');
+    }
+
+    if (removed.isEmpty && !trimmed) {
+      return false;
+    }
+
+    for (final Map<String, dynamic> row in removed) {
+      _detailList.remove(row);
+      _deletedRows.add(<String, dynamic>{
+        ...row,
+        'deleteflag': 1,
+        'updateflag': 1,
+        'productState': 1,
+      });
+    }
+    _buildDisplayList();
+    if (mounted) {
+      setState(() {});
+    }
+
+    final String giftNames = removedNames.toSet().join('、');
+    Toast.show(removed.isNotEmpty
+        ? '订单金额已不满足满赠条件，已取消赠品${giftNames.isEmpty ? '' : '：$giftNames'}'
+        : '订单金额已不满足满赠条件，赠品数量已调整');
+    FileLogWriter.instance.writeToFile(
+        '满赠条件不再满足: 取消$removedNames 调整数量$trimmed', tag: '促销');
+    return true;
+  }
+
+  /// 满赠门槛统计金额（对齐服务端 getSalesPromotionList：
+  /// applytype=0 统计全部明细；1/2 仅统计活动参与分类/商品；
+  /// 买赠赠品行 bxxpxxflag=1 不计入）
+  double _calcFullGiftMatchAmt({
+    required int applytype,
+    required Set<String> typeIds,
+    required Set<String> productIds,
+  }) {
+    double amt = 0;
+    for (final Map<String, dynamic> row in _detailList) {
+      if (_toInt(row['deleteflag']) == 1) {
+        continue;
+      }
+      if (_toInt(row['bxxpxxflag']) == 1) {
+        continue;
+      }
+      if (applytype > 0) {
+        final String typeid = row['typeid']?.toString() ?? '';
+        final String productid = row['productid']?.toString() ?? '';
+        if (!typeIds.contains(typeid) && !productIds.contains(productid)) {
+          continue;
+        }
+      }
+      amt += _toDouble(row['rramt']);
+    }
+    return _round2(amt);
+  }
+
+  /// 是否为仍有效的满赠赠品行
+  bool _isActiveFullGiftRow(Map<String, dynamic> row) {
+    if (_toInt(row['bxxpxxflag']) != 4) {
+      return false;
+    }
+    if ((row['cxmbillid']?.toString() ?? '').isEmpty) {
+      return false;
+    }
+    if (_toInt(row['deleteflag']) == 1) {
+      return false;
+    }
+    if (_toInt(row['presentflag']) == 2) {
+      return false;
+    }
+    return _toDouble(row['qty']) - _toDouble(row['subqty']) > 0;
   }
 
   /// 金额保留两位小数（避免浮点累计误差）
@@ -1041,38 +1348,14 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
   /// 锁台（对齐 smdcapp DetailOperationPopup.st → lockFlagTable lockflag=1）
   Future<void> _lockTable() async {
     try {
-      final bool useMaster = ConnectionManager.pcAlive;
-      if (useMaster) {
-        // 完整桌台 Bean 构造方式与消台/桌台操作弹窗入口保持一致
-        final Map<String, dynamic> tableBean = TableDataUtils.buildFullTableBean(
-          rawJson: widget.tableJson,
-          fallback: <String, dynamic>{
-            'tableid': widget.tableId,
-            'name': widget.tableName,
-            'code': widget.tableCode,
-          },
-        );
-        tableBean['newtableid'] = widget.tableId;
-        if (tableBean['tmp'] is Map) {
-          (tableBean['tmp'] as Map<String, dynamic>)['lockflag'] = 1;
-        }
-        final Map<String, dynamic> pcMaster = <String, dynamic>{
-          'tableMasterTmpDto': tableBean,
-          'flag': 1,
-          'autoflag': 0,
-        };
-        await requestForm(
-          HttpApi.pcTableLock,
-          <String, dynamic>{'tablemaster': jsonEncode(pcMaster)},
-          masterDevice: true,
-        );
-      } else {
-        await requestForm(HttpApi.lockFlagTable, <String, dynamic>{
-          'tableid': widget.tableId,
-          'lockflag': '1',
-          'autoflag': '0',
-        });
-      }
+      final bool ok = await TableConcurrencyGuard.postTableLock(
+        tableId: widget.tableId,
+        lock: true,
+        tableJson: widget.tableJson,
+        tableName: widget.tableName,
+        autoflag: 0,
+      );
+      if (!ok) throw StateError('锁台失败');
       if (!mounted) {
         return;
       }
@@ -1106,6 +1389,15 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
 
       // 重新计算价格（对齐 smdcapp Arith.showAllPriceInfo：含会员价重算）
       _applyMemberPricing();
+
+      // 退货/改价等操作后，订单现价合计低于满赠门槛时自动取消赠品
+      if (await _pruneInvalidFullGiftRows()) {
+        _applyMemberPricing();
+      }
+
+      // 本次上传明细：当前明细 + 待删除行（deleteflag=1，服务端按 onlyid 删除）
+      final List<Map<String, dynamic>> uploadDetailList =
+          <Map<String, dynamic>>[..._detailList, ..._deletedRows];
 
       // 对齐 smdcapp getMasterBean/getMasterBeanPC：组装主单
       final Map<String, dynamic> master = _buildOrderMaster();
@@ -1143,7 +1435,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         // 主设备模式（对齐 smdcapp PCMasterBean）
         final Map<String, dynamic> pcMaster = <String, dynamic>{
           'tableMaster': master,
-          'detailList': _detailList,
+          'detailList': uploadDetailList,
           'isUnionFlag': false,
         };
         await OrderRepository.placeOrder(
@@ -1156,7 +1448,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         // 云服务模式
         await OrderRepository.placeOrder(
           master: jsonEncode(master),
-          detail: jsonEncode(_detailList),
+          detail: jsonEncode(uploadDetailList),
           printType: printtype,
           printAllType: printtype != '-1' ? 1 : -1,
           masterDevice: false,
@@ -1181,6 +1473,9 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
           }
         }
       }
+
+      // 上传成功：待删除行已完成删除，清空墓碑避免重复提交
+      _deletedRows.clear();
 
       if (!mounted) return true;
       // 刷新订单数据
@@ -1574,7 +1869,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
 
   void _startSingleDish(Map<String, dynamic> item) {
     if (_toInt(item['hangflag']) != 1) {
-      Toast.show('商品未挂起，不能起菜');
+      Toast.show('商品未${ParamsSpUtils.getHangUpName()}，不能起菜');
       return;
     }
     final int idx = _detailList.indexOf(item);
@@ -1927,7 +2222,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     final List<Map<String, dynamic>>? picked = await _pickDishes(
       title: '整单起菜',
       enabled: (Map<String, dynamic> i) => _toInt(i['hangflag']) == 1,
-      disabledHint: '未挂起',
+      disabledHint: '未${ParamsSpUtils.getHangUpName()}',
     );
     if (picked == null || !mounted) return;
     bool hasItem = false;
@@ -1945,7 +2240,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       }
     }
     if (!hasItem) {
-      Toast.show('没有挂起的商品，无需起菜');
+      Toast.show('没有${ParamsSpUtils.getHangUpName()}的商品，无需起菜');
       return;
     }
     Toast.show('起菜成功');
@@ -2105,7 +2400,6 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     final DiscountResult? result = await DishDiscountSheet.show(
       context,
       dishName: '整单折扣',
-      showNumpad: true,
     );
     if (result == null || !mounted) return;
 
@@ -2192,29 +2486,49 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     return true;
   }
 
-  // ─────── 整单赠送（对齐 smdcapp GiveNumPopup 整单） ───────
+  // ─────── 整单赠送（对齐 smdcapp showGiveAllPop → SingleGivePopup） ───────
+
+  /// 菜品是否可参与整单赠送（对齐 smdcapp OperationPlacedActivity2 赠送勾选禁用条件：
+  /// 档案不可赠送 / 已赠送 / 促销赠品 / 超出单次赠送金额上限 / 已退完）
+  bool _canGiveDish(Map<String, dynamic> item) {
+    if (_toInt(item['propresentflag']) != 1) return false;
+    if (_toInt(item['presentflag']) == 1) return false;
+    final int bxxpxxflag = _toInt(item['bxxpxxflag']);
+    if (bxxpxxflag == 1 || bxxpxxflag == 2 || bxxpxxflag == 6) return false;
+    if (AuthLimitUtils.exceedGiftAmt(
+        _toDouble(item['sellprice']) * _toDouble(item['qty']))) {
+      return false;
+    }
+    return _toDouble(item['qty']) - _toDouble(item['subqty']) > 0;
+  }
 
   Future<void> _allGive() async {
-    final List<Map<String, dynamic>>? picked =
-        await _pickDishes(title: '整单赠送');
+    final List<Map<String, dynamic>>? picked = await _pickDishes(
+      title: '整单赠送',
+      enabled: _canGiveDish,
+      disabledHint: '不可赠送',
+    );
     if (picked == null || !mounted) return;
-    int skipped = 0;
+    // 对齐 smdcapp：选菜后先弹出赠送原因（SingleGivePopup），再执行整单赠送
+    final GiveResult? give = await DishGiveSheet.show(
+      context,
+      dishName: '整单赠送',
+      maxNum: 0,
+      showNum: false,
+    );
+    if (give == null || !mounted) return;
+    final String operTime = _formatNow();
     for (final Map<String, dynamic> item in picked) {
-      // R62：不可赠送菜品跳过
-      if (item.containsKey('propresentflag') &&
-          _toInt(item['propresentflag']) == 0 &&
-          _toInt(item['presentflag']) != 1) {
-        skipped++;
-        continue;
-      }
       item['presentflag'] = 1;
       item['rrprice'] = 0;
       item['rramt'] = 0;
       // R46：整单赠送同样标记赠送操作，供 Web 报表显示【赠】
       item['opertype'] = 3;
+      item['operremark'] = give.remark;
+      item['opertime'] = operTime;
       item['updateflag'] = 1;
     }
-    Toast.show(skipped > 0 ? '整单赠送成功，$skipped道不可赠送菜品已跳过' : '整单赠送成功');
+    Toast.show('整单赠送成功');
     _postOrderUpdate();
   }
 
@@ -3316,7 +3630,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                           size: 18,
                           color: _member != null
                               ? _kBrandRed
-                              : (isDark ? Colors.white70 : const Color(0xFF4E5969)),
+                              : (isDark ? Colors.white : const Color(0xFF1D2129)),
                         ),
                         const SizedBox(width: 3),
                         ConstrainedBox(
@@ -3329,7 +3643,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                                   _member != null ? FontWeight.w500 : FontWeight.normal,
                               color: _member != null
                                   ? _kBrandRed
-                                  : (isDark ? Colors.white70 : const Color(0xFF4E5969)),
+                                  : (isDark ? Colors.white : const Color(0xFF1D2129)),
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -3390,14 +3704,14 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                Icon(Icons.group, size: 14, color: isDark ? Colors.white70 : const Color(0xFF86909C)),
+                Icon(Icons.group, size: 14, color: isDark ? Colors.white70 : const Color(0xFF4E5969)),
                 const SizedBox(width: 3),
                 Text(
                   '${_personNum > 0 ? _personNum : widget.persons}人',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
-                    color: isDark ? Colors.white : const Color(0xFF4E5969),
+                    color: isDark ? Colors.white : const Color(0xFF1D2129),
                   ),
                 ),
               ],
@@ -4100,7 +4414,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     );
   }
 
-  /// 价格行（标签灰色 + 金额深色）
+  /// 价格行（标签与金额均为深色，金额字号略大）
   Widget _priceRow(String label, double value, bool isDark, {bool alignEnd = false}) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
@@ -4109,15 +4423,17 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         children: <Widget>[
           Text(
             '$label:',
-            style: const TextStyle(fontSize: 12, color: Color(0xFF86909C)),
+            style: TextStyle(
+              fontSize: 13,
+              color: isDark ? Colors.white70 : const Color(0xFF1D2129),
+            ),
           ),
           const SizedBox(width: 4),
           Text(
             '¥${_formatAmt(value)}',
             style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: isDark ? Colors.white : const Color(0xFF4E5969),
+              fontSize: 15,
+              color: isDark ? Colors.white : const Color(0xFF1D2129),
             ),
           ),
         ],
@@ -4164,11 +4480,14 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
           padding: const EdgeInsets.symmetric(vertical: 11),
           child: Row(
             children: <Widget>[
-              Icon(icon, size: 15, color: isDark ? Colors.white54 : const Color(0xFFC9CDD4)),
+              Icon(icon, size: 15, color: isDark ? Colors.white54 : const Color(0xFF4E5969)),
               const SizedBox(width: 8),
               Text(
                 label,
-                style: const TextStyle(fontSize: 13, color: Color(0xFF86909C)),
+                style: TextStyle(
+                  fontSize: 13,
+                  color: isDark ? Colors.white70 : const Color(0xFF1D2129),
+                ),
               ),
               const SizedBox(width: 12),
               // 值占满剩余宽度右对齐，避免 Spacer 平分空间导致时间被省略号截断

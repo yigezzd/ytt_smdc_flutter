@@ -53,6 +53,7 @@ class DishProduct {
     this.unit = '份',
     this.imageurl = '',
     this.barcode = '',
+    this.code = '',
     this.helpcode = '',
     this.cookflag = 0,
     this.specflag = 0,
@@ -100,6 +101,7 @@ class DishProduct {
       unit: json['unit']?.toString() ?? '份',
       imageurl: json['imageurl']?.toString() ?? '',
       barcode: json['barcode']?.toString() ?? '',
+      code: json['code']?.toString() ?? '',
       helpcode: json['helpcode']?.toString() ?? '',
       cookflag: _toInt(json['cookflag']),
       specflag: _toInt(json['specflag']),
@@ -146,6 +148,10 @@ class DishProduct {
   final String unit;
   final String imageurl;
   final String barcode;
+
+  /// 商品档案 code（对齐 smdcapp DetailListBean.productno = 商品档案 code）
+  final String code;
+
   final String helpcode;
 
   /// 多做法标识 1是 0否
@@ -545,9 +551,15 @@ class ComboItem {
     this.stockqty = 0,
     this.specname = '',
     this.specid = '',
+    this.typeid = '',
+    this.typename = '',
+    this.productcode = '',
     this.combsetproductid = '',
     this.printflag = 0,
     this.labelflag = 0,
+    this.curflag = 0,
+    this.specflag = 0,
+    this.cookflag = 0,
   });
 
   factory ComboItem.fromJson(Map<String, dynamic> json) {
@@ -569,9 +581,15 @@ class ComboItem {
       stockqty: _toDouble(json['stockqty']),
       specname: json['specname']?.toString() ?? '',
       specid: json['specid']?.toString() ?? '',
+      typeid: json['typeid']?.toString() ?? '',
+      typename: json['typename']?.toString() ?? '',
+      productcode: json['productcode']?.toString() ?? json['barcode']?.toString() ?? '',
       combsetproductid: json['combsetproductid']?.toString() ?? '',
       printflag: _toInt(json['printflag']),
       labelflag: _toInt(json['labelflag']),
+      curflag: _toInt(json['curflag']),
+      specflag: _toInt(json['specflag']),
+      cookflag: _toInt(json['cookflag']),
     );
   }
 
@@ -602,7 +620,8 @@ class ComboItem {
   /// 减价
   final double cutprice;
 
-  final String unit;
+  /// 单位（套餐接口缺失时按商品档案回填）
+  String unit;
   final String groupid;
   final String barcode;
 
@@ -612,11 +631,29 @@ class ComboItem {
   /// 沽清库存数量
   final double stockqty;
 
-  /// 规格名称
-  final String specname;
+  /// 规格名称（套餐接口只回传 specid 时按规格表回填）
+  String specname;
 
   /// 规格ID（对齐 smdcapp ProductCombSet.specid，非空时明细行上传 spec/specname）
   final String specid;
+
+  /// 分类ID（对齐 smdcapp ProductCombSet.typeid，套餐接口缺失时按商品档案回填）
+  String typeid;
+
+  /// 分类名称（对齐 smdcapp ProductCombSet.typename，套餐接口缺失时按商品/分类档案回填）
+  String typename;
+
+  /// 商品编号（对齐 smdcapp ProductCombSet.barcode → productcode）
+  String productcode;
+
+  /// 时价菜标记（对齐 smdcapp ProductCombSet.curflag）
+  int curflag;
+
+  /// 多规格标记（对齐 smdcapp ProductCombSet.specflag）
+  int specflag;
+
+  /// 多做法标记（对齐 smdcapp ProductCombSet.cookflag）
+  int cookflag;
 
   /// 套餐明细配置ID（对齐 smdcapp ProductCombSet.combsetproductid）
   final String combsetproductid;
@@ -945,22 +982,53 @@ class OrderRepository {
   /// 主设备模式明细接口不返回 combflag/dscflag/mprice1~3 等商品参数，
   /// 需按 productid 从本地商品库回填，供会员价/折扣计算使用；
   /// 促销校验（checkPromotion123）同样依赖本地商品分类 typeid。
-  /// 返回 productid → {combflag, dscflag, mprice1, mprice2, mprice3, typeid}。
+  /// 返回 productid → {combflag, dscflag, mprice1, mprice2, mprice3, typeid, presentflag}。
   static Future<Map<String, Map<String, dynamic>>> fetchLocalProductPriceFields() async {
     try {
       final List<Map<String, dynamic>> rows =
           await TableDownloadManager.readTableData('t_bi_product');
+      // 商品档案 typename 可能为空，回退分类表名称（对齐 smdcapp getCombInfo 查 typeDao）
+      final Map<String, String> typeNames = <String, String>{};
+      try {
+        final List<Map<String, dynamic>> types =
+            await TableDownloadManager.readTableData('t_bi_type');
+        for (final Map<String, dynamic> t in types) {
+          final String typeid = t['typeid']?.toString() ?? '';
+          if (typeid.isNotEmpty) {
+            typeNames[typeid] = t['name']?.toString() ?? '';
+          }
+        }
+      } catch (_) {}
       final Map<String, Map<String, dynamic>> map = <String, Map<String, dynamic>>{};
       for (final Map<String, dynamic> r in rows) {
         final String pid = r['productid']?.toString() ?? '';
         if (pid.isNotEmpty) {
+          final String typeid = r['typeid']?.toString() ?? '';
+          final String typename = r['typename']?.toString() ?? '';
           map[pid] = <String, dynamic>{
             'combflag': _toInt(r['combflag']),
             'dscflag': _toInt(r['dscflag']),
             'mprice1': _toDouble(r['mprice1']),
             'mprice2': _toDouble(r['mprice2']),
             'mprice3': _toDouble(r['mprice3']),
-            'typeid': r['typeid']?.toString() ?? '',
+            'typeid': typeid,
+            'typename': typename.isNotEmpty ? typename : (typeNames[typeid] ?? ''),
+            'unit': r['unit']?.toString() ?? '',
+            'barcode': r['barcode']?.toString() ?? '',
+            'code': r['code']?.toString() ?? '',
+            'inprice': _toDouble(r['inprice']),
+            'servicefeeflag': _toInt(r['servicefeeflag']),
+            'sellclearflag': _toInt(r['sellclearflag']),
+            'stockqty': _toDouble(r['stockqty']),
+            'curflag': _toInt(r['curflag']),
+            'specflag': _toInt(r['specflag']),
+            'cookflag': _toInt(r['cookflag']),
+            'moreeatflag': _toInt(r['moreeatflag']),
+            'minsaleflag': _toInt(r['minsaleflag']),
+            'printflag': _toInt(r['printflag']),
+            'labelflag': _toInt(r['labelflag']),
+            // 是否可赠送（商品档案 presentflag，对齐 smdcapp propresentflag）
+            'presentflag': _toInt(r['presentflag']),
           };
         }
       }
@@ -1373,6 +1441,31 @@ class OrderRepository {
       return;
     }
 
+    // 分类名称回退（商品档案 typename 为空时取分类表名称，对齐 smdcapp getCombInfo）
+    final Map<String, String> typeNames = <String, String>{};
+    try {
+      final List<Map<String, dynamic>> types =
+          await TableDownloadManager.readTableData('t_bi_type');
+      for (final Map<String, dynamic> t in types) {
+        final String typeid = t['typeid']?.toString() ?? '';
+        if (typeid.isNotEmpty) {
+          typeNames[typeid] = t['name']?.toString() ?? '';
+        }
+      }
+    } catch (_) {}
+    // 规格名称回退（套餐接口只给 specid 时按规格表补名称）
+    final Map<String, String> specNames = <String, String>{};
+    try {
+      final List<Map<String, dynamic>> specs =
+          await TableDownloadManager.readTableData('t_bi_spec');
+      for (final Map<String, dynamic> s in specs) {
+        final String specid = s['specid']?.toString() ?? '';
+        if (specid.isNotEmpty) {
+          specNames[specid] = s['name']?.toString() ?? '';
+        }
+      }
+    } catch (_) {}
+
     for (final ComboGroup group in combo.prolist) {
       for (final ComboItem item in group.list) {
         final Map<String, dynamic>? p = productMap[item.productid];
@@ -1381,6 +1474,21 @@ class OrderRepository {
         }
         item.printflag = _toInt(p['printflag']);
         item.labelflag = _toInt(p['labelflag']);
+        item.curflag = _toInt(p['curflag']);
+        item.specflag = _toInt(p['specflag']);
+        item.cookflag = _toInt(p['cookflag']);
+        item.typeid = p['typeid']?.toString() ?? item.typeid;
+        final String ptName = p['typename']?.toString() ?? '';
+        item.typename = ptName.isNotEmpty
+            ? ptName
+            : (typeNames[item.typeid] ?? item.typename);
+        final String unit = p['unit']?.toString() ?? '';
+        if (unit.isNotEmpty) item.unit = unit;
+        final String barcode = p['barcode']?.toString() ?? '';
+        if (barcode.isNotEmpty) item.productcode = barcode;
+        if (item.specname.isEmpty && item.specid.isNotEmpty) {
+          item.specname = specNames[item.specid] ?? '';
+        }
       }
     }
   }

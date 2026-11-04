@@ -45,6 +45,9 @@ final StreamController<void> _callNumberController =
 
 Stream<void> get callNumberStream => _callNumberController.stream;
 
+/// Web 端没有 MQ 事件缓存
+Map<String, String>? lockOwnerForSaleid(String saleid) => null;
+
 /// Web 端始终未连接
 bool get isConnected => false;
 

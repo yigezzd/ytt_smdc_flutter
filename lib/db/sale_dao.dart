@@ -26,6 +26,20 @@ class SaleDao {
     final List<Map<String, dynamic>> cookList = _toRows(saleBean['t_sale_cook']);
 
     if (masterList.isNotEmpty) {
+      // 防重（对齐 smdcapp SaleMapper.checkMaster）：同一 saleid 已入账则整包跳过，
+      // 避免重复结账/重试导致本地表出现重复流水、交班统计翻倍
+      final Map<String, dynamic> master = masterList.first;
+      final Map<String, dynamic>? exist = await _db.queryOne(
+        'select id from t_sale_master where spid=? and sid=? and saleid=? limit 1',
+        <Object?>[
+          master['spid']?.toString() ?? '',
+          master['sid']?.toString() ?? '',
+          master['saleid']?.toString() ?? '',
+        ],
+      );
+      if (exist != null) {
+        return;
+      }
       await _db.batchInsert('t_sale_master', masterList);
     }
     if (detailList.isNotEmpty) {

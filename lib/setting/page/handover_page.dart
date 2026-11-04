@@ -199,11 +199,6 @@ class _HandoverPageState extends State<HandoverPage> {
       'logintime': _loginTime,
       'logouttime': logouttime,
       'flowno': s['flowno']?.toString() ?? '',
-      'personnum': _toDouble(s['personnum']).toInt(),
-      'serviceamt': _toDouble(s['serviceamt']),
-      'lowamt': _toDouble(s['lowamt']),
-      'amt': _toDouble(s['amt']),
-      'perpersonprice': _toDouble(s['perpersonprice']),
     };
   }
 

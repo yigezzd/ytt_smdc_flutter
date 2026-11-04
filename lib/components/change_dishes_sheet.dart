@@ -599,7 +599,7 @@ class _ZcTableCard extends StatelessWidget {
     );
   }
 
-  /// 底部状态条：状态色底 + 居中白色状态文案，挂单时显示"挂"徽章
+  /// 底部状态条：状态色底 + 居中白色状态文案，挂单时显示挂起别名（挂/等）徽章
   Widget _buildStatusBar(TableStatus status) {
     return Container(
       height: 24,
@@ -617,8 +617,8 @@ class _ZcTableCard extends StatelessWidget {
                 shape: BoxShape.circle,
                 border: Border.all(color: Colors.white),
               ),
-              child: const Text('挂',
-                  style: TextStyle(fontSize: 12, color: Colors.white)),
+              child: Text(ParamsSpUtils.getHangUpLabelName(),
+                  style: const TextStyle(fontSize: 12, color: Colors.white)),
             ),
             const SizedBox(width: 6),
           ],

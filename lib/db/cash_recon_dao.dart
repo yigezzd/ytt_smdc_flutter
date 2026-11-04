@@ -111,6 +111,9 @@ class CashReconDao {
       '        AND a.billdate <= ? '
       ' and a.machno=? '
       '        and a.opertype not in(2) '
+      // 对齐 CashReconMapper.getSummaryData：排除整单退/撤单据（billflag=2），
+      // 撤单流水、被撤原单、外卖整单退不计入消费总额/总单数/总人数
+      '        and a.billflag != 2 '
       '        ) c',
       <Object?>[spid, sid, cashid, logintime, logouttime, machno],
     );
@@ -127,11 +130,14 @@ class CashReconDao {
   }) {
     return _db.queryList(
       'select * FROM ( '
-      '        select dscamt,amt,opertype,billtype,retailamt,roundamt from t_sale_master '
-      '        where spid=?  and sid=? and status = 1 and cashid=? '
+      '        select dscamt,amt,opertype,status,billtype,retailamt,roundamt from t_sale_master '
+      '        where spid=?  and sid=? and cashid=? '
       '        and billdate >= ? '
       '        and billdate <= ? '
       '        and machno=? '
+      // 对齐 CashReconMapper.salejdklistByMachno：status=1 有效单 + 撤单记录
+      // (status=3 && opertype=3)，撤单记录供交班统计撤单笔数/金额
+      '         and (status = 1 or (status = 3 and opertype = 3)) '
       '         and opertype not in(2) '
       '        )c',
       <Object?>[spid, sid, cashid, logintime, logouttime, machno],
@@ -295,6 +301,9 @@ class CashReconDao {
       '        AND a.billdate >= ?'
       '        AND a.billdate <= ?'
       '        and a.machno=?'
+      // 对齐 CashReconMapper.getSaleProSummary：整单退/撤单据（billflag=2）的
+      // 菜品明细不计入交班菜品统计
+      '        and a.billflag != 2'
       '$excludeSql'
       '        group by b.productname,type.typeid,type.name ) c  '
       '$orderSql',
@@ -333,10 +342,39 @@ class CashReconDao {
       '        AND a.billdate  >=  ?'
       '        AND a.billdate <=  ?'
       '        and a.machno= ?'
+      // 对齐 CashReconMapper.getSaleProTypeSummary：同菜品统计，排除 billflag=2
+      '        and a.billflag != 2'
       '$excludeSql'
       '       group by type.name )c '
       '        order by c.rramt desc',
       args,
+    );
+  }
+
+  /// 退款（退菜）汇总（对齐 CashReconMapper.getReturnSummary，交班主表用）
+  ///
+  /// 只排除撤单流水（status=3 且 opertype=3）和已整单退/撤的原单（billflag=2）；
+  /// 外卖退款（opertype=3，status=1）不算撤单，其明细照常统计。
+  /// 退菜明细 rramt 为负数，金额由调用方取绝对值。
+  Future<Map<String, dynamic>?> getReturnSummary({
+    required String logintime,
+    required String logouttime,
+    required String spid,
+    required String sid,
+    required String machno,
+    required String cashid,
+  }) {
+    return _db.queryOne(
+      'select count(1) returncnt,ifnull(sum(b.rramt),0) returnamt '
+      '        from t_sale_master a,t_sale_detail b   '
+      '        where a.spid=b.spid and a.sid=b.sid and a.saleid=b.saleid   '
+      '        and a.spid=? and a.sid=? and a.cashid = ? '
+      '        AND a.billdate >= ?'
+      '        AND a.billdate <= ?'
+      ' and a.machno=?'
+      ' and not (a.status = 3 and a.opertype = 3) and a.billflag != 2'
+      ' and b.presentflag=2',
+      <Object?>[spid, sid, cashid, logintime, logouttime, machno],
     );
   }
 

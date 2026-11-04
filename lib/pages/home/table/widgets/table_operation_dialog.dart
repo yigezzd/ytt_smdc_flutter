@@ -10,10 +10,10 @@ import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/net/table_event_bus.dart';
 import 'package:flutter_deer/pages/home/table/table_models.dart';
-import 'package:flutter_deer/pages/home/table/table_repository.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
 import 'package:flutter_deer/util/permission_utils.dart';
+import 'package:flutter_deer/util/table_concurrency_guard.dart';
 import 'package:flutter_deer/util/table_data_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:sp_util/sp_util.dart';
@@ -51,35 +51,57 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
   /// 开始点菜（对齐 smdcapp OperationPopup2.ll_dishes:
   /// 若 ClockTableFlag=="1" 则先锁台再进入点菜页）
   Future<void> _onStartOrder() async {
-    // R55：进入点菜前校验桌台是否已被其他设备操作（锁台/状态已变化）
-    if (await _checkTableConflict()) {
+    if (_operating) return;
+    setState(() => _operating = true);
+
+    TableLockState lockState;
+    try {
+      // 进入前取最新状态；PC 模式额外实时询问 PC 是否正在操作
+      lockState = await TableConcurrencyGuard.fetchLockState(
+        widget.table.tableid,
+        areaid: widget.table.areaid,
+      );
+    } catch (_) {
       if (!mounted) return;
+      setState(() => _operating = false);
       await ConfirmDialog.show(
         context,
-        content: '桌台已被其他设备操作，请刷新桌台后重试',
+        content: '获取桌台状态失败，请重试',
         singleButton: true,
       );
-      if (mounted) Navigator.of(context).pop();
       return;
     }
     if (!mounted) return;
+
+    final String? conflict = _detectConflict(lockState);
+    if (conflict != null) {
+      setState(() => _operating = false);
+      await ConfirmDialog.show(
+        context,
+        content: '$conflict，请刷新桌台后重试',
+        singleButton: true,
+      );
+      if (mounted) {
+        Navigator.of(context).pop();
+        TableEventBus.fireTableChanged();
+      }
+      return;
+    }
+
     // 对齐 smdcapp: val qy_st = decodeString(QY_ST, "0"); if (qy_st == "1") st(1)
     final String clockFlag = SpUtil.getString('ClockTableFlag') ?? '0';
-    if (clockFlag == '1') {
-      // 桌台未锁时先执行锁台（已锁则跳过）
-      final int lockflag = widget.table.tmp?.lockflag ?? 0;
-      if (lockflag != 1) {
-        setState(() => _operating = true);
-        try {
-          await _doLockTable();
-        } catch (_) {
-          if (mounted) setState(() => _operating = false);
-          return; // 锁台失败则不进入点菜页
-        }
+    bool justLocked = false;
+    if (clockFlag == '1' && !TableConcurrencyGuard.isLockedBySelf(lockState)) {
+      try {
+        await _doLockTable();
+        justLocked = true;
+      } catch (_) {
         if (mounted) setState(() => _operating = false);
+        return; // 锁台失败则不进入点菜页
       }
     }
     if (!mounted) return;
+    setState(() => _operating = false);
     Navigator.of(context).pop();
     NavigatorUtils.push(
       context,
@@ -94,36 +116,24 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
         'remark': widget.table.tmp?.remark ?? '',
         'saleid': widget.table.tmp?.saleid ?? '',
         'tableJson': widget.table.toJson(),
+        'lockAcquired': justLocked,
       },
     );
   }
 
-  /// 桌台冲突检测（R55）：主设备模式下取最新桌台状态，
-  /// 若已被锁或被其他设备改成其它状态，则提示后禁止进入。
-  Future<bool> _checkTableConflict() async {
-    if (!ConnectionManager.pcAlive) return false;
-    try {
-      final List<TableInfo> list = await TableRepository.fetchTableInfoList(
-        masterDevice: true,
-        areaid: widget.table.areaid,
-        tablestatus: '',
-      );
-      TableInfo? latest;
-      for (final TableInfo t in list) {
-        if (t.tableid == widget.table.tableid) {
-          latest = t;
-          break;
-        }
-      }
-      if (latest == null) return false;
-      final int latestLock = latest.tmp?.lockflag ?? 0;
-      final int localLock = widget.table.tmp?.lockflag ?? 0;
-      if (latestLock == 1 && localLock != 1) return true;
-      final int latestStatus = latest.tmp?.tablestatus ?? 0;
-      final int localStatus = widget.table.tmp?.tablestatus ?? 0;
-      if (latestStatus != localStatus) return true;
-    } catch (_) {}
-    return false;
+  /// 返回冲突提示；null 表示可以进入点菜页。
+  String? _detectConflict(TableLockState state) {
+    if (state.locked && !TableConcurrencyGuard.isLockedBySelf(state)) {
+      return TableConcurrencyGuard.lockConflictMessage(state);
+    }
+    final int? latestStatus = state.table?.tmp?.tablestatus;
+    final int? localStatus = widget.table.tmp?.tablestatus;
+    if (latestStatus != null &&
+        localStatus != null &&
+        latestStatus != localStatus) {
+      return '桌台状态已变化';
+    }
+    return null;
   }
 
   /// 消台（对齐 smdcapp OperationPopup2.xt → TableCancelBottomDialog → TableDao.cancelTable）
@@ -201,41 +211,14 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
 
   /// 执行锁台请求（复用逻辑，供 _onLockTable 和 _onStartOrder 调用）
   Future<void> _doLockTable() async {
-    final bool useMaster = ConnectionManager.pcAlive;
-    if (useMaster) {
-      final Map<String, dynamic> tableBean = TableDataUtils.buildFullTableBean(
-        rawJson: widget.table.rawJson,
-        fallback: <String, dynamic>{
-          'tableid': widget.table.tableid,
-          'name': widget.table.name,
-          'code': widget.table.code,
-        },
-      );
-      tableBean['newtableid'] = widget.table.tableid;
-      if (tableBean['tmp'] is Map) {
-        (tableBean['tmp'] as Map<String, dynamic>)['lockflag'] = 1;
-      }
-      final Map<String, dynamic> pcMaster = <String, dynamic>{
-        'tableMasterTmpDto': tableBean,
-        'flag': 1,
-        'autoflag': 1,
-      };
-      final Map<String, dynamic> params = <String, dynamic>{
-        'tablemaster': jsonEncode(pcMaster),
-      };
-      await requestForm(
-        HttpApi.pcTableLock,
-        params,
-        masterDevice: true,
-      );
-    } else {
-      final Map<String, dynamic> params = <String, dynamic>{
-        'tableid': widget.table.tableid,
-        'lockflag': '1',
-        'autoflag': '1',
-      };
-      await requestForm(HttpApi.lockFlagTable, params);
-    }
+    final bool ok = await TableConcurrencyGuard.postTableLock(
+      tableId: widget.table.tableid,
+      lock: true,
+      tableJson: widget.table.rawJson,
+      tableName: widget.table.name,
+      autoflag: 1,
+    );
+    if (!ok) throw StateError('锁台失败');
   }
 
   /// 交押金（对齐 smdcapp JYJPopup）
@@ -570,48 +553,82 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
     return showDialog<Map<String, dynamic>>(
       context: context,
       builder: (BuildContext ctx) {
-        return AlertDialog(
-          title: const Text('选择桌台', style: TextStyle(fontSize: 16)),
-          content: SizedBox(
-            width: double.maxFinite,
-            height: 300,
-            child: GridView.builder(
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 4,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 8,
-                childAspectRatio: 1.2,
-              ),
-              itemCount: tables.length,
-              itemBuilder: (BuildContext c, int i) {
-                final Map<String, dynamic> t = tables[i];
-                final String name = t['name']?.toString() ?? t['tablename']?.toString() ?? '';
-                final String code = t['code']?.toString() ?? '';
-                return GestureDetector(
-                  onTap: () => Navigator.pop(ctx, t),
-                  child: Container(
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF7F8FA),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: const Color(0xFFE5E6EB)),
-                    ),
-                    child: Text(
-                      code.isNotEmpty ? code : name,
-                      style: const TextStyle(fontSize: 13, color: Color(0xFF333333)),
-                      textAlign: TextAlign.center,
-                    ),
+        final bool isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return Center(
+          child: DialogCard(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(
+                  '选择桌台',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                    color: isDark ? Colors.white : const Color(0xFF1D2129),
                   ),
-                );
-              },
+                ),
+                const SizedBox(height: 16),
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(ctx).size.height * 0.5,
+                  ),
+                  child: GridView.builder(
+                    shrinkWrap: true,
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 4,
+                      mainAxisSpacing: 8,
+                      crossAxisSpacing: 8,
+                      childAspectRatio: 1.2,
+                    ),
+                    itemCount: tables.length,
+                    itemBuilder: (BuildContext c, int i) {
+                      final Map<String, dynamic> t = tables[i];
+                      final String name =
+                          t['name']?.toString() ?? t['tablename']?.toString() ?? '';
+                      final String code = t['code']?.toString() ?? '';
+                      return GestureDetector(
+                        onTap: () => Navigator.pop(ctx, t),
+                        child: Container(
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? const Color(0xFF3A3A3C)
+                                : const Color(0xFFF7F8FA),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: isDark
+                                  ? const Color(0xFF4A4A4C)
+                                  : const Color(0xFFE5E6EB),
+                            ),
+                          ),
+                          child: Text(
+                            code.isNotEmpty ? code : name,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: isDark
+                                  ? Colors.white
+                                  : const Color(0xFF333333),
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: DialogActionButton(
+                    text: '取消',
+                    primary: false,
+                    onTap: () => Navigator.pop(ctx),
+                  ),
+                ),
+              ],
             ),
           ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('取消'),
-            ),
-          ],
         );
       },
     );

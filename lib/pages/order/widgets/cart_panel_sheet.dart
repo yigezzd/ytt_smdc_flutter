@@ -87,9 +87,7 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
       widget.cartItems.fold(0, (double sum, CartItem item) => sum + item.totalPrice);
 
   int get _totalCount =>
-      widget.cartItems
-          .fold<double>(0, (double sum, CartItem item) => sum + item.qtyValue)
-          .round();
+      widget.cartItems.fold<double>(0, (double sum, CartItem item) => sum + item.qtyValue).round();
 
   void _handleAdd(CartItem item) {
     // 对齐 smdcapp checkQtyValid：第N份促销拆分行不能直接加数量
@@ -273,9 +271,7 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
                             color: isDark ? Colors.white : const Color(0xFF1D2129),
-                            decoration: item.isSuspended
-                                ? TextDecoration.lineThrough
-                                : null,
+                            decoration: item.isSuspended ? TextDecoration.lineThrough : null,
                           ),
                         ),
                       ),
@@ -288,7 +284,8 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
                             : _buildTag('未称', _kBrandRed)
                       else if (item.isWeigh)
                         _buildTag('称', const Color(0xFF722ED1)),
-                      if (item.isSuspended) _buildTag('挂', const Color(0xFFFF8547)),
+                      if (item.isSuspended)
+                        _buildTag(ParamsSpUtils.getHangUpLabelName(), const Color(0xFFFF8547)),
                       if (item.isGift) _buildTag('赠', const Color(0xFF00B42A)),
                       if (item.isDiscounted) _buildTag('折', _kBrandRed),
                       // 基础促销标签（对齐 smdcapp DishesTagHelper 促标）
@@ -311,11 +308,11 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
                         ),
                       ),
                     ),
-                  if (item.remark.isNotEmpty)
+                  if (item.cartRemark.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
                       child: Text(
-                        '备注：${item.remark}',
+                        '备注：${item.cartRemark}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 11, color: Color(0xFFFF8547)),
@@ -431,9 +428,7 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
                     height: 40,
                     alignment: Alignment.center,
                     child: Text(
-                      item.qtyValue == item.qtyValue.roundToDouble()
-                          ? item.qtyValue.toInt().toString()
-                          : item.qtyValue.toString(),
+                      _formatQty(item.qtyValue),
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
@@ -480,7 +475,9 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
   Widget _buildFooter(BuildContext context, bool isDark) {
     return Container(
       padding: EdgeInsets.fromLTRB(
-        16, 12, 16,
+        16,
+        12,
+        16,
         12 + MediaQuery.of(context).padding.bottom,
       ),
       decoration: BoxDecoration(
@@ -637,7 +634,9 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
         final bool nextSuspend = !item.isSuspended;
         item.isSuspended = nextSuspend;
         _notifyChanged(item);
-        Toast.show(nextSuspend ? '已挂起' : '已取消挂起');
+        Toast.show(nextSuspend
+            ? '已${ParamsSpUtils.getHangUpName()}'
+            : '已取消${ParamsSpUtils.getHangUpName()}');
 
       case DishOperationType.bag:
         // 已打包时直接取消，和赠送/挂起保持一致。
@@ -745,7 +744,8 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
       // 全局做法：对齐 smdcapp SpecCookPopup2.initCookTab:
       // isPublicValid = SpUtils.isShowPublicCook() && publicCook.isNotEmpty()
       // 仅当"显示公共做法"开关开启时才拉取公共做法
-      final bool showPublicCook = SpUtil.getBool('setting_show_public_cook', defValue: true) ?? true;
+      final bool showPublicCook =
+          SpUtil.getBool('setting_show_public_cook', defValue: true) ?? true;
       if (showPublicCook && specData.publiccook.isEmpty) {
         final List<DishCookGroup> publicCooks = await OrderRepository.fetchPublicCooks();
         if (publicCooks.isNotEmpty) {
@@ -857,7 +857,9 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
 
   /// 格式化重量/数量（整数不带小数点，对齐 smdcapp PriceUtil.formatQty）
   static String _formatQty(double qty) {
-    if (qty == qty.roundToDouble()) return qty.toInt().toString();
-    return qty.toString();
+    if (qty == qty.roundToDouble()) {
+      return qty.toInt().toString();
+    }
+    return qty.toStringAsFixed(3).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
   }
 }

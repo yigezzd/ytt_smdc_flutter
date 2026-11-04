@@ -37,29 +37,26 @@ class GiveResult {
 
 // ==================== 打折弹窗 ====================
 
-/// 打折弹窗（对齐 smdcapp DiscountPopup）
+/// 打折弹窗（对齐 smdcapp DiscountPopup2）
 ///
-/// 快捷折扣按钮（不打折/60/70/80/90）+ 折扣输入 + 原因选择
+/// 布局顺序与 smdcapp dialog_discount_bottom 一致：折扣输入 → 快捷折扣
+/// （不打折/60/70/80/90）→ 内置数字键盘 → 打折原因 → 确定。
+/// 折扣输入框只读，统一用内置键盘输入，避免系统键盘遮挡。
 class DishDiscountSheet extends StatefulWidget {
   const DishDiscountSheet({
     super.key,
     required this.dishName,
     this.currentDiscount = 100,
-    this.showNumpad = false,
   });
 
   final String dishName;
   final double currentDiscount;
-
-  /// 是否显示内置虚拟数字键盘（整单折扣，R48）
-  final bool showNumpad;
 
   /// 显示弹窗，返回 DiscountResult 或 null（取消）
   static Future<DiscountResult?> show(
     BuildContext context, {
     required String dishName,
     double currentDiscount = 100,
-    bool showNumpad = false,
   }) {
     return showModalBottomSheet<DiscountResult>(
       context: context,
@@ -68,7 +65,6 @@ class DishDiscountSheet extends StatefulWidget {
       builder: (_) => DishDiscountSheet(
         dishName: dishName,
         currentDiscount: currentDiscount,
-        showNumpad: showNumpad,
       ),
     );
   }
@@ -78,12 +74,26 @@ class DishDiscountSheet extends StatefulWidget {
 }
 
 class _DishDiscountSheetState extends State<DishDiscountSheet> {
+  /// 数字键高度
+  static const double _kKeyHeight = 52;
+
+  /// 按键间距
+  static const double _kKeyGap = 8;
+
+  /// 清空/退格键宽度
+  static const double _kSideKeyWidth = 72;
+
   late TextEditingController _controller;
   final TextEditingController _reasonTextController = TextEditingController();
   String _selectedReason = '';
 
   /// 打折原因列表（对齐 smdcapp reasonInfo typeid=03，读取后台配置）
   List<String> _reasons = <String>[];
+
+  /// 后台是否要求打折原因必填（对齐 smdcapp SpUtils.getRemarkMustTypes 含 03）
+  bool get _reasonRequired => ParamsSpUtils.isRemarkMust('03');
+
+  bool get _hasValue => _controller.text.trim().isNotEmpty;
 
   @override
   void initState() {
@@ -142,7 +152,7 @@ class _DishDiscountSheetState extends State<DishDiscountSheet> {
     }
     // R49：后台要求打折原因必填时必须选择/输入原因（不打折除外）
     if (discount < 100 &&
-        ParamsSpUtils.isRemarkMust('03') &&
+        _reasonRequired &&
         _selectedReason.isEmpty &&
         _reasonTextController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -159,214 +169,179 @@ class _DishDiscountSheetState extends State<DishDiscountSheet> {
   @override
   Widget build(BuildContext context) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final MediaQueryData mq = MediaQuery.of(context);
 
     return Container(
+      constraints: BoxConstraints(maxHeight: mq.size.height * 0.92),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF242526) : Colors.white,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          16, 16, 16,
-          16 + MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            // 标题栏（对齐 smdcapp: "菜品打折--${title}"）
-            Row(
-              children: <Widget>[
-                Container(
-                  width: 4,
-                  height: 18,
-                  decoration: BoxDecoration(
-                    color: _kBrandRed,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '菜品打折--${widget.dishName}',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: isDark ? Colors.white : const Color(0xFF1D2129),
-                    ),
-                  ),
-                ),
-                GestureDetector(
-                  onTap: () => Navigator.of(context).pop(),
-                  child: Icon(
-                    Icons.close,
-                    size: 20,
-                    color: isDark ? Colors.white70 : const Color(0xFF86909C),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            // 快捷折扣按钮（对齐 smdcapp tv_no/tv_six/tv_seven/tv_eight/tv_nine）
-            Row(
-              children: <Widget>[
-                _buildQuickBtn('不打折', '100', isDark),
-                const SizedBox(width: 10),
-                _buildQuickBtn('60%', '60', isDark),
-                const SizedBox(width: 10),
-                _buildQuickBtn('70%', '70', isDark),
-                const SizedBox(width: 10),
-                _buildQuickBtn('80%', '80', isDark),
-                const SizedBox(width: 10),
-                _buildQuickBtn('90%', '90', isDark),
-              ],
-            ),
-            const SizedBox(height: 16),
-            // 折扣输入（整单折扣使用内置键盘，避免系统键盘遮挡）
-            TextField(
-              controller: _controller,
-              readOnly: widget.showNumpad,
-              showCursor: true,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              inputFormatters: <TextInputFormatter>[
-                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
-              ],
-              style: TextStyle(
-                fontSize: 15,
-                color: isDark ? Colors.white : const Color(0xFF1D2129),
-              ),
-              decoration: InputDecoration(
-                hintText: '请输入折扣（1~100）',
-                hintStyle: TextStyle(
-                  fontSize: 14,
-                  color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4),
-                ),
-                suffixText: '%',
-                suffixStyle: TextStyle(
-                  fontSize: 14,
-                  color: isDark ? Colors.white70 : const Color(0xFF4E5969),
-                ),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(
-                    color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
-                  ),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(
-                    color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
-                  ),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: _kBrandRed),
-                ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          // 内容区可滚动：小屏或系统键盘弹出时保证确定按钮始终可见
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  _buildTitle(isDark),
+                  const SizedBox(height: 16),
+                  _buildDiscountField(isDark),
+                  const SizedBox(height: 12),
+                  _buildQuickRow(isDark),
+                  const SizedBox(height: 14),
+                  _buildNumpad(isDark),
+                  const SizedBox(height: 18),
+                  _buildReasonSection(isDark),
+                ],
               ),
             ),
-            if (widget.showNumpad) ...[
-              const SizedBox(height: 10),
-              _buildNumpad(isDark),
-            ],
-            const SizedBox(height: 16),
-            // 打折原因（对齐 smdcapp 原因列表）
-            Text(
-              '打折原因：',
-              style: TextStyle(
-                fontSize: 13,
-                color: isDark ? const Color(0xFF999999) : const Color(0xFF86909C),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: _reasons.map((String reason) {
-                final bool selected = _selectedReason == reason;
-                return GestureDetector(
-                  onTap: () => setState(() {
-                    _selectedReason = selected ? '' : reason;
-                  }),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: selected
-                          ? _kBrandRed.withValues(alpha: 0.08)
-                          : (isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF5F5F5)),
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(
-                        color: selected
-                            ? _kBrandRed
-                            : (isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB)),
-                      ),
-                    ),
-                    child: Text(
-                      reason,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: selected
-                            ? _kBrandRed
-                            : (isDark ? Colors.white70 : const Color(0xFF333333)),
-                      ),
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: _reasonTextController,
-              style: TextStyle(
-                fontSize: 14,
-                color: isDark ? Colors.white : const Color(0xFF1D2129),
-              ),
-              decoration: InputDecoration(
-                hintText: '或输入打折原因',
-                hintStyle: TextStyle(
-                  fontSize: 14,
-                  color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4),
-                ),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(
-                    color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
-                  ),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: BorderSide(
-                    color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
-                  ),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: _kBrandRed),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            // 确定按钮
-            SizedBox(
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 16 + mq.viewInsets.bottom),
+            child: SizedBox(
               width: double.infinity,
-              height: 44,
+              height: 46,
               child: ElevatedButton(
                 onPressed: _confirm,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _kBrandRed,
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(22),
+                    borderRadius: BorderRadius.circular(23),
                   ),
                   elevation: 0,
                 ),
-                child: const Text('确定', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                child: const Text(
+                  '确定',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                ),
               ),
             ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 标题栏（对齐 smdcapp: "菜品打折--${title}"）
+  Widget _buildTitle(bool isDark) {
+    return Row(
+      children: <Widget>[
+        Container(
+          width: 4,
+          height: 18,
+          decoration: BoxDecoration(
+            color: _kBrandRed,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            '菜品打折--${widget.dishName}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: isDark ? Colors.white : const Color(0xFF1D2129),
+            ),
+          ),
+        ),
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => Navigator.of(context).pop(),
+          child: Padding(
+            padding: const EdgeInsets.only(left: 12),
+            child: Icon(
+              Icons.close,
+              size: 20,
+              color: isDark ? Colors.white70 : const Color(0xFF86909C),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 折扣输入框（只读，由内置键盘写入；对齐 smdcapp et_discount 右对齐 + %）
+  Widget _buildDiscountField(bool isDark) {
+    final Color labelColor =
+        isDark ? const Color(0xFF9AA0A6) : const Color(0xFF86909C);
+    return Container(
+      height: 54,
+      padding: const EdgeInsets.only(left: 14, right: 14),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF2E2F30) : const Color(0xFFF7F8FA),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: _hasValue
+              ? _kBrandRed.withValues(alpha: 0.45)
+              : (isDark ? const Color(0xFF3A3C3D) : const Color(0xFFEBEDF0)),
         ),
       ),
+      child: Row(
+        children: <Widget>[
+          Text('折扣', style: TextStyle(fontSize: 13, color: labelColor)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: _controller,
+              readOnly: true,
+              showCursor: false,
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w600,
+                color: isDark ? Colors.white : const Color(0xFF1D2129),
+              ),
+              decoration: InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                hintText: '请输入',
+                hintStyle: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.normal,
+                  color: isDark
+                      ? const Color(0xFF6B6F76)
+                      : const Color(0xFFC9CDD4),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            '%',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: labelColor,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 快捷折扣按钮（对齐 smdcapp tv_no/tv_six/tv_seven/tv_eight/tv_nine）
+  Widget _buildQuickRow(bool isDark) {
+    return Row(
+      children: <Widget>[
+        _buildQuickBtn('不打折', '100', isDark),
+        const SizedBox(width: _kKeyGap),
+        _buildQuickBtn('60%', '60', isDark),
+        const SizedBox(width: _kKeyGap),
+        _buildQuickBtn('70%', '70', isDark),
+        const SizedBox(width: _kKeyGap),
+        _buildQuickBtn('80%', '80', isDark),
+        const SizedBox(width: _kKeyGap),
+        _buildQuickBtn('90%', '90', isDark),
+      ],
     );
   }
 
@@ -378,27 +353,29 @@ class _DishDiscountSheetState extends State<DishDiscountSheet> {
       child: GestureDetector(
         // 对齐 smdcapp DiscountPopup：tv_no 清空后 setValue("100")，输入框显示 100
         onTap: () => setState(() => _controller.text = value),
-        child: Container(
-          height: 34,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          height: 38,
           decoration: BoxDecoration(
             color: selected
-                ? _kBrandRed.withValues(alpha: 0.10)
-                : (isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF5F5F5)),
-            borderRadius: BorderRadius.circular(6),
+                ? _kBrandRed.withValues(alpha: 0.08)
+                : (isDark ? const Color(0xFF333537) : const Color(0xFFF5F6F8)),
+            borderRadius: BorderRadius.circular(10),
             border: Border.all(
               color: selected
                   ? _kBrandRed
-                  : (isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB)),
+                  : (isDark ? const Color(0xFF3A3C3D) : const Color(0xFFEBEDF0)),
             ),
           ),
           child: Center(
             child: Text(
               label,
               style: TextStyle(
-                fontSize: 12,
+                fontSize: 13,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
                 color: selected
                     ? _kBrandRed
-                    : (isDark ? Colors.white70 : const Color(0xFF333333)),
+                    : (isDark ? Colors.white70 : const Color(0xFF4E5969)),
               ),
             ),
           ),
@@ -407,54 +384,226 @@ class _DishDiscountSheetState extends State<DishDiscountSheet> {
     );
   }
 
-  /// 内置数字键盘（R48：整单折扣页避免系统键盘遮挡并方便快速输入）
+  /// 内置数字键盘（对齐 smdcapp dialog_discount_bottom：3 列数字 +
+  /// 右侧清空/退格两个跨两行的长按键）
   Widget _buildNumpad(bool isDark) {
-    Widget key(String label, {VoidCallback? onTap, IconData? icon}) {
+    final Color digitBg =
+        isDark ? const Color(0xFF333537) : const Color(0xFFF5F6F8);
+    final Color sideBg =
+        isDark ? const Color(0xFF2E3032) : const Color(0xFFF2F3F5);
+    final Color digitColor = isDark ? Colors.white : const Color(0xFF1D2129);
+    final Color sideColor =
+        isDark ? const Color(0xFFC2C7CF) : const Color(0xFF4E5969);
+
+    Widget keyButton({
+      required Widget child,
+      required VoidCallback onTap,
+      required Color background,
+      double? width,
+      double? height,
+    }) {
+      return SizedBox(
+        width: width,
+        height: height,
+        child: Material(
+          color: background,
+          borderRadius: BorderRadius.circular(10),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: Center(child: child),
+          ),
+        ),
+      );
+    }
+
+    Widget digitKey(String label) {
       return Expanded(
-        child: GestureDetector(
-          onTap: onTap ?? () => _appendDigit(label),
-          child: Container(
-            height: 40,
-            margin: const EdgeInsets.all(3),
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF5F6F8),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Center(
-              child: icon != null
-                  ? Icon(icon, size: 18, color: isDark ? Colors.white70 : const Color(0xFF4E5969))
-                  : Text(
-                      label,
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: isDark ? Colors.white : const Color(0xFF1D2129),
-                      ),
-                    ),
+        child: keyButton(
+          height: _kKeyHeight,
+          background: digitBg,
+          onTap: () => _appendDigit(label),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w600,
+              color: digitColor,
             ),
           ),
         ),
       );
     }
 
+    Widget digitRow(List<String?> labels) {
+      return Row(
+        children: <Widget>[
+          for (int i = 0; i < labels.length; i++) ...<Widget>[
+            if (i > 0) const SizedBox(width: _kKeyGap),
+            if (labels[i] == null)
+              const Expanded(child: SizedBox(height: _kKeyHeight))
+            else
+              digitKey(labels[i]!),
+          ],
+        ],
+      );
+    }
+
+    Widget sideKey(String label, VoidCallback onTap) {
+      return keyButton(
+        width: _kSideKeyWidth,
+        height: _kKeyHeight * 2 + _kKeyGap,
+        background: sideBg,
+        onTap: onTap,
+        child: Text(
+          label,
+          style: TextStyle(fontSize: 14, color: sideColor),
+        ),
+      );
+    }
+
     return Column(
       children: <Widget>[
-        for (final List<String> row in <List<String>>[
-          <String>['1', '2', '3'],
-          <String>['4', '5', '6'],
-          <String>['7', '8', '9'],
-          <String>['.', '0', '⌫'],
-        ])
-          Row(
-            children: row
-                .map((String k) => key(
-                      k,
-                      onTap: k == '⌫' ? _backspace : null,
-                      icon: k == '⌫' ? Icons.backspace_outlined : null,
-                    ))
-                .toList(),
-          ),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Column(
+                children: <Widget>[
+                  digitRow(<String?>['1', '2', '3']),
+                  const SizedBox(height: _kKeyGap),
+                  digitRow(<String?>['4', '5', '6']),
+                ],
+              ),
+            ),
+            const SizedBox(width: _kKeyGap),
+            sideKey('清空', _clearValue),
+          ],
+        ),
+        const SizedBox(height: _kKeyGap),
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Column(
+                children: <Widget>[
+                  digitRow(<String?>['7', '8', '9']),
+                  const SizedBox(height: _kKeyGap),
+                  digitRow(<String?>[null, '0', '.']),
+                ],
+              ),
+            ),
+            const SizedBox(width: _kKeyGap),
+            sideKey('退格', _backspace),
+          ],
+        ),
       ],
+    );
+  }
+
+  /// 打折原因（对齐 smdcapp: *打折原因 + 原因列表 + 手输原因）
+  Widget _buildReasonSection(bool isDark) {
+    final Color subColor =
+        isDark ? const Color(0xFF9AA0A6) : const Color(0xFF86909C);
+    final Color borderColor =
+        isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB);
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text.rich(
+          TextSpan(
+            children: <InlineSpan>[
+              if (_reasonRequired)
+                const TextSpan(
+                  text: '*',
+                  style: TextStyle(
+                    color: _kBrandRed,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              const TextSpan(text: '打折原因：'),
+            ],
+            style: TextStyle(fontSize: 13, color: subColor),
+          ),
+        ),
+        if (_reasons.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: _kKeyGap,
+            runSpacing: _kKeyGap,
+            children:
+                _reasons.map((String reason) => _buildReasonChip(reason)).toList(),
+          ),
+        ],
+        const SizedBox(height: 12),
+        TextField(
+          controller: _reasonTextController,
+          textInputAction: TextInputAction.done,
+          style: TextStyle(
+            fontSize: 14,
+            color: isDark ? Colors.white : const Color(0xFF1D2129),
+          ),
+          decoration: InputDecoration(
+            isDense: true,
+            filled: true,
+            fillColor: isDark ? const Color(0xFF2E2F30) : const Color(0xFFF7F8FA),
+            hintText: '或输入打折原因',
+            hintStyle: TextStyle(
+              fontSize: 14,
+              color: isDark ? const Color(0xFF6B6F76) : const Color(0xFFC9CDD4),
+            ),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: borderColor),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: borderColor),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: _kBrandRed),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildReasonChip(String reason) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final bool selected = _selectedReason == reason;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => setState(() => _selectedReason = selected ? '' : reason),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        height: 36,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected
+              ? _kBrandRed
+              : (isDark ? const Color(0xFF333537) : const Color(0xFFF5F6F8)),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: selected
+                ? _kBrandRed
+                : (isDark ? const Color(0xFF3A3C3D) : const Color(0xFFEBEDF0)),
+          ),
+        ),
+        child: Text(
+          reason,
+          style: TextStyle(
+            fontSize: 13,
+            color: selected
+                ? Colors.white
+                : (isDark ? Colors.white70 : const Color(0xFF4E5969)),
+          ),
+        ),
+      ),
     );
   }
 
@@ -462,11 +611,21 @@ class _DishDiscountSheetState extends State<DishDiscountSheet> {
     final String text = _controller.text;
     setState(() {
       if (digit == '.') {
-        if (text.contains('.')) return;
-        _controller.text = text.isEmpty ? '0.' : '$text.';
+        // 空输入不允许以小数点开头
+        if (text.isEmpty || text.contains('.')) {
+          return;
+        }
+        _controller.text = '$text.';
       } else {
-        final String next = '$text$digit';
-        if (next.length > 5) return;
+        final String next = text == '0' ? digit : '$text$digit';
+        if (next.length > 5) {
+          return;
+        }
+        // 折扣上限 100%（输入过程中即可拦住超限值）
+        final double? value = double.tryParse(next);
+        if (value == null || value > 100) {
+          return;
+        }
         _controller.text = next;
       }
       _controller.selection =
@@ -476,11 +635,23 @@ class _DishDiscountSheetState extends State<DishDiscountSheet> {
 
   void _backspace() {
     final String text = _controller.text;
-    if (text.isEmpty) return;
+    if (text.isEmpty) {
+      return;
+    }
     setState(() {
       _controller.text = text.substring(0, text.length - 1);
       _controller.selection =
           TextSelection.collapsed(offset: _controller.text.length);
+    });
+  }
+
+  void _clearValue() {
+    if (_controller.text.isEmpty) {
+      return;
+    }
+    setState(() {
+      _controller.clear();
+      _controller.selection = const TextSelection.collapsed(offset: 0);
     });
   }
 }
@@ -906,6 +1077,7 @@ class DishGiveSheet extends StatefulWidget {
     required this.dishName,
     required this.maxNum,
     this.isGive = false,
+    this.showNum = true,
   });
 
   final String dishName;
@@ -916,17 +1088,26 @@ class DishGiveSheet extends StatefulWidget {
   /// 是否已赠送（已赠送时显示取消原因）
   final bool isGive;
 
+  /// 是否显示赠送数量（整单赠送对齐 smdcapp SingleGivePopup：只填原因）
+  final bool showNum;
+
   static Future<GiveResult?> show(
     BuildContext context, {
     required String dishName,
     required double maxNum,
     bool isGive = false,
+    bool showNum = true,
   }) {
     return showModalBottomSheet<GiveResult>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => DishGiveSheet(dishName: dishName, maxNum: maxNum, isGive: isGive),
+      builder: (_) => DishGiveSheet(
+        dishName: dishName,
+        maxNum: maxNum,
+        isGive: isGive,
+        showNum: showNum,
+      ),
     );
   }
 
@@ -980,22 +1161,26 @@ class _DishGiveSheetState extends State<DishGiveSheet> {
   }
 
   void _confirm() {
-    final String numText = _numController.text.trim();
-    final double? num = double.tryParse(numText);
-    if (num == null || num <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('赠送数量必须大于0'), duration: Duration(seconds: 1)),
-      );
-      return;
-    }
-    if (num > widget.maxNum) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('赠送数量不能超过${widget.maxNum}'),
-          duration: const Duration(seconds: 1),
-        ),
-      );
-      return;
+    double num = 0;
+    if (widget.showNum) {
+      final String numText = _numController.text.trim();
+      final double? parsed = double.tryParse(numText);
+      if (parsed == null || parsed <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('赠送数量必须大于0'), duration: Duration(seconds: 1)),
+        );
+        return;
+      }
+      if (parsed > widget.maxNum) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('赠送数量不能超过${widget.maxNum}'),
+            duration: const Duration(seconds: 1),
+          ),
+        );
+        return;
+      }
+      num = parsed;
     }
     final String remark = _remarkController.text.trim().isNotEmpty
         ? _remarkController.text.trim()
@@ -1045,7 +1230,7 @@ class _DishGiveSheetState extends State<DishGiveSheet> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '赠送--${widget.dishName}',
+                    '${widget.isGive ? '取消赠送' : '赠送'} - ${widget.dishName}',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -1064,54 +1249,56 @@ class _DishGiveSheetState extends State<DishGiveSheet> {
               ],
             ),
             const SizedBox(height: 16),
-            // 赠送数量（对齐 smdcapp et_num + 加减按钮）
-            Text(
-              '赠送数量：',
-              style: TextStyle(
-                fontSize: 13,
-                color: isDark ? const Color(0xFF999999) : const Color(0xFF86909C),
+            if (widget.showNum) ...<Widget>[
+              // 赠送数量（对齐 smdcapp et_num + 加减按钮）
+              Text(
+                '赠送数量：',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: isDark ? const Color(0xFF999999) : const Color(0xFF86909C),
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: <Widget>[
-                _buildNumBtn(Icons.remove, () {
-                  final double cur = double.tryParse(_numController.text) ?? 1;
-                  if (cur > 1) {
-                    _numController.text = (cur - 1).toString();
-                  }
-                }, isDark),
-                SizedBox(
-                  width: 60,
-                  child: TextField(
-                    controller: _numController,
-                    textAlign: TextAlign.center,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    inputFormatters: <TextInputFormatter>[
-                      FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,3}')),
-                    ],
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: isDark ? Colors.white : const Color(0xFF1D2129),
-                    ),
-                    decoration: const InputDecoration(
-                      border: InputBorder.none,
-                      contentPadding: EdgeInsets.symmetric(vertical: 8),
+              const SizedBox(height: 8),
+              Row(
+                children: <Widget>[
+                  _buildNumBtn(Icons.remove, () {
+                    final double cur = double.tryParse(_numController.text) ?? 1;
+                    if (cur > 1) {
+                      _numController.text = (cur - 1).toString();
+                    }
+                  }, isDark),
+                  SizedBox(
+                    width: 60,
+                    child: TextField(
+                      controller: _numController,
+                      textAlign: TextAlign.center,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      inputFormatters: <TextInputFormatter>[
+                        FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,3}')),
+                      ],
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white : const Color(0xFF1D2129),
+                      ),
+                      decoration: const InputDecoration(
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.symmetric(vertical: 8),
+                      ),
                     ),
                   ),
-                ),
-                _buildNumBtn(Icons.add, () {
-                  final double cur = double.tryParse(_numController.text) ?? 0;
-                  if (cur < widget.maxNum) {
-                    final double next = cur + 1;
-                    _numController.text = next == next.roundToDouble()
-                        ? next.toInt().toString()
-                        : next.toString();
-                  }
-                }, isDark),
-              ],
-            ),
+                  _buildNumBtn(Icons.add, () {
+                    final double cur = double.tryParse(_numController.text) ?? 0;
+                    if (cur < widget.maxNum) {
+                      final double next = cur + 1;
+                      _numController.text = next == next.roundToDouble()
+                          ? next.toInt().toString()
+                          : next.toString();
+                    }
+                  }, isDark),
+                ],
+              ),
+            ],
             const SizedBox(height: 12),
             // 赠送原因（对齐 smdcapp "*赠送原因："）
             Text(

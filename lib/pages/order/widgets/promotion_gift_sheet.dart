@@ -12,6 +12,7 @@ class PromotionGiftSelection {
     required this.qty,
     this.unit = '',
     this.typeid = '',
+    this.typename = '',
     this.sellprice = 0,
   });
 
@@ -26,6 +27,7 @@ class PromotionGiftSelection {
   final double qty;
   final String unit;
   final String typeid;
+  final String typename;
   final double sellprice;
 }
 
@@ -94,6 +96,7 @@ class _PromotionGiftSheetState extends State<PromotionGiftSheet> {
           qty: gift.selectQty,
           unit: gift.unit,
           typeid: gift.typeid,
+          typename: gift.typename,
           sellprice: gift.sellprice,
         ));
       }

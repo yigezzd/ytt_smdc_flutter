@@ -123,8 +123,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
 
   String get _lockSaleid {
     final dynamic tmp = widget.tableJson?['tmp'];
-    final String tmpSaleid =
-        tmp is Map ? tmp['saleid']?.toString() ?? '' : '';
+    final String tmpSaleid = tmp is Map ? tmp['saleid']?.toString() ?? '' : '';
     return tmpSaleid.isNotEmpty ? tmpSaleid : widget.saleid;
   }
 
@@ -216,8 +215,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     final Map<String, int> lockedByBill = <String, int>{};
     for (final CartItem item in _orderedItems) {
       if (item.specpriceflag == 7 && item.cxmbillid.isNotEmpty) {
-        lockedByBill[item.cxmbillid] =
-            (lockedByBill[item.cxmbillid] ?? 0) + item.priceQty.round();
+        lockedByBill[item.cxmbillid] = (lockedByBill[item.cxmbillid] ?? 0) + item.priceQty.round();
       }
     }
     NthDiscountManager.instance.apply(
@@ -279,8 +277,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       if (data is Map<String, dynamic>) {
         final dynamic rawList = data['detailList'];
         if (rawList is List && rawList.isNotEmpty) {
-          _orderedRawRows =
-              rawList.whereType<Map<String, dynamic>>().toList();
+          _orderedRawRows = rawList.whereType<Map<String, dynamic>>().toList();
           // 对齐 smdcapp CartGoodsModel.initOrderInfo：明细接口可能不返回
           // combflag 等商品参数，按 productid 从本地商品库回填（对齐 svn r132898）
           final Map<String, int> localCombFlags = await OrderRepository.fetchLocalCombFlags();
@@ -368,9 +365,14 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
               combaddamt: _toDouble(raw['combaddamt']) / mainQty,
               groupid: raw['combgroupid']?.toString() ?? '',
               combsetproductid: raw['combsetproductid']?.toString() ?? '',
+              specid: raw['specid']?.toString() ?? '',
               specname: _firstNonEmpty(raw['specname'], raw['spec']),
               sellprice: _toDouble(raw['sellprice']),
               unit: raw['unit']?.toString() ?? '',
+              typeid: raw['typeid']?.toString() ?? '',
+              typename: raw['typename']?.toString() ?? '',
+              productcode: raw['productcode']?.toString() ?? '',
+              curflag: _toInt(raw['curflag']),
               cookText: raw['cooktext']?.toString() ?? '',
               cookExtra: _toDouble(raw['cookaddamt']) / mainQty,
               printflag: _toInt(raw['printflag']),
@@ -445,8 +447,25 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       desc: '已下单',
       emoji: '🍜',
       gradient: const <Color>[Color(0xFFFFF1F0), Color(0xFFFFE7E3)],
+      mprice1: _toDouble(d['mprice1']),
+      mprice2: _toDouble(d['mprice2']),
+      mprice3: _toDouble(d['mprice3']),
+      dscflag: _toInt(d['dscflag']) == 0 ? 0 : 1,
+      presentflag: _toInt(d['propresentflag']),
+      chooseqtyflag: _toInt(d['chooseqtyflag']),
+      minsaleflag: _toInt(d['minsaleflag']),
+      moreeatflag: _toInt(d['moreeatflag']),
       printflag: _toInt(d['printflag']),
       labelflag: _toInt(d['labelflag']),
+      barcode: d['productcode']?.toString() ?? '',
+      code: d['productno']?.toString() ?? '',
+      inprice: _toDouble(d['costprice']),
+      servicefeeflag: _toInt(d['servicefeeflag']),
+      sellclearflag: _toInt(d['sellclearflag']),
+      stockqty: _toDouble(d['stockqty']),
+      curflag: _toInt(d['curflag']),
+      specflag: _toInt(d['specflag']),
+      cookflag: _toInt(d['cookflag']),
     );
 
     final CartItem item = CartItem(
@@ -469,9 +488,16 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     item.isCut = _toInt(d['cutflag']) == 1;
     // 团购核销菜标识（对齐 smdcapp douyinflag：为 1 时不提供单品操作）
     item.douyinflag = _toInt(d['douyinflag']);
-    // 规格与做法分列（对齐 smdcapp DetailListBean.spec / cooktext）
-    item.specName = d['spec']?.toString() ?? '';
+    // 规格与做法分列（对齐 smdcapp DetailListBean.spec/specname/specid / cooktext）
+    item.specName = (d['specname']?.toString() ?? '').isNotEmpty
+        ? d['specname'].toString()
+        : (d['spec']?.toString() ?? '');
+    item.specid = d['specid']?.toString() ?? '';
     item.cookText = d['cooktext']?.toString() ?? '';
+    // 报表字段还原（服务端未回传时保留空值，后续上传按空处理）
+    item.typeid = d['typeid']?.toString() ?? '';
+    item.typename = d['typename']?.toString() ?? '';
+    item.unit = d['unit']?.toString() ?? '';
     // 必点菜标识还原（对齐 smdcapp DetailListBean mustflag/mustType）
     item.mustflag = _toInt(d['mustflag']);
     item.mustType = _toInt(d['mustType'] ?? d['musttype']);
@@ -481,6 +507,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     item.isBag = _toInt(d['bagstatus']) == 1 || item.bagPrice > 0;
     // 基础促销还原（用于"促"标签与折后价展示）
     item.discount = _toDouble(d['discount']) == 0 ? 100 : _toDouble(d['discount']);
+    // 打折原因回显（下单时写在 operremark，旧数据兜底读 disremark）
+    if (item.discount < 100) {
+      item.discountRemark = d['operremark']?.toString() ?? d['disremark']?.toString() ?? '';
+    }
     item.jcmbillid = d['jcmbillid']?.toString() ?? '';
     item.specpriceflag = _toInt(d['specpriceflag']);
     // 场景促销赠品还原（用于下单前"已赠数量"统计，对齐 smdcapp cxmbillid/bxxpxxflag）
@@ -709,15 +739,13 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
   /// - 菜品价格变更 → 同步新价并二次确认；
   /// - 沽清剩余不足 / 库存不足 → 提示并拦截（库存提示类型=2 时允许继续）。
   Future<bool> _validateRealtimeBeforeOrder() async {
-    final List<CartItem> pending = _pendingItems
-        .where((CartItem i) => i.qtyValue > 0 && !i.isRefunded)
-        .toList();
+    final List<CartItem> pending =
+        _pendingItems.where((CartItem i) => i.qtyValue > 0 && !i.isRefunded).toList();
     if (pending.isEmpty) return true;
 
     // 1. 停用 / 改价（强制走实时接口，并把停用商品一起取回）
     try {
-      final List<DishProduct> products =
-          await OrderRepository.fetchProductsForValidation(
+      final List<DishProduct> products = await OrderRepository.fetchProductsForValidation(
         areaid: widget.tableJson?['areaid']?.toString() ?? '',
       );
       if (!mounted) return false;
@@ -785,8 +813,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
 
     // 2. 沽清实时校验
     try {
-      final List<Map<String, dynamic>> warns =
-          await OrderRepository.fetchWarnList();
+      final List<Map<String, dynamic>> warns = await OrderRepository.fetchWarnList();
       if (!mounted) return false;
       final Map<String, double> leftMap = <String, double>{};
       for (final Map<String, dynamic> w in warns) {
@@ -794,10 +821,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         if (pid.isEmpty) continue;
         // 规格级沽清由规格弹窗负责，这里只校验商品级
         if ((w['specid']?.toString() ?? '').isNotEmpty) continue;
-        final double warnqty =
-            double.tryParse(w['warnqty']?.toString() ?? '0') ?? 0;
-        final double saleqty =
-            double.tryParse(w['saleqty']?.toString() ?? '0') ?? 0;
+        final double warnqty = double.tryParse(w['warnqty']?.toString() ?? '0') ?? 0;
+        final double saleqty = double.tryParse(w['saleqty']?.toString() ?? '0') ?? 0;
         leftMap[pid] = warnqty - saleqty;
       }
       final List<String> lines = <String>[];
@@ -840,10 +865,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         if (errs != null && errs.isNotEmpty) {
           final List<String> lines = errs.map((Map<String, dynamic> e) {
             final String name = e['productname']?.toString() ?? '';
-            final String qty =
-                (e['newqty'] ?? e['qty'] ?? '').toString();
-            final String stock =
-                (e['stockqty'] ?? e['rawstockqty'] ?? '').toString();
+            final String qty = (e['newqty'] ?? e['qty'] ?? '').toString();
+            final String stock = (e['stockqty'] ?? e['rawstockqty'] ?? '').toString();
             return '$name（需$qty，剩余$stock）';
           }).toList();
           final String content = '以下菜品库存不足：\n${lines.join('\n')}';
@@ -909,8 +932,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     if (!PermissionUtils.hasPermission(PermissionUtils.appTotalDiscount)) {
       return true;
     }
-    final List<PromotionGiftActivity> activities =
-        await PromotionHelper.fetchGiftActivities(
+    final List<PromotionGiftActivity> activities = await PromotionHelper.fetchGiftActivities(
       saleid: _promoSaleid,
       amt: _promoCheckAmt,
       qty: _promoCheckQty,
@@ -962,9 +984,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     for (final PromotionGiftSelection sel in selections) {
       CartItem? exist;
       for (final CartItem item in _pendingItems) {
-        if (item.isGift &&
-            item.cxmbillid == sel.cxmbillid &&
-            item.product.id == sel.productid) {
+        if (item.isGift && item.cxmbillid == sel.cxmbillid && item.product.id == sel.productid) {
           exist = item;
           break;
         }
@@ -990,6 +1010,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       gift.cxmbillid = sel.cxmbillid;
       gift.bxxpxxflag = sel.bxxpxxflag;
       gift.typeid = sel.typeid;
+      gift.typename = sel.typename;
       gift.unit = sel.unit;
       _pendingItems.add(gift);
       // 赠品同步进点菜页购物车（两页共用购物车，对齐 smdcapp cartMode.addCart）
@@ -1008,18 +1029,15 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       return;
     }
     try {
-      final Map<String, dynamic>? tmp =
-          widget.tableJson?['tmp'] as Map<String, dynamic>?;
-      final String tableTypeId = tmp?['tabletypeid']?.toString() ??
-          widget.tableJson?['tabletypeid']?.toString() ??
-          '';
+      final Map<String, dynamic>? tmp = widget.tableJson?['tmp'] as Map<String, dynamic>?;
+      final String tableTypeId =
+          tmp?['tabletypeid']?.toString() ?? widget.tableJson?['tabletypeid']?.toString() ?? '';
       final String additionId = tmp?['additionid']?.toString() ?? '';
       final String lookupId = ParamsSpUtils.getOpenTableAmtFlag() == '0'
           ? tableTypeId
           : (additionId.isNotEmpty ? additionId : tableTypeId);
       if (lookupId.isEmpty) return;
-      final TableTypeEntity? type =
-          await TableTypeDao.instance.getByCreateid(lookupId);
+      final TableTypeEntity? type = await TableTypeDao.instance.getByCreateid(lookupId);
       if (type == null) return;
       double totalMoney = 0;
       for (final CartItem item in <CartItem>[..._pendingItems, ..._orderedItems]) {
@@ -1066,7 +1084,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       final double totalRR = _grandTotal;
       final double totalOriginal = _pendingItems.fold<double>(
               0.0, (double s, CartItem i) => s + i.product.price * i.qtyValue) +
-          _orderedItems.fold<double>(0.0, (double s, CartItem i) => s + i.product.price * i.qtyValue);
+          _orderedItems.fold<double>(
+              0.0, (double s, CartItem i) => s + i.product.price * i.qtyValue);
       final double addamt =
           _pendingItems.fold<double>(0.0, (double s, CartItem i) => s + i.extraPrice + i.bagPrice);
       final double dishAmt = totalOriginal + addamt;
@@ -1151,6 +1170,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     // 对齐 smdcapp: addamt = 做法加价金额总和（含打包费）
     final double addamt =
         _pendingItems.fold<double>(0.0, (double s, CartItem i) => s + i.extraPrice + i.bagPrice);
+    final int hangflag =
+        <CartItem>[..._pendingItems, ..._orderedItems].any((CartItem item) => item.isSuspended)
+            ? 1
+            : 0;
 
     final Map<String, dynamic> master = <String, dynamic>{
       'tableid': widget.tableId.isNotEmpty ? widget.tableId : (tmp?['tableid']?.toString() ?? '-1'),
@@ -1162,6 +1185,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       'serviceamt': 0,
       'lowamt': _rd2(_localLowAmt),
       'addamt': _rd2(addamt),
+      'hangflag': hangflag,
       'sid': sid,
       'spid': spid,
       'cashid': userId,
@@ -1300,9 +1324,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       });
     }
     if (isBag) {
-      final String bagText = bagPrice <= 0
-          ? '打包'
-          : '打包(￥${double.parse(bagPrice.toStringAsFixed(2))})';
+      final String bagText =
+          bagPrice <= 0 ? '打包' : '打包(￥${double.parse(bagPrice.toStringAsFixed(2))})';
       list.add(<String, dynamic>{
         'id': 0,
         'sid': sid,
@@ -1398,9 +1421,29 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'bxxpxxflag': item.bxxpxxflag,
         'isGive': item.isGift,
         'remark': item.remark,
+        // 打折原因下沉为敏感操作备注（对齐 smdcapp updataDis → operRemark → operremark）
+        'operremark': item.discountRemark,
         // 套餐主行 spec 置空（对齐 smdcapp OrderModel: spec=getSpecName 对套餐返回空）；
         // 套餐明细以独立子行上传，避免拼接串超出服务端 spec 60字符限制
         'spec': isComb ? '' : item.specName,
+        'specname': isComb ? '' : item.specName,
+        'specid': isComb ? '' : item.specid,
+        'specflag': item.product.specflag,
+        'cookflag': item.product.cookflag,
+        'productcode': item.product.barcode,
+        'productno': item.product.code,
+        'costprice': _rd2(item.product.inprice),
+        'servicefeeflag': item.product.servicefeeflag,
+        'chooseqtyflag': item.product.chooseqtyflag,
+        'moreeatflag': item.product.moreeatflag,
+        'sellclearflag': item.product.sellclearflag,
+        'stockqty': item.product.stockqty,
+        'curflag': item.product.curflag,
+        'minsaleflag': item.product.minsaleflag,
+        'productState': 0,
+        'addflag': newSeq > 1 ? 1 : 0,
+        'tempBillid': '',
+        'isBag': item.isBag,
         'presentflag': item.isGift ? 1 : 0,
         'hangflag': item.isSuspended ? 1 : 0,
         // 对齐 smdcapp：新下单商品 isPrint=true；挂起商品需 hashangflag=99 才会出挂起单
@@ -1451,17 +1494,24 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'urgeflag': 0,
         'callflag': 0,
         'opertype': item.opertype,
+        // 敏感操作金额（赠送/折扣/改价，对齐 smdcapp DetailListBean.operamt）
+        'operamt': _rd2(
+            item.originTotalPrice > item.totalPrice ? item.originTotalPrice - item.totalPrice : 0),
         'bagstatus': item.isBag ? 1 : 0,
-        'propresentflag': item.isGift ? 1 : 0,
+        // 档案是否可赠送（对齐 smdcapp DetailListBean.propresentflag = 商品 presentflag）
+        'propresentflag': item.product.presentflag,
         'unit': item.unit,
         'typeid': item.typeid,
         'typename': item.typename,
-        'specid': '',
         'cooktext': _detailCookText(item),
         'eattext': '',
         'createid': userId,
         'createname': userName,
-        'presentid': '',
+        // 赠送商品标识（对齐 smdcapp productToDetailBean：presentid/name/price = 赠品本身）
+        'presentid': item.isGift ? item.product.id : '',
+        'presentname': item.isGift ? item.product.name : '',
+        'presentprice':
+            item.isGift ? _rd2(item.customPrice ?? (item.product.price - item.unitCookExtra)) : 0,
         'mprice1': item.product.mprice1,
         'mprice2': item.product.mprice2,
         'mprice3': item.product.mprice3,
@@ -1538,8 +1588,12 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'discount': item.discount,
         'spec': c.specname,
         'specname': c.specname,
-        'specflag': c.specname.isNotEmpty ? 1 : 0,
-        'specid': '',
+        'specflag': c.specid.isNotEmpty || c.specname.isNotEmpty ? 1 : 0,
+        'specid': c.specid,
+        'productcode': c.productcode,
+        'typeid': c.typeid,
+        'typename': c.typename,
+        'curflag': c.curflag,
         'combflag': 0,
         'combid': mainOnlyId,
         'combproductid': item.product.id,
@@ -1576,12 +1630,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'callflag': 0,
         'opertype': 0,
         'bagstatus': 0,
-        'propresentflag': item.isGift ? 1 : 0,
+        'propresentflag': item.product.presentflag,
         // 厨打/杯贴标记（对齐 smdcapp CombHelper 明细 printflag/labelflag）
         'printflag': c.printflag,
         'labelflag': c.labelflag,
-        'typeid': '',
-        'typename': '',
         'eattext': '',
         'createid': userId,
         'createname': userName,
@@ -1926,7 +1978,13 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'spid': spid,
         'sid': sid,
         'productid': item.product.id,
+        // 商品编号/条码（对齐 smdcapp DetailListBean.productcode/productno）
+        'productcode': item.product.barcode,
+        'productno': item.product.code,
         'productname': item.displayName,
+        'typeid': item.typeid,
+        'typename': item.typename,
+        'unit': item.unit,
         'qty': item.isWeigh ? item.weighNum : item.qtyValue,
         // 改价/改名改价后以改后价作为 sellprice 上传（对齐 smdcapp ChangeName/ChangePricePopup
         // 同步更新 sellprice），否则订单重算会回落到目录价，与单据/桌台记录金额不一致
@@ -1943,10 +2001,23 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'bxxpxxflag': item.bxxpxxflag,
         'isGive': item.isGift,
         'remark': item.remark,
+        // 打折原因下沉为敏感操作备注（对齐 smdcapp updataDis → operRemark → operremark）
+        'operremark': item.discountRemark,
         // 套餐主行 spec 置空，明细以独立子行上传（对齐 smdcapp，避免 spec 超长）
         'spec': isComb ? '' : item.specName,
+        'specname': isComb ? '' : item.specName,
+        'specid': isComb ? '' : item.specid,
+        'specflag': item.product.specflag,
+        'cookflag': item.product.cookflag,
         'cooktext': _detailCookText(item),
         'presentflag': item.isGift ? 1 : 0,
+        // 赠送商品标识（对齐 smdcapp productToDetailBean）
+        'presentid': item.isGift ? item.product.id : '',
+        'presentname': item.isGift ? item.product.name : '',
+        'presentprice':
+            item.isGift ? _rd2(item.customPrice ?? (item.product.price - item.unitCookExtra)) : 0,
+        // 档案是否可赠送（对齐 smdcapp DetailListBean.propresentflag = 商品 presentflag）
+        'propresentflag': item.product.presentflag,
         'hangflag': item.isSuspended ? 1 : 0,
         // 对齐 smdcapp：新下单商品 isPrint=true；挂起商品需 hashangflag=99 才会出挂起单
         'isPrint': true,
@@ -1955,6 +2026,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'weighnum': item.weighNum,
         'cookaddamt': _rd2(_detailCookAddAmt(item)),
         'bagamt': _rd2(item.bagPrice),
+        'isBag': item.isBag,
         'bagstatus': item.isBag ? 1 : 0,
         // 厨打/杯贴标记（对齐 smdcapp productToDetailBean: printflag/labelflag）
         'printflag': item.product.printflag,
@@ -1971,20 +2043,49 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'tableid': widget.tableId,
         'serverid': serverId,
         'servername': widget.serverName,
+        // 商品档案字段（对齐 smdcapp DetailListBean，报表分类/成本/服务费等依赖）
+        'dscflag': item.product.dscflag,
+        'costprice': _rd2(item.product.inprice),
+        'servicefeeflag': item.product.servicefeeflag,
+        'chooseqtyflag': item.product.chooseqtyflag,
+        'moreeatflag': item.product.moreeatflag,
+        'sellclearflag': item.product.sellclearflag,
+        'stockqty': item.product.stockqty,
+        'curflag': item.product.curflag,
+        'minsaleflag': item.product.minsaleflag,
+        'productState': 0,
+        'addflag': newSeq > 1 ? 1 : 0,
+        'tempBillid': '',
+        // 临时菜字段（对齐 smdcapp DetailListBean tpdish*）
+        'tpdishflag': item.tpdishflag,
+        'tpdscflag': item.tpdscflag,
+        'tpdishid': item.tpdishid,
+        'tpdishidzd': item.tpdishidzd,
+        // 团券核销字段（对齐 smdcapp DetailListBean douyinflag/querytoken）
+        'douyinflag': item.douyinflag,
+        'querytoken': item.querytoken,
         // 必点菜字段（对齐 smdcapp DetailListBean mustflag/mustType）
         'mustflag': item.mustflag,
         'mustType': item.mustType,
+        'subqty': 0,
+        'urgeflag': 0,
+        'callflag': 0,
         // R8/R46：敏感操作标识（赠送3/折扣4/改价5），主设备报表同样依赖
         'opertype': item.opertype,
-        'operamt': _rd2(item.originTotalPrice > item.totalPrice
-            ? item.originTotalPrice - item.totalPrice
-            : 0),
+        'operamt': _rd2(
+            item.originTotalPrice > item.totalPrice ? item.originTotalPrice - item.totalPrice : 0),
         // 对齐 smdcapp DetailListBean: onlyid/seq/combflag 必传
         'onlyid': onlyid,
         'seq': newSeq,
         'combflag': isComb ? 1 : 0,
         if (isComb) 'combid': onlyid,
         if (isComb) 'combaddamt': _rd2(_comboAddTotal(item)),
+        'mprice1': item.product.mprice1,
+        'mprice2': item.product.mprice2,
+        'mprice3': item.product.mprice3,
+        'createid': userId,
+        'createname': userName,
+        'eattext': '',
         // 做法明细（厨打/杯贴打印与金额核算依赖，对齐 smdcapp DetailListBean.cooklist）
         'cooklist': _buildCookList(
           cooks: item.cooks,
@@ -2017,8 +2118,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
 
   /// 记录敏感操作日志（R24）
   void _logAction(String memo) {
-    final Map<String, dynamic>? tmp =
-        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final Map<String, dynamic>? tmp = widget.tableJson?['tmp'] as Map<String, dynamic>?;
     OrderLogUtils.instance.saveOrderLog(
       saleid: widget.saleid,
       billno: tmp?['localbillno']?.toString() ?? '',
@@ -2213,31 +2313,14 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
   /// 锁台/解锁台（对齐 smdcapp lockFlagTable，lockflag=1锁/0解）
   Future<void> _lockOrUnlockTable({required bool lock}) async {
     try {
-      final bool useMaster = ConnectionManager.pcAlive;
-      if (useMaster) {
-        final Map<String, dynamic> tableBean =
-            Map<String, dynamic>.from(widget.tableJson ?? <String, dynamic>{});
-        tableBean['newtableid'] = widget.tableId;
-        if (tableBean['tmp'] is Map) {
-          (tableBean['tmp'] as Map<String, dynamic>)['lockflag'] = lock ? 1 : 0;
-        }
-        final Map<String, dynamic> pcMaster = <String, dynamic>{
-          'tableMasterTmpDto': tableBean,
-          'flag': lock ? 1 : 0,
-          'autoflag': 0,
-        };
-        await requestForm(
-          HttpApi.pcTableLock,
-          <String, dynamic>{'tablemaster': jsonEncode(pcMaster)},
-          masterDevice: true,
-        );
-      } else {
-        await requestForm(HttpApi.lockFlagTable, <String, dynamic>{
-          'tableid': widget.tableId,
-          'lockflag': lock ? '1' : '0',
-          'autoflag': '0',
-        });
-      }
+      final bool ok = await TableConcurrencyGuard.postTableLock(
+        tableId: widget.tableId,
+        lock: lock,
+        tableJson: widget.tableJson,
+        tableName: widget.tableName,
+        autoflag: 0,
+      );
+      if (!ok) throw StateError('锁台失败');
       if (!mounted) return;
       Toast.show(lock ? '锁台成功' : '解锁台成功');
       TableEventBus.fireTableChanged();
@@ -2254,8 +2337,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     }
     await _calcLocalLowAmt();
     if (!mounted) return;
-    final double originTotal = _pendingItems.fold<double>(
-        0, (double s, CartItem i) => s + i.originTotalPrice);
+    final double originTotal =
+        _pendingItems.fold<double>(0, (double s, CartItem i) => s + i.originTotalPrice);
     final double payAmt = _rd2(_grandTotal + _localLowAmt);
     NavigatorUtils.push(
       context,
@@ -2309,7 +2392,6 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     final DiscountResult? result = await DishDiscountSheet.show(
       context,
       dishName: '整单折扣',
-      showNumpad: true,
     );
     if (result == null || !mounted) return;
     final double discount = result.discount;
@@ -2318,8 +2400,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       return;
     }
     // R22：已参加满赠活动（含赠品）时不可再整单折扣
-    final bool hasFullGift = <CartItem>[..._pendingItems, ..._orderedItems]
-        .any((CartItem i) => i.bxxpxxflag == 4);
+    final bool hasFullGift =
+        <CartItem>[..._pendingItems, ..._orderedItems].any((CartItem i) => i.bxxpxxflag == 4);
     if (hasFullGift) {
       Toast.show('已参加满赠活动，不能再操作整单折扣');
       return;
@@ -2691,16 +2773,13 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       // 二次称重标签（对齐 smdcapp DishesTagHelper：isReweigh && weighflag==1，
       // confirmqty==0 显示"未称"红色，否则"已称"绿色）
       if (ParamsSpUtils.isReweigh() && item.isWeigh)
-        item.confirmQty > 0
-            ? _tag('已称', const Color(0xFF00C15A))
-            : _tag('未称', _kBrandRed),
+        item.confirmQty > 0 ? _tag('已称', const Color(0xFF00C15A)) : _tag('未称', _kBrandRed),
       if (item.mustflag == 1) _tag('必', _kBrandRed),
       if (item.isPromotion) _tag('促', _kBrandRed),
       if (item.isGift) _tag('赠', const Color(0xFFFF8547)),
       // 折扣标签（对齐 smdcapp DishesTagHelper：绿色 + "N折"/"N.5折"）
-      if (item.isDiscounted)
-        _tag('${_formatPrice(item.discount / 10)}折', const Color(0xFF00C15A)),
-      if (item.isSuspended) _tag('挂', const Color(0xFF999999)),
+      if (item.isDiscounted) _tag('${_formatPrice(item.discount / 10)}折', const Color(0xFF00C15A)),
+      if (item.isSuspended) _tag(ParamsSpUtils.getHangUpLabelName(), const Color(0xFF999999)),
       if (item.isBag) _tag('包', const Color(0xFF0055FF)),
     ];
     // 赠送/打折/促销时展示划线原价（整份加价只计一次）
@@ -2743,12 +2822,12 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                       ),
                   ],
                 ),
-                if (skuDesc.isNotEmpty || item.remark.isNotEmpty) ...<Widget>[
+                if (skuDesc.isNotEmpty || item.cartRemark.isNotEmpty) ...<Widget>[
                   const SizedBox(height: 2),
                   Text(
                     [
                       if (skuDesc.isNotEmpty) skuDesc,
-                      if (item.remark.isNotEmpty) '备注:${item.remark}'
+                      if (item.cartRemark.isNotEmpty) '备注:${item.cartRemark}'
                     ].join(' | '),
                     style: const TextStyle(fontSize: 11, color: Color(0xFFC9CDD4)),
                     maxLines: 1,
@@ -2860,19 +2939,19 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
             GestureDetector(
               onTap: () => isOrdered ? _showOrderedItemMenu(item) : _showItemMenu(item),
               child: Container(
-                width: 28,
-                height: 28,
+                width: 36,
+                height: 36,
                 decoration: BoxDecoration(
                   color: const Color(0xFFF7F8FA),
-                  borderRadius: BorderRadius.circular(14),
+                  borderRadius: BorderRadius.circular(18),
                 ),
-                child: const Icon(Icons.more_horiz, size: 16, color: Color(0xFF86909C)),
+                child: const Icon(Icons.more_horiz, size: 20, color: Color(0xFF86909C)),
               ),
             ),
         ],
       ),
     );
-    return Column(
+    final Widget itemContent = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         mainRow,
@@ -2915,6 +2994,13 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
           const SizedBox(height: 8),
         ],
       ],
+    );
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: editable || isOrdered
+          ? () => isOrdered ? _showOrderedItemMenu(item) : _showItemMenu(item)
+          : null,
+      child: itemContent,
     );
   }
 
@@ -3145,8 +3231,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
             item.discount = result.discount;
             item.discountRemark = result.discount >= 100 ? '' : result.remark;
             // R46：Web 订单明细报表按 opertype 显示折扣标识
-            item.opertype =
-                result.discount > 0 && result.discount < 100 ? 4 : 0;
+            item.opertype = result.discount > 0 && result.discount < 100 ? 4 : 0;
           });
         }
 
@@ -3491,7 +3576,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: <Widget>[
-                        const Text('出品分单', style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
+                        const Text('出品分单',
+                            style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
                         const SizedBox(width: 2),
                         Switch(
                           value: _printCpdBranch,

@@ -33,6 +33,10 @@ class MqService {
   /// 锁台事件流（对齐 smdcapp LockTableEvent，retcode 8/10/11 中的锁台消息）
   Stream<Map<String, dynamic>> get onLockTable => impl.lockTableStream;
 
+  /// 最近一次锁台事件的操作人（saleid → operid/opername/machno），用于入口校验兜底
+  Map<String, String>? lockOwnerForSaleid(String saleid) =>
+      impl.lockOwnerForSaleid(saleid);
+
   /// 扫码点餐接单事件流（对齐 smdcapp retcode=9）
   Stream<Map<String, dynamic>> get onScanOrder => impl.scanOrderStream;
 

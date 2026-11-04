@@ -65,6 +65,38 @@ class AuxBusinessService {
     }
   }
 
+  /// 发送会员支付短信验证码（对齐 smdcapp SettleApi.getCode，smstype=7 会员支付密码）
+  Future<bool> sendVipPaySmsCode(String mobile) async {
+    try {
+      await requestForm(HttpApi.getCode, <String, dynamic>{
+        'phone': mobile,
+        'smstype': '7',
+      });
+      return true;
+    } catch (e) {
+      Log.e('AuxBusinessService.sendVipPaySmsCode error: $e');
+      return false;
+    }
+  }
+
+  /// 校验会员支付短信验证码（对齐 smdcapp SettleApi.checkcode，smstype=7）
+  Future<bool> verifyVipPaySmsCode({
+    required String mobile,
+    required String code,
+  }) async {
+    try {
+      await requestForm(HttpApi.checkCode, <String, dynamic>{
+        'phone': mobile,
+        'code': code,
+        'smstype': '7',
+      }, showError: false);
+      return true;
+    } catch (e) {
+      Log.e('AuxBusinessService.verifyVipPaySmsCode error: $e');
+      return false;
+    }
+  }
+
   // ──────────── 预订报表/冲突检测（对齐 smdcapp YDApi）─────────────────
 
   /// 预订冲突检测（对齐 smdcapp YDApi.toTableAboutTime）

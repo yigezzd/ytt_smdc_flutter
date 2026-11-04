@@ -51,6 +51,7 @@ class SpecCookSubmit {
   const SpecCookSubmit({
     required this.quantity,
     required this.specName,
+    this.specid = '',
     required this.cookText,
     required this.unitPrice,
     required this.wholeExtra,
@@ -59,8 +60,11 @@ class SpecCookSubmit {
     this.cooks = const <SelectedCook>[],
   });
 
-  final int quantity;
+  final double quantity;
   final String specName;
+
+  /// 所选规格ID（对齐 smdcapp DetailListBean.specid）
+  final String specid;
   final String cookText;
   final double unitPrice;
   final double wholeExtra;
@@ -194,7 +198,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
   late Animation<double> _slideAnimation;
 
   /// 数量（加购模式）
-  int _quantity = 1;
+  double _quantity = 1;
 
   /// 当前做法 Tab：0=私有做法 1=全局做法（修改模式）
   int _cookTab = 0;
@@ -216,6 +220,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
       }
       _preselectCooks();
     } else {
+      _quantity = widget.product?.startQty ?? 1;
       _initDefaultSelection();
     }
   }
@@ -281,8 +286,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
             for (final DishCook c in g.cooklist) {
               if (qtyByCode.containsKey(c.code)) {
                 c.isCheck = true;
-                c.selectCookNum =
-                    c.editqtyflag == 1 ? (qtyByCode[c.code] ?? 1) : 1;
+                c.selectCookNum = c.editqtyflag == 1 ? (qtyByCode[c.code] ?? 1) : 1;
                 matched = true;
               }
             }
@@ -342,6 +346,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
         }
       }
     }
+
     sum(widget.specData.cookdata);
     if (_isModify) sum(widget.specData.publiccook);
     return total;
@@ -360,6 +365,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
         }
       }
     }
+
     sum(widget.specData.cookdata);
     if (_isModify) sum(widget.specData.publiccook);
     return total;
@@ -401,6 +407,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
         }
       }
     }
+
     collect(widget.specData.cookdata);
     if (_isModify) collect(widget.specData.publiccook);
     return parts.join('、');
@@ -429,9 +436,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
             cupstickercode: c.cupstickercode,
             price: c.price,
             ptype: c.ptype,
-            qty: c.editqtyflag == 1
-                ? (c.selectCookNum > 1 ? c.selectCookNum : 1)
-                : 1,
+            qty: c.editqtyflag == 1 ? (c.selectCookNum > 1 ? c.selectCookNum : 1) : 1,
           ));
         }
       }
@@ -506,8 +511,8 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
         cook.selectCookNum += 1;
       } else {
         // 多选模式
-        final int selectedCount = cooks.fold(
-            0, (int sum, DishCook c) => c.isCheck ? sum + c.selectCookNum : sum);
+        final int selectedCount =
+            cooks.fold(0, (int sum, DishCook c) => c.isCheck ? sum + c.selectCookNum : sum);
 
         if (cook.maximumflag == 1 && cook.editqtyflag == 1) {
           if (selectedCount >= cook.maximum) {
@@ -517,9 +522,8 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
         } else if (cook.maximumflag == 1 && cook.editqtyflag != 1) {
           // 超出上限时取消最早选中的
           if (selectedCount >= cook.maximum && !cook.isCheck) {
-            final DishCook firstChecked = cooks.firstWhere(
-                (DishCook c) => c.isCheck && c != cook,
-                orElse: () => cook);
+            final DishCook firstChecked =
+                cooks.firstWhere((DishCook c) => c.isCheck && c != cook, orElse: () => cook);
             if (firstChecked != cook) {
               firstChecked.isCheck = false;
               firstChecked.selectCookNum = 0;
@@ -559,8 +563,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
   /// 校验必选做法组（对齐 ShoppingCartUtil.isSatisfyCart）
   /// 加购模式校验 cookdata；修改模式校验当前 Tab 分组
   String _validateCooks() {
-    final List<DishCookGroup> groups =
-        _isModify ? _activeGroups : widget.specData.cookdata;
+    final List<DishCookGroup> groups = _isModify ? _activeGroups : widget.specData.cookdata;
     for (final DishCookGroup group in groups) {
       if (group.cooklist.isEmpty) continue;
       final DishCook first = group.cooklist[0];
@@ -587,10 +590,8 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
     }
     // 沽清数量校验（对齐 smdcapp SpecCookPopup2 数量加号：按选中规格粒度校验库存）
     final DishSpec? checkSpec = _checkedSpec;
-    final int clearFlag =
-        checkSpec != null ? checkSpec.sellclearflag : product.sellclearflag;
-    final double stockQty =
-        checkSpec != null ? checkSpec.stockqty : product.stockqty;
+    final int clearFlag = checkSpec != null ? checkSpec.sellclearflag : product.sellclearflag;
+    final double stockQty = checkSpec != null ? checkSpec.stockqty : product.stockqty;
     if (clearFlag == 1 && _quantity > stockQty) {
       Toast.show('沽清数量不足');
       return;
@@ -606,6 +607,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
     final SpecCookSubmit data = SpecCookSubmit(
       quantity: _quantity,
       specName: _specName,
+      specid: _checkedSpec?.specid ?? '',
       cookText: _cookText,
       unitPrice: _unitPrice,
       wholeExtra: _wholeExtraPrice,
@@ -646,8 +648,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
   @override
   Widget build(BuildContext context) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    final double maxHeight =
-        MediaQuery.of(context).size.height * (_isModify ? 0.8 : 0.85);
+    final double maxHeight = MediaQuery.of(context).size.height * (_isModify ? 0.8 : 0.85);
 
     final Widget sheet = Container(
       constraints: BoxConstraints(maxHeight: maxHeight),
@@ -689,9 +690,8 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
 
   Widget _buildAddHeader(bool isDark) {
     final DishProduct product = widget.product!;
-    final String imgUrl = product.imageurl.startsWith('http')
-        ? product.imageurl
-        : '$_kImgAddress${product.imageurl}';
+    final String imgUrl =
+        product.imageurl.startsWith('http') ? product.imageurl : '$_kImgAddress${product.imageurl}';
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 16, 8, 12),
@@ -954,8 +954,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
           const SizedBox(height: 16),
         ],
         if (widget.specData.cookdata.isNotEmpty)
-          ...widget.specData.cookdata.map(
-              (DishCookGroup group) => _buildCookGroup(group, isDark)),
+          ...widget.specData.cookdata.map((DishCookGroup group) => _buildCookGroup(group, isDark)),
         const SizedBox(height: 12),
         _buildQuantityRow(isDark),
         const SizedBox(height: 16),
@@ -983,8 +982,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
             ),
           )
         else
-          ..._activeGroups.map(
-              (DishCookGroup group) => _buildCookGroup(group, isDark)),
+          ..._activeGroups.map((DishCookGroup group) => _buildCookGroup(group, isDark)),
         const SizedBox(height: 16),
       ],
     );
@@ -1038,10 +1036,12 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
                       ? (isDark ? const Color(0xFF2A2B2C) : const Color(0xFFF7F8FA))
                       : (isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF5F5F5)),
               borderRadius: BorderRadius.circular(8),
-              border: checked ? null : Border.all(
-                color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB),
-                width: 0.5,
-              ),
+              border: checked
+                  ? null
+                  : Border.all(
+                      color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB),
+                      width: 0.5,
+                    ),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1069,7 +1069,8 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
                           : '已售罄',
                       style: TextStyle(
                         fontSize: 10,
-                        color: checked ? Colors.white.withValues(alpha: 0.8) : const Color(0xFFC9CDD4),
+                        color:
+                            checked ? Colors.white.withValues(alpha: 0.8) : const Color(0xFFC9CDD4),
                       ),
                     ),
                   ),
@@ -1144,9 +1145,8 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
     final String priceStr = cook.price == cook.price.roundToDouble()
         ? cook.price.toInt().toString()
         : cook.price.toStringAsFixed(2);
-    final String label = cook.ptype == 0 || cook.price <= 0
-        ? cook.cookname
-        : '${cook.cookname}(\uFFE5$priceStr)';
+    final String label =
+        cook.ptype == 0 || cook.price <= 0 ? cook.cookname : '${cook.cookname}(\uFFE5$priceStr)';
 
     return GestureDetector(
       onTap: () => _onCookTap(group, cook),
@@ -1298,6 +1298,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
   /// 数量行（加购模式）
   Widget _buildQuantityRow(bool isDark) {
     final DishProduct product = widget.product!;
+    final double startQty = product.startQty;
     return Row(
       children: <Widget>[
         Container(
@@ -1321,7 +1322,11 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
         // 减
         GestureDetector(
           onTap: () {
-            if (_quantity > 1) setState(() => _quantity--);
+            if (_quantity <= startQty) {
+              return;
+            }
+            final double next = double.parse((_quantity - product.addQty).toStringAsFixed(3));
+            setState(() => _quantity = next < startQty ? startQty : next);
           },
           child: Container(
             width: 26,
@@ -1329,7 +1334,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
-                color: _quantity > 1
+                color: _quantity > startQty
                     ? (isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4))
                     : (isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB)),
                 width: 1.2,
@@ -1338,7 +1343,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
             child: Icon(
               Icons.remove,
               size: 13,
-              color: _quantity > 1
+              color: _quantity > startQty
                   ? (isDark ? Colors.white70 : const Color(0xFF86909C))
                   : const Color(0xFFC9CDD4),
             ),
@@ -1348,7 +1353,7 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
           width: 44,
           child: Center(
             child: Text(
-              '$_quantity',
+              _formatQty(_quantity),
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.bold,
@@ -1360,18 +1365,19 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
         // 加
         GestureDetector(
           onTap: () {
+            final double next = double.parse((_quantity + product.addQty).toStringAsFixed(3));
             // 库存校验（对齐 smdcapp）
             final DishSpec? spec = _checkedSpec;
             if (product.specflag == 1 && spec != null) {
-              if (_quantity >= spec.stockqty && spec.sellclearflag == 1) {
-                Toast.show('最大数量${spec.stockqty == spec.stockqty.roundToDouble() ? spec.stockqty.toInt() : spec.stockqty}');
+              if (next > spec.stockqty && spec.sellclearflag == 1) {
+                Toast.show('最大数量${_formatQty(spec.stockqty)}');
                 return;
               }
-            } else if (_quantity >= product.stockqty && product.sellclearflag == 1) {
-              Toast.show('最大数量${product.stockqty == product.stockqty.roundToDouble() ? product.stockqty.toInt() : product.stockqty}');
+            } else if (next > product.stockqty && product.sellclearflag == 1) {
+              Toast.show('最大数量${_formatQty(product.stockqty)}');
               return;
             }
-            setState(() => _quantity++);
+            setState(() => _quantity = next);
           },
           child: Container(
             width: 26,
@@ -1395,7 +1401,9 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
 
     return Container(
       padding: EdgeInsets.fromLTRB(
-        16, 10, 16,
+        16,
+        10,
+        16,
         10 + MediaQuery.of(context).padding.bottom,
       ),
       decoration: BoxDecoration(
@@ -1524,7 +1532,9 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
   Widget _buildModifyBottomBar(bool isDark) {
     return Container(
       padding: EdgeInsets.fromLTRB(
-        16, 10, 16,
+        16,
+        10,
+        16,
         14 + MediaQuery.of(context).padding.bottom,
       ),
       decoration: BoxDecoration(
@@ -1584,6 +1594,13 @@ class _SpecCookSheetState extends State<SpecCookSheet> with SingleTickerProvider
         ],
       ),
     );
+  }
+
+  static String _formatQty(double qty) {
+    if (qty == qty.roundToDouble()) {
+      return qty.toInt().toString();
+    }
+    return qty.toStringAsFixed(3).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
   }
 
   /// 价格格式化（整数不带小数点）

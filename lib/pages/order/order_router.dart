@@ -44,6 +44,7 @@ class OrderRouter implements IRouterProvider {
         saleid: args['saleid'] as String? ?? '',
         tableJson: args['tableJson'] as Map<String, dynamic>?,
         fastMode: args['fastMode'] as bool? ?? false,
+        lockAcquired: args['lockAcquired'] as bool? ?? false,
       );
     }));
 

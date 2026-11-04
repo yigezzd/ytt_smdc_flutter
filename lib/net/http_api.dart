@@ -357,6 +357,14 @@ class HttpApi {
   /// 参数：vipid, vipno, payid, payname, saleid, salename, billno, payamt
   static const String jkCardPay = '/jk-card/pay';
 
+  /// 云服务-获取短信验证码（对齐 smdcapp SettleApi /YttSvr/app/getcode）
+  /// 参数：phone, smstype（7=会员支付密码）
+  static const String getCode = '/getcode';
+
+  /// 云服务-校验短信验证码（对齐 smdcapp SettleApi /YttSvr/app/checkcode）
+  /// 参数：phone, code, smstype
+  static const String checkCode = '/checkcode';
+
   // ==================== 团购核销接口 ====================
 
   /// 云服务-获取抖音/美团核销券信息（对齐 smdcapp /YttSvr/douyin/getDyCoupunInfo）

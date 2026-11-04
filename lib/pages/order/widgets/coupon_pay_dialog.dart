@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_deer/components/confirm_dialog.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
+import 'package:flutter_deer/util/coupon_amount_utils.dart';
 import 'package:flutter_deer/util/device_utils.dart';
+import 'package:flutter_deer/util/log_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:flutter_deer/widgets/barcode_scanner_page.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -14,13 +16,20 @@ const Color _kBrandRed = Color(0xFFE63F31);
 
 /// 优惠券核销结果
 class CouponPayResult {
-  const CouponPayResult({required this.code, required this.coupon});
+  const CouponPayResult({
+    required this.code,
+    required this.coupon,
+    required this.payAmount,
+  });
 
   /// 券号（输入或扫码所得）
   final String code;
 
   /// 核销接口返回的券信息（对齐 smdcapp YhqBean：faceamt/fid/fno/name 等）
   final Map<String, dynamic> coupon;
+
+  /// 本次可抵扣金额（现金券取面额，项目券/礼品券取适用商品金额）
+  final double payAmount;
 }
 
 /// 优惠券支付弹窗（对齐 smdcapp TicketNumSearchPopup）
@@ -108,14 +117,37 @@ class _CouponPayDialogState extends State<CouponPayDialog> {
       if (!mounted) return;
       final Map<String, dynamic>? coupon =
           _parseCoupon(resp['data'] ?? resp['Data']);
-      if (coupon == null || _toDouble(coupon['faceamt']) <= 0) {
-        Toast.show('券号无效或面额为0');
+      if (coupon == null) {
+        final bool revoked = await _revokeVerifiedCoupon();
+        if (mounted) {
+          Toast.show(revoked ? '券信息异常，已自动撤销核销' : '券信息异常，撤销核销失败，请联系管理员');
+        }
+        return;
+      }
+      // 项目券/礼品券无面额（faceamt=0），按适用商品金额抵扣（对齐 smdcapp dealCouponAmt）；
+      // 券已核销成功，不可抵扣时必须先反核销，避免券被白白消耗
+      final double payAmount = calcCouponDeductAmount(
+        coupon,
+        _parseDetails(widget.projectlist),
+      );
+      if (payAmount <= 0) {
+        final bool revoked = await _revokeVerifiedCoupon();
+        if (mounted) {
+          Toast.show(revoked
+              ? '该券不适用于当前订单，已自动撤销核销'
+              : '该券不适用于当前订单，撤销核销失败，请联系管理员');
+        }
         return;
       }
       // 对齐 smdcapp：核销成功提示接口 retmsg
       final String retmsg = resp['retmsg']?.toString() ?? '';
       if (retmsg.isNotEmpty) Toast.show(retmsg);
-      Navigator.of(context).pop(CouponPayResult(code: code, coupon: coupon));
+      if (!mounted) return;
+      Navigator.of(context).pop(CouponPayResult(
+        code: code,
+        coupon: coupon,
+        payAmount: payAmount,
+      ));
     } catch (_) {
       // 核销失败：requestForm 已提示 retmsg，弹窗保持打开可重输/重扫
     } finally {
@@ -135,9 +167,40 @@ class _CouponPayDialogState extends State<CouponPayDialog> {
     return null;
   }
 
-  double _toDouble(dynamic v) {
-    if (v is num) return v.toDouble();
-    return double.tryParse(v?.toString() ?? '') ?? 0;
+  List<Map<String, dynamic>> _parseDetails(String json) {
+    try {
+      final dynamic data = jsonDecode(json);
+      if (data is List) {
+        return data.whereType<Map<String, dynamic>>().toList();
+      }
+    } catch (_) {}
+    return <Map<String, dynamic>>[];
+  }
+
+  /// 撤销刚完成的券核销（对齐 smdcapp resetData → unVerify）
+  ///
+  /// 核销接口已成功但券不能用于当前订单时调用，避免券被消耗却未抵扣。
+  Future<bool> _revokeVerifiedCoupon() async {
+    try {
+      final dynamic decoded = jsonDecode(widget.master);
+      final Map<String, dynamic> master =
+          decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+      final String billno = master['billno']?.toString() ?? '';
+      if (billno.isEmpty) return false;
+      final Map<String, dynamic> params = <String, dynamic>{'billno': billno};
+      // 券号核销不要求会员，无会员时不传 vipid（对齐 smdcapp null 字段不提交）
+      final String vipid = master['vipid']?.toString() ?? '';
+      if (vipid.isNotEmpty) params['vipid'] = vipid;
+      await requestForm(
+        HttpApi.vipUnVerify,
+        params,
+        showError: false,
+      );
+      return true;
+    } catch (e) {
+      Log.e('优惠券撤销核销失败: $e');
+      return false;
+    }
   }
 
   @override

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_deer/components/confirm_dialog.dart';
 import 'package:flutter_deer/net/pay_gateway.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 
@@ -281,12 +282,12 @@ class _ScanPayDialogState extends State<ScanPayDialog> {
         titleColor = const Color(0xFFE6A23C);
     }
 
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+
     return PopScope(
       canPop: _state == 1, // 支付中不允许返回（对齐 smdcapp setCancelable(false)）
-      child: Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
+      child: Center(
+        child: DialogCard(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
@@ -303,10 +304,10 @@ class _ScanPayDialogState extends State<ScanPayDialog> {
               // 金额（对齐 smdcapp tvAmt）
               Text(
                 '¥${widget.amt.toStringAsFixed(2)}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 28,
                   fontWeight: FontWeight.bold,
-                  color: Color(0xFF1D2129),
+                  color: isDark ? Colors.white : const Color(0xFF1D2129),
                 ),
               ),
               const SizedBox(height: 20),
@@ -335,42 +336,37 @@ class _ScanPayDialogState extends State<ScanPayDialog> {
                 const SizedBox(height: 16),
                 // 按钮区域（对齐 smdcapp btTradeQuery/btCancel/btSure）
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
                   children: <Widget>[
-                    if (_showTradeQuery)
-                      _dialogBtn('交易查询', const Color(0xFF1677FF), _onTradeQuery),
-                    if (_showTradeQuery) const SizedBox(width: 12),
-                    _dialogBtn('关闭', const Color(0xFF86909C), () {
-                      Navigator.of(context).pop(ScanPayResult(
-                        success: false,
-                        trade: _loadingText,
-                        payid: widget.payid,
-                        billNo: widget.billNo,
-                        errorMsg: _loadingText,
-                      ));
-                    }),
+                    if (_showTradeQuery) ...<Widget>[
+                      Expanded(
+                        child: DialogActionButton(
+                          text: '交易查询',
+                          color: const Color(0xFF1677FF),
+                          onTap: _onTradeQuery,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                    ],
+                    Expanded(
+                      child: DialogActionButton(
+                        text: '关闭',
+                        primary: false,
+                        onTap: () {
+                          Navigator.of(context).pop(ScanPayResult(
+                            success: false,
+                            trade: _loadingText,
+                            payid: widget.payid,
+                            billNo: widget.billNo,
+                            errorMsg: _loadingText,
+                          ));
+                        },
+                      ),
+                    ),
                   ],
                 ),
               ],
             ],
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _dialogBtn(String text, Color color, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-        decoration: BoxDecoration(
-          border: Border.all(color: color),
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Text(
-          text,
-          style: TextStyle(fontSize: 14, color: color),
         ),
       ),
     );

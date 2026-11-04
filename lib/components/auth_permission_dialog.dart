@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_deer/components/confirm_dialog.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/util/log_utils.dart';
@@ -57,101 +58,119 @@ class _AuthPermissionDialogState extends State<AuthPermissionDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      child: SizedBox(
-        width: MediaQuery.of(context).size.width * 0.85,
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 标题栏
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '用户授权-${widget.title}',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color textColor = isDark ? Colors.white : const Color(0xFF1D2129);
+
+    return Center(
+      child: DialogCard(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            // 标题栏
+            Row(
+              children: <Widget>[
+                const SizedBox(width: 26),
+                Expanded(
+                  child: Text(
+                    '用户授权-${widget.title}',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w600,
+                      color: textColor,
                     ),
                   ),
-                  GestureDetector(
-                    onTap: () => Navigator.pop(context, false),
-                    child: const Icon(Icons.close, size: 20, color: Colors.grey),
+                ),
+                GestureDetector(
+                  onTap: () => Navigator.pop(context, false),
+                  child: const Padding(
+                    padding: EdgeInsets.all(4),
+                    child: Icon(Icons.close, size: 18, color: Color(0xFF999999)),
                   ),
-                ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            // 授权方式切换 Tab（对齐 smdcapp tvSqm/tvYhm）
+            Row(
+              children: <Widget>[
+                _buildTabButton('授权码', _type == '0', () => _switchType('0')),
+                const SizedBox(width: 12),
+                _buildTabButton('用户名', _type == '1', () => _switchType('1')),
+              ],
+            ),
+            const SizedBox(height: 16),
+            // 授权码/用户名输入框
+            TextField(
+              controller: _codeController,
+              obscureText: _type == '0',
+              autofocus: true,
+              style: TextStyle(fontSize: 14, color: textColor),
+              decoration: _fieldDecoration(
+                hintText: _type == '0' ? '请输入授权码' : '请输入用户名',
+                isDark: isDark,
               ),
-              const SizedBox(height: 16),
-              // 授权方式切换 Tab（对齐 smdcapp tvSqm/tvYhm）
-              Row(
-                children: [
-                  _buildTabButton('授权码', _type == '0', () => _switchType('0')),
-                  _buildTabButton('用户名', _type == '1', () => _switchType('1')),
-                ],
-              ),
-              const SizedBox(height: 16),
-              // 授权码/用户名输入框
+              onSubmitted: (_) => _verify(),
+            ),
+            // 用户授权模式显示密码框
+            if (_type == '1') ...<Widget>[
+              const SizedBox(height: 12),
               TextField(
-                controller: _codeController,
-                obscureText: _type == '0',
-                autofocus: true,
-                decoration: InputDecoration(
-                  labelText: _type == '0' ? '授权码' : '用户名',
-                  border: const OutlineInputBorder(),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                controller: _pwdController,
+                obscureText: true,
+                style: TextStyle(fontSize: 14, color: textColor),
+                decoration: _fieldDecoration(
+                  hintText: '请输入用户密码',
+                  isDark: isDark,
                 ),
                 onSubmitted: (_) => _verify(),
               ),
-              // 用户授权模式显示密码框
-              if (_type == '1') ...[
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _pwdController,
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: '用户密码',
-                    border: OutlineInputBorder(),
-                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            ],
+            const SizedBox(height: 24),
+            // 按钮行
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: DialogActionButton(
+                    text: '取消',
+                    primary: false,
+                    onTap: () => Navigator.pop(context, false),
                   ),
-                  onSubmitted: (_) => _verify(),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: DialogActionButton(
+                    text: '确定',
+                    loading: _verifying,
+                    onTap: _verify,
+                  ),
                 ),
               ],
-              const SizedBox(height: 20),
-              // 按钮行
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                      child: const Text('取消'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: _verifying ? null : _verify,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFE13426),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                      child: _verifying
-                          ? const SizedBox(
-                              width: 18, height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                            )
-                          : const Text('确定'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
+      ),
+    );
+  }
+
+  /// 统一灰色填充输入框（与 InputDialog 保持一致）
+  InputDecoration _fieldDecoration({
+    required String hintText,
+    required bool isDark,
+  }) {
+    return InputDecoration(
+      hintText: hintText,
+      hintStyle: const TextStyle(fontSize: 14, color: Color(0xFFC9CDD4)),
+      filled: true,
+      fillColor: isDark ? const Color(0xFF3A3A3C) : const Color(0xFFF7F8FA),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: Color(0xFFE5E6EB), width: 1),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: Color(0xFFE63F31), width: 1.2),
       ),
     );
   }
@@ -161,17 +180,19 @@ class _AuthPermissionDialogState extends State<AuthPermissionDialog> {
       child: GestureDetector(
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8),
+          height: 38,
+          alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: selected ? const Color(0xFFE13426) : const Color(0xFFF5F5F5),
-            borderRadius: BorderRadius.circular(6),
+            color: selected ? const Color(0xFFE63F31) : const Color(0xFFF2F3F5),
+            borderRadius: BorderRadius.circular(8),
           ),
           child: Text(
             label,
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 14,
-              color: selected ? Colors.white : Colors.black87,
+              fontWeight: FontWeight.w500,
+              color: selected ? Colors.white : const Color(0xFF4E5969),
             ),
           ),
         ),

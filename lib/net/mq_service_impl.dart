@@ -75,6 +75,19 @@ String _account = '';
 String _storeCode = '';
 String _machNo = '';
 
+/// 最近一次锁台事件的操作人缓存（saleid → operid/opername/machno）
+///
+/// 部分服务端返回的桌台列表不带锁台操作人字段，入口校验时用该缓存兜底，
+/// 以便区分“其他设备”和“其他员工”。
+final Map<String, Map<String, String>> _lockOwners =
+    <String, Map<String, String>>{};
+
+Map<String, String>? lockOwnerForSaleid(String saleid) {
+  if (saleid.isEmpty) return null;
+  final Map<String, String>? owner = _lockOwners[saleid];
+  return owner == null ? null : Map<String, String>.from(owner);
+}
+
 /// MQ 日志：控制台 + mq_log 文件
 ///
 /// Release 下 debugPrint 被置空，MQ 连接与消息处理过程只能靠文件日志回溯。
@@ -108,6 +121,7 @@ Future<void> connectMq({
   try {
     // 先断开旧连接
     await _closeConnection();
+    _lockOwners.clear();
 
     _mqLog('正在连接 RabbitMQ: $host:$port, '
         'account=$_account, storeCode=$_storeCode, machNo=$_machNo');
@@ -257,12 +271,30 @@ void _handleTableChange(Map<String, dynamic> json) {
       final String machno = data['machno']?.toString() ?? '';
       final String saleid = data['saleid']?.toString() ?? '';
       final String opername = data['opername']?.toString() ?? '';
+      final String operid = data['operid']?.toString() ?? '';
+
+      // 锁台/解锁消息才带 autoflag，用它区分普通桌台变更，避免误缓存/误踢
+      final bool isLockMessage = lockflag.isNotEmpty && autoflag.isNotEmpty;
+
+      // 缓存最近一次锁台操作人（包含本机操作，供入口校验兜底）
+      if (isLockMessage && saleid.isNotEmpty) {
+        if (lockflag == '1') {
+          _lockOwners[saleid] = <String, String>{
+            'operid': operid,
+            'opername': opername,
+            'machno': machno,
+          };
+        } else {
+          _lockOwners.remove(saleid);
+        }
+      }
 
       // 只有包含锁台标志的消息才触发锁台事件
-      if (lockflag.isNotEmpty && machno != _machNo) {
+      if (isLockMessage && machno != _machNo) {
         if (!_lockTableController.isClosed) {
           _lockTableController.add(<String, dynamic>{
             'saleid': saleid,
+            'operid': operid,
             'opername': opername,
             'machno': machno,
             'lockflag': lockflag,
@@ -298,6 +330,7 @@ void disconnectMq() {
   _reconnectTimer?.cancel();
   _reconnectTimer = null;
   _connected = false;
+  _lockOwners.clear();
   _closeConnection();
   _mqLog('已断开 RabbitMQ 连接');
 }
