@@ -516,34 +516,18 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Stack(
-        fit: StackFit.expand,
-        children: <Widget>[
-          // R4：登录背景改为备注2的菜品背景图
-          Image.asset(
-            'assets/images/login/login_bg_food.jpg',
-            fit: BoxFit.cover,
+      body: ColoredBox(
+        color: Colours.app_main,
+        child: SafeArea(
+          child: Column(
+            children: [
+              // 顶部区域
+              _buildHeader(),
+              // 白色卡片登录区域（自适应内容高度，不延伸到底部）
+              _buildLoginCard(),
+            ],
           ),
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: <Color>[Color(0x99000000), Color(0x44000000)],
-              ),
-            ),
-          ),
-          SafeArea(
-            child: Column(
-              children: [
-                // 顶部区域
-                _buildHeader(),
-                // 白色卡片登录区域（自适应内容高度，不延伸到底部）
-                _buildLoginCard(),
-              ],
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

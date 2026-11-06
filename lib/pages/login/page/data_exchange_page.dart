@@ -181,7 +181,7 @@ class _DataExchangePageState extends State<DataExchangePage> {
           child: Stack(
             fit: StackFit.expand,
             children: <Widget>[
-              // R4：数据交换界面同样使用新的菜品背景图
+              // 数据交换界面使用菜品背景图
               Image.asset(
                 'assets/images/login/login_bg_food.jpg',
                 fit: BoxFit.cover,
