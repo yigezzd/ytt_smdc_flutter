@@ -28,7 +28,7 @@ class CouponPayResult {
   /// 核销接口返回的券信息（对齐 smdcapp YhqBean：faceamt/fid/fno/name 等）
   final Map<String, dynamic> coupon;
 
-  /// 本次可抵扣金额（现金券取面额，项目券/礼品券取适用商品金额）
+  /// 本次可抵扣金额（现金券取面额，项目券/礼品券取券份数覆盖的金额）
   final double payAmount;
 }
 
@@ -124,8 +124,9 @@ class _CouponPayDialogState extends State<CouponPayDialog> {
         }
         return;
       }
-      // 项目券/礼品券无面额（faceamt=0），按适用商品金额抵扣（对齐 smdcapp dealCouponAmt）；
-      // 券已核销成功，不可抵扣时必须先反核销，避免券被白白消耗
+      // 项目券/礼品券：有面额时以面额为上限，无面额时按券份数（默认 1 份）抵扣，
+      // 不能把同名菜品的整行数量全部核销；券已核销成功，不可抵扣时必须先反核销，
+      // 避免券被白白消耗
       final double payAmount = calcCouponDeductAmount(
         coupon,
         _parseDetails(widget.projectlist),

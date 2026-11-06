@@ -33,6 +33,7 @@ import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:flutter_deer/util/store_mode_utils.dart';
 import 'package:flutter_deer/util/scan_pending_store.dart';
 import 'package:flutter_deer/util/table_concurrency_guard.dart';
+import 'package:flutter_deer/util/table_data_utils.dart';
 import 'package:flutter_deer/util/promotion_helper.dart';
 import 'package:flutter_deer/util/amount_calc_utils.dart';
 import 'package:flutter_deer/util/aux_business_service.dart';
@@ -210,9 +211,26 @@ class _SettlePageState extends State<SettlePage> {
 
   String get _lockSaleid {
     final dynamic tmp = widget.tableJson?['tmp'];
-    final String tmpSaleid =
-        tmp is Map ? tmp['saleid']?.toString() ?? '' : '';
+    final String tmpSaleid = tmp is Map ? tmp['saleid']?.toString() ?? '' : '';
     return tmpSaleid.isNotEmpty ? tmpSaleid : widget.saleid;
+  }
+
+  /// 会员卡剩余可支付余额
+  ///
+  /// 本单已录入的会员卡收款尚未上报服务端（结账时才 vipPay），
+  /// 必须从会员余额中扣除，否则同一笔余额可被重复抵扣
+  /// （对齐 smdcapp PayDetailsLayout.memberPay 扣减 memberBean.nowmoney）。
+  double get _memberCardBalance {
+    final VipMember? member = _member;
+    if (member == null) return 0;
+    double paid = 0;
+    for (final Map<String, dynamic> e in _salePayWayList) {
+      if (e['payid']?.toString() == '02') {
+        paid = AmountCalcUtils.add(paid, _toDouble(e['payamt']));
+      }
+    }
+    final double balance = AmountCalcUtils.sub(member.nowmoney, paid);
+    return balance > 0 ? balance : 0;
   }
 
   @override
@@ -266,8 +284,7 @@ class _SettlePageState extends State<SettlePage> {
     _canZanjie = widget.autoZanjie ||
         ((SpUtil.getBool('KQ_ZJ') ?? false) &&
             !StoreModeUtils.isFastMode() &&
-            StoreModeUtils.getCurrentStoreModel() ==
-                StoreModeUtils.storeModelNormal);
+            StoreModeUtils.getCurrentStoreModel() == StoreModeUtils.storeModelNormal);
     _isZanjie = _canZanjie;
     // 会员价与促销/手工折扣取最优（对齐 smdcapp refreshAllPriceInfo）
     if (_member != null) {
@@ -317,22 +334,23 @@ class _SettlePageState extends State<SettlePage> {
 
     final TableDetail? latestTmp = latest.tmp;
     final int latestStatus = latestTmp?.tablestatus ?? 0;
-    final bool cleared = latestTmp == null ||
-        latestStatus == 0 ||
-        latestStatus == 4 ||
-        latest.isIdle;
-    final String currentSaleid = tmp is Map
-        ? tmp['saleid']?.toString() ?? ''
-        : '';
+    final bool cleared =
+        latestTmp == null || latestStatus == 0 || latestStatus == 4 || latest.isIdle;
+    final String currentSaleid = tmp is Map ? tmp['saleid']?.toString() ?? '' : '';
     final String latestSaleid = latestTmp?.saleid ?? '';
-    final bool saleChanged = currentSaleid.isNotEmpty &&
-        latestSaleid.isNotEmpty &&
-        currentSaleid != latestSaleid;
-    // R65：PC 加菜后桌台金额变化，禁止按旧金额继续支付
+    final bool saleChanged =
+        currentSaleid.isNotEmpty && latestSaleid.isNotEmpty && currentSaleid != latestSaleid;
+    // R65：PC 加菜后桌台金额变化，禁止按旧金额继续支付。
+    // tmp.amt 为菜品实收金额（不含服务费/低消，对齐 smdcapp TableDetailBean），
+    // 与含服务费/低消的待收总额直接比较会在有服务费/低消时恒不相等，
+    // 导致每次进入结账都误报“订单金额已更新”；菜品实收与应收总额
+    // 任一匹配即视为金额未变化（部分服务端 tmp.amt 直接回传应付总额）。
     final double latestAmt = latestTmp?.amt ?? 0;
+    final double expectedDishAmt = _rd2(widget.payAmt - widget.serviceAmt - widget.lowAmt);
     final double expectedAmt = widget.payAmt;
     final bool amountChanged = latestAmt > 0 &&
         expectedAmt > 0 &&
+        (latestAmt - expectedDishAmt).abs() > 0.05 &&
         (latestAmt - expectedAmt).abs() > 0.05;
 
     if (!cleared && !saleChanged && !amountChanged) return true;
@@ -363,11 +381,10 @@ class _SettlePageState extends State<SettlePage> {
   /// refreshAllPriceInfo 后都会重新 dealMlDate）。
   void _applyRounding() {
     // 先撤销上一次抹零，避免重复叠加
-    final int oldIndex = _salePayWayList.indexWhere(
-        (Map<String, dynamic> e) => e['payid'] == '06' && e['payname'] == '抹零');
+    final int oldIndex = _salePayWayList
+        .indexWhere((Map<String, dynamic> e) => e['payid'] == '06' && e['payname'] == '抹零');
     if (oldIndex >= 0) {
-      _hasMoney = AmountCalcUtils.sub(
-          _hasMoney, _toDouble(_salePayWayList[oldIndex]['payamt']));
+      _hasMoney = AmountCalcUtils.sub(_hasMoney, _toDouble(_salePayWayList[oldIndex]['payamt']));
       _salePayWayList.removeAt(oldIndex);
     }
     _roundAmt = 0;
@@ -409,15 +426,13 @@ class _SettlePageState extends State<SettlePage> {
     );
     // R63：指定菜品/分类折扣属于商品级活动，结账页不展示
     final List<PromotionInfo> visibleList = list
-        .where((PromotionInfo p) =>
-            p.billtype != 1 && p.billtype != 2 && p.billtype != 3)
+        .where((PromotionInfo p) => p.billtype != 1 && p.billtype != 2 && p.billtype != 3)
         .toList();
     if (mounted) {
       setState(() => _promotions = visibleList);
       // R20：结算页主动提示有可用促销
       if (visibleList.isNotEmpty && _appliedPromoBillid.isEmpty) {
-        Toast.show(
-            '本单有${visibleList.length}个可用促销，请在“促销活动”中选择应用');
+        Toast.show('本单有${visibleList.length}个可用促销，请在“促销活动”中选择应用');
       }
     }
   }
@@ -426,8 +441,7 @@ class _SettlePageState extends State<SettlePage> {
   String get _detailQtyText {
     double qty = 0;
     for (final Map<String, dynamic> d in widget.detailList) {
-      if (_toInt(d['presentflag']) == 1 ||
-          (d['combproductid']?.toString() ?? '').isNotEmpty) {
+      if (_toInt(d['presentflag']) == 1 || (d['combproductid']?.toString() ?? '').isNotEmpty) {
         continue;
       }
       qty += _toDouble(d['qty']);
@@ -438,9 +452,7 @@ class _SettlePageState extends State<SettlePage> {
   /// 订单明细深拷贝（用于切换促销/会员时恢复基准价）
   List<Map<String, dynamic>> _cloneDetails(List<Map<String, dynamic>> src) {
     final List<dynamic> raw = jsonDecode(jsonEncode(src)) as List<dynamic>;
-    return raw
-        .map((dynamic e) => Map<String, dynamic>.from(e as Map))
-        .toList();
+    return raw.map((dynamic e) => Map<String, dynamic>.from(e as Map)).toList();
   }
 
   /// 恢复订单明细基准价（避免多个活动叠加计算）
@@ -532,8 +544,8 @@ class _SettlePageState extends State<SettlePage> {
       return;
     }
     // R22：已参加满赠活动时不可再享受整单优惠
-    final bool hasFullGift = widget.detailList
-        .any((Map<String, dynamic> d) => _toInt(d['bxxpxxflag']) == 4);
+    final bool hasFullGift =
+        widget.detailList.any((Map<String, dynamic> d) => _toInt(d['bxxpxxflag']) == 4);
     if (hasFullGift) {
       Toast.show('已参加满赠活动，不能再享受整单优惠');
       return;
@@ -566,9 +578,8 @@ class _SettlePageState extends State<SettlePage> {
         if (target == null) continue;
         final double sell = _toDouble(target['sellprice']);
         if (sell <= 0) continue;
-        final double current = _toDouble(target['rrprice']) > 0
-            ? _toDouble(target['rrprice'])
-            : sell;
+        final double current =
+            _toDouble(target['rrprice']) > 0 ? _toDouble(target['rrprice']) : sell;
         double? newPrice;
         final double serverRr = _toDouble(row['rrprice']);
         final double rowDiscount = _toDouble(row['discount']);
@@ -584,12 +595,10 @@ class _SettlePageState extends State<SettlePage> {
           if (current <= newPrice) continue;
         }
         final double qty = _toDouble(target['qty']);
-        target['rramt'] =
-            _rd2(_toDouble(target['rramt']) + (newPrice - current) * qty);
+        target['rramt'] = _rd2(_toDouble(target['rramt']) + (newPrice - current) * qty);
         target['rrprice'] = newPrice;
-        target['discount'] = rowDiscount > 0 && rowDiscount < 100
-            ? rowDiscount
-            : _rd2(newPrice / sell * 100);
+        target['discount'] =
+            rowDiscount > 0 && rowDiscount < 100 ? rowDiscount : _rd2(newPrice / sell * 100);
         target['specpriceflag'] = promo.billtype;
         target['jcmbillid'] = promo.billid;
         disAmt += (current - newPrice) * qty;
@@ -662,8 +671,7 @@ class _SettlePageState extends State<SettlePage> {
     final VipMember? selected = await MemberSearchSheet.show(context);
     if (selected == null || !mounted) return;
     // R46/R30：搜索接口可能不带 prefetype/discount/余额，回查完整会员信息
-    final VipMember? full =
-        await OrderRepository.fetchVipByVipid(selected.vipid);
+    final VipMember? full = await OrderRepository.fetchVipByVipid(selected.vipid);
     if (!mounted) return;
     _loginMember(full ?? selected);
   }
@@ -704,11 +712,9 @@ class _SettlePageState extends State<SettlePage> {
   Future<void> _syncMemberToServer({required VipMember? member}) async {
     // 对齐 smdcapp：仅正餐模式（storemodel==2）同步桌台会员，快餐无桌台跳过
     if (StoreModeUtils.isFastMode()) return;
-    final Map<String, dynamic>? tmp =
-        widget.tableJson?['tmp'] as Map<String, dynamic>?;
-    final String saleid = widget.saleid.isNotEmpty
-        ? widget.saleid
-        : (tmp?['saleid']?.toString() ?? '');
+    final Map<String, dynamic>? tmp = widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final String saleid =
+        widget.saleid.isNotEmpty ? widget.saleid : (tmp?['saleid']?.toString() ?? '');
     if (saleid.isEmpty) {
       Toast.show('订单信息错误，无法同步会员');
       return;
@@ -718,21 +724,14 @@ class _SettlePageState extends State<SettlePage> {
     try {
       await OrderRepository.updateMasterTmpVip(
         saleid: saleid,
-        tableid: widget.tableId.isNotEmpty
-            ? widget.tableId
-            : (tmp?['tableid']?.toString() ?? ''),
-        tablecode: widget.tableCode.isNotEmpty
-            ? widget.tableCode
-            : (tmp?['tablecode']?.toString() ?? ''),
-        remark: widget.remark.isNotEmpty
-            ? widget.remark
-            : (tmp?['remark']?.toString() ?? ''),
-        personnum: widget.persons > 0
-            ? widget.persons.toString()
-            : (tmp?['personnum']?.toString() ?? ''),
-        serverid: widget.serverId.isNotEmpty
-            ? widget.serverId
-            : (tmp?['serverid']?.toString() ?? ''),
+        tableid: widget.tableId.isNotEmpty ? widget.tableId : (tmp?['tableid']?.toString() ?? ''),
+        tablecode:
+            widget.tableCode.isNotEmpty ? widget.tableCode : (tmp?['tablecode']?.toString() ?? ''),
+        remark: widget.remark.isNotEmpty ? widget.remark : (tmp?['remark']?.toString() ?? ''),
+        personnum:
+            widget.persons > 0 ? widget.persons.toString() : (tmp?['personnum']?.toString() ?? ''),
+        serverid:
+            widget.serverId.isNotEmpty ? widget.serverId : (tmp?['serverid']?.toString() ?? ''),
         servername: widget.serverName.isNotEmpty
             ? widget.serverName
             : (tmp?['servername']?.toString() ?? ''),
@@ -776,7 +775,8 @@ class _SettlePageState extends State<SettlePage> {
       projectlist: jsonEncode(details),
     );
     if (coupon == null || !mounted) return;
-    // 项目券/礼品券面额为0，按适用商品金额抵扣（对齐 smdcapp dealCouponAmt）
+    // 项目券/礼品券有面额时以面额为上限，无面额时按券份数（默认 1 份）抵扣，
+    // 不能把同名菜品的整行数量全部核销
     final double couponAmt = calcCouponDeductAmount(coupon.raw, details);
     if (couponAmt <= 0) {
       Toast.show('该券不适用于当前订单');
@@ -784,8 +784,8 @@ class _SettlePageState extends State<SettlePage> {
     }
     setState(() {
       // 替换旧券：先回退上一张券占用的金额
-      final int oldIdx = _salePayWayList.indexWhere(
-          (Map<String, dynamic> e) => e['payid']?.toString() == '07');
+      final int oldIdx =
+          _salePayWayList.indexWhere((Map<String, dynamic> e) => e['payid']?.toString() == '07');
       if (oldIdx >= 0) {
         final double oldAmt = _toDouble(_salePayWayList[oldIdx]['payamt']);
         _salePayWayList.removeAt(oldIdx);
@@ -862,8 +862,8 @@ class _SettlePageState extends State<SettlePage> {
     // 现金路径 PricePopup 输入0元全付同样 add payway(0) → getSaleFlowData）
     if (_dsMoney <= 0) {
       if (_submitting) return;
-      final bool hasZeroCash = _salePayWayList.any((Map<String, dynamic> e) =>
-          e['payid'] == '01' && _toDouble(e['payamt']) == 0);
+      final bool hasZeroCash = _salePayWayList
+          .any((Map<String, dynamic> e) => e['payid'] == '01' && _toDouble(e['payamt']) == 0);
       if (!hasZeroCash) {
         _salePayWayList.add(<String, dynamic>{
           'saleid': widget.saleid,
@@ -894,13 +894,11 @@ class _SettlePageState extends State<SettlePage> {
 
     // 抖音(13)/美团(meituantuangou)/快手(kuaishou)团购核销
     // （对齐 smdcapp selectPay case "13"/"meituantuangou"/"kuaishou" → dyVetify）
-    if (_payId == '13' ||
-        _payId == 'meituantuangou' ||
-        _payId == 'kuaishou') {
+    if (_payId == '13' || _payId == 'meituantuangou' || _payId == 'kuaishou') {
       await _onVerifyCoupon(payId: _payId, payName: _payName);
       return;
     }
-  
+
     // 移动支付：支付宝(08)/微信(09)/云闪付(10) → 扫码支付流程
     // （对齐 smdcapp clickWxAliPay → MipcaActivityCapture → disposeWxAliScanPay）
     if (_payId == '08' || _payId == '09' || _payId == '10') {
@@ -929,45 +927,47 @@ class _SettlePageState extends State<SettlePage> {
       return;
     }
 
-    // 会员卡(02)：余额校验在金额输入后处理（支持按余额部分支付，R50/R74）
+    // 会员卡(02)：支持按余额部分支付，余额校验见下方金额输入前（R50/R74）
 
     // 减免(06)：手动减免/抹零（对齐 smdcapp selectPay case "06" → showReducePopup）
     if (_payId == '06') {
       await _onReducePay();
       return;
     }
-  
+
     // 面额支付：自定义支付方式启用面额(faceflag=1)时直接抵扣面额
     // （对齐 smdcapp selectPay else 分支: faceflag=="1" → faceValuePay）
     final Map<String, dynamic>? selectedPayType = _getSelectedPayType();
-    if (selectedPayType != null &&
-        (selectedPayType['faceflag']?.toString() == '1')) {
+    if (selectedPayType != null && (selectedPayType['faceflag']?.toString() == '1')) {
       await _onFaceValuePay(selectedPayType);
       return;
     }
 
-    // 现金/其他支付：弹金额输入框（对齐 smdcapp showChangePricePop → PricePopup）
-    final double? inputAmt = await _showPriceInput();
-    if (inputAmt == null || inputAmt <= 0 || !mounted) return;
-
-    // R74：会员卡支付支持按余额部分支付，余额不足部分改用其他支付方式
+    // R74：会员卡支付支持按余额部分支付，余额不足部分改用其他支付方式；
+    // 余额需扣除本单已录入的会员卡收款，避免重复抵扣（对齐 smdcapp memberPay）
     double maxPay = _dsMoney;
     if (_payId == '02') {
-      final double balance = _member?.nowmoney ?? 0;
-      if (balance <= 0) {
+      final double balance = _memberCardBalance;
+      if (balance <= 0.005) {
         Toast.show('会员余额不足，请使用其他支付方式');
         return;
       }
       if (balance < maxPay) maxPay = balance;
     }
+
+    // 现金/其他支付：弹金额输入框（对齐 smdcapp showChangePricePop → PricePopup）
+    // 会员卡默认填充可支付余额（对齐 smdcapp MemberDateilsActivity memberPay）
+    final double? inputAmt = await _showPriceInput(
+      initialAmount: _payId == '02' ? maxPay : null,
+    );
+    if (inputAmt == null || inputAmt <= 0 || !mounted) return;
+
     // 现金多收（对齐 smdcapp PricePopup 全支付分支 + getPayWayBean）：
     // 收款额记顾客递付金额，找零单列；主表 payment 含递付额、changeamt 为找零，
     // 这样完成页「实收」= 顾客实付、与 smdcapp 一致（原实现截到应收会少显示）
     final bool overpay = _payId != '02' && inputAmt > maxPay + 0.005;
     final double changeAmt = overpay ? _rd2(inputAmt - maxPay) : 0.0;
-    final double payAmt = overpay
-        ? _rd2(inputAmt)
-        : _rd2(inputAmt > maxPay ? maxPay : inputAmt);
+    final double payAmt = overpay ? _rd2(inputAmt) : _rd2(inputAmt > maxPay ? maxPay : inputAmt);
     final bool memberPartial = _payId == '02' && payAmt < _dsMoney - 0.005;
 
     // 记录支付方式
@@ -997,7 +997,7 @@ class _SettlePageState extends State<SettlePage> {
       }
     }
   }
-  
+
   /// 优惠券支付（对齐 smdcapp TicketNumSearchPopup）
   ///
   /// 弹窗内扫码/输入券号并完成券号核销（voucherVerify），
@@ -1014,8 +1014,7 @@ class _SettlePageState extends State<SettlePage> {
     if (result == null || !mounted) return;
 
     // 券可抵扣金额大于待收时只收待收金额（对齐 smdcapp：payamt < dsMoney 部分支付）
-    final double payAmt =
-        _rd2(result.payAmount < _dsMoney ? result.payAmount : _dsMoney);
+    final double payAmt = _rd2(result.payAmount < _dsMoney ? result.payAmount : _dsMoney);
     if (payAmt <= 0) return;
     _salePayWayList.add(<String, dynamic>{
       'saleid': widget.saleid,
@@ -1072,9 +1071,8 @@ class _SettlePageState extends State<SettlePage> {
     }
     // 消费校验方式：0不校验 1储卡密码 2短信验证 3强制持卡密码（对齐 smdcapp PwsPopup）
     final String cardPassword = vip['password']?.toString() ?? '';
-    final String vipPassword = vip['vipPassword']?.toString() ??
-        vip['VipPassword']?.toString() ??
-        '0';
+    final String vipPassword =
+        vip['vipPassword']?.toString() ?? vip['VipPassword']?.toString() ?? '0';
     if (cardPassword.isNotEmpty && vipPassword != '0') {
       final bool verified = await _verifyJkCardPassword(vip, vipPassword);
       if (!verified || !mounted) return;
@@ -1135,8 +1133,7 @@ class _SettlePageState extends State<SettlePage> {
   ///
   /// vipPassword：1=储卡密码 3=强制持卡密码（本地比对随会员返回的 password），
   /// 2=短信验证（getcode/checkcode，smstype=7）。
-  Future<bool> _verifyJkCardPassword(
-      Map<String, dynamic> vip, String vipPassword) async {
+  Future<bool> _verifyJkCardPassword(Map<String, dynamic> vip, String vipPassword) async {
     if (vipPassword == '2') {
       final String mobile = vip['mobile']?.toString() ?? '';
       if (mobile.isEmpty) {
@@ -1296,8 +1293,7 @@ class _SettlePageState extends State<SettlePage> {
           'signinfo': '',
         });
         if (!mounted) return;
-        final double deal =
-            _toDouble(item['dy_dealprice'] ?? item['payamt']);
+        final double deal = _toDouble(item['dy_dealprice'] ?? item['payamt']);
         final double eligible = _toDouble(item['dy_productprice']);
         final double diff = _rd2(eligible - deal);
         setState(() {
@@ -1358,8 +1354,7 @@ class _SettlePageState extends State<SettlePage> {
     }
     if (!mounted) return;
     // 现金多收时收款额含递付额，撤销只恢复净额（对齐 smdcapp resetData）
-    final double netAmt =
-        AmountCalcUtils.sub(payAmt, _toDouble(item['changeamt']));
+    final double netAmt = AmountCalcUtils.sub(payAmt, _toDouble(item['changeamt']));
     setState(() {
       _salePayWayList.remove(item);
       _hasMoney = AmountCalcUtils.sub(_hasMoney, payAmt);
@@ -1370,8 +1365,7 @@ class _SettlePageState extends State<SettlePage> {
 
   /// 订单本地单号（对齐 smdcapp placedOrderBean.billno）
   String _orderBillno() {
-    final Map<String, dynamic>? tmp =
-        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final Map<String, dynamic>? tmp = widget.tableJson?['tmp'] as Map<String, dynamic>?;
     final String localbillno = tmp?['localbillno']?.toString() ?? '';
     return localbillno.isNotEmpty ? localbillno : widget.saleid;
   }
@@ -1390,12 +1384,9 @@ class _SettlePageState extends State<SettlePage> {
   /// 启用面额的支付方式直接按面额抵扣：
   /// faceamt=面额金额，actulamt=实付金额，virtualamt=虚付金额
   Future<void> _onFaceValuePay(Map<String, dynamic> payType) async {
-    final double faceamt =
-        double.tryParse(payType['faceamt']?.toString() ?? '') ?? 0;
-    final double actulamt =
-        double.tryParse(payType['actulamt']?.toString() ?? '') ?? 0;
-    final double virtualamt =
-        double.tryParse(payType['virtualamt']?.toString() ?? '') ?? 0;
+    final double faceamt = double.tryParse(payType['faceamt']?.toString() ?? '') ?? 0;
+    final double actulamt = double.tryParse(payType['actulamt']?.toString() ?? '') ?? 0;
+    final double virtualamt = double.tryParse(payType['virtualamt']?.toString() ?? '') ?? 0;
     // 面额抵扣金额：优先用 faceamt，其次待收金额
     final double deductAmt = faceamt > 0 ? faceamt : _dsMoney;
     final double payAmt = _rd2(deductAmt > _dsMoney ? _dsMoney : deductAmt);
@@ -1461,8 +1452,11 @@ class _SettlePageState extends State<SettlePage> {
       authCode: authCode,
       gateway: gateway,
     );
-    if (result == null) {
-      // R61：支付中断/超时关闭弹窗时生成本地异常订单，便于后续交易查询
+    if (!mounted) return;
+
+    if (result == null || !result.success) {
+      // R61：支付中断/超时/失败关闭弹窗时生成本地异常订单，便于后续交易查询
+      // （对齐 smdcapp yeahKaPayResult 失败分支落 PayFlow hasUploadFlag=2）
       ScanPendingStore.add(
         billno: payBillNo,
         amt: payAmt,
@@ -1472,54 +1466,58 @@ class _SettlePageState extends State<SettlePage> {
         cashname: _getUserName(),
         payConfig: payConfig,
       );
-      Toast.show('支付未完成，已生成异常订单，可在【异常订单】查询');
+      if (result == null) {
+        Toast.show('支付未完成，已生成异常订单，可在【异常订单】查询');
+      } else {
+        Toast.show(result.errorMsg.isNotEmpty ? result.errorMsg : '支付失败');
+      }
       return;
     }
-    if (!mounted) return;
 
-    if (result.success) {
-      // 支付成功 → 记录支付方式（对齐 smdcapp wantToPay → getPayWayBean）
-      // trade 格式（优支付）: "leshua_order_id,third_order_id"
-      String trade = result.trade;
-      String sn = '';
-      if (trade.contains(',')) {
-        final List<String> parts = trade.split(',');
-        trade = parts[0];
-        sn = parts.length > 1 ? parts[1] : '';
-      }
-      _salePayWayList.add(<String, dynamic>{
-        'saleid': widget.saleid,
-        'payid': _payId,
-        'payname': _payName,
-        'payamt': payAmt,
-        'rate': 1.0,
-        'rramt': payAmt,
-        'changeamt': 0.0,
-        'faceamt': payAmt,
-        'wxtrade': trade,
-        'wxclientid': sn,
-        'sn': sn,
-        'third_order_id': sn,
-        'payno': payBillNo,
-        'paytype': payConfig['paytype'],
-        'terminalkey': payConfig['terminalkey'],
-        'terminalsn': payConfig['terminalsn'],
-      });
+    // 交易查询补查到成功后清掉同单号的待查询记录
+    ScanPendingStore.remove(payBillNo);
 
-      _hasMoney = AmountCalcUtils.add(_hasMoney, payAmt);
-      _dsMoney = AmountCalcUtils.sub(_dsMoney, payAmt);
+    // 支付成功 → 记录支付方式（对齐 smdcapp wantToPay → getPayWayBean）
+    // trade 格式（优支付）: "leshua_order_id,third_order_id"
+    String trade = result.trade;
+    String sn = '';
+    if (trade.contains(',')) {
+      final List<String> parts = trade.split(',');
+      trade = parts[0];
+      sn = parts.length > 1 ? parts[1] : '';
+    }
+    // 乐刷：服务端 unified_refund 取 wxclientid 当 third_order_id，
+    // 必须落乐刷单号（对齐扫码点餐/补传流水），否则其他终端退款报“无效的订单号”
+    final String wxClientId = payConfig['paytype'] == '2' ? trade : sn;
+    _salePayWayList.add(<String, dynamic>{
+      'saleid': widget.saleid,
+      'payid': _payId,
+      'payname': _payName,
+      'payamt': payAmt,
+      'rate': 1.0,
+      'rramt': payAmt,
+      'changeamt': 0.0,
+      'faceamt': payAmt,
+      'wxtrade': trade,
+      'wxclientid': wxClientId,
+      'sn': sn,
+      'third_order_id': sn,
+      'payno': payBillNo,
+      'paytype': payConfig['paytype'],
+      'terminalkey': payConfig['terminalkey'],
+      'terminalsn': payConfig['terminalsn'],
+    });
 
-      if (_dsMoney <= 0.005) {
-        // 全部支付完成 → 上传流水（对齐 smdcapp getSaleFlowData）
-        _dsMoney = 0;
-        setState(() {});
-        await _submitSaleFlow();
-      } else {
-        setState(() {});
-      }
+    _hasMoney = AmountCalcUtils.add(_hasMoney, payAmt);
+    _dsMoney = AmountCalcUtils.sub(_dsMoney, payAmt);
+
+    if (_dsMoney <= 0.005) {
+      // 全部支付完成 → 上传流水（对齐 smdcapp getSaleFlowData）
+      _dsMoney = 0;
+      setState(() {});
+      await _submitSaleFlow();
     } else {
-      // 支付失败（对齐 smdcapp yeahKaPayResult failure 分支）
-      Toast.show(result.errorMsg.isNotEmpty ? result.errorMsg : '支付失败');
+      setState(() {});
     }
   }
 
@@ -1534,17 +1532,14 @@ class _SettlePageState extends State<SettlePage> {
     } catch (_) {}
 
     // 如果 store 中没有支付配置，尝试从完整登录数据中获取
-    if (storeMap['terminalsn'] == null ||
-        (storeMap['terminalsn']?.toString() ?? '').isEmpty) {
+    if (storeMap['terminalsn'] == null || (storeMap['terminalsn']?.toString() ?? '').isEmpty) {
       try {
         final String allDataStr = SpUtil.getString(Constant.allLoginData) ?? '';
         if (allDataStr.isNotEmpty) {
-          final Map<String, dynamic> allData =
-              jsonDecode(allDataStr) as Map<String, dynamic>;
+          final Map<String, dynamic> allData = jsonDecode(allDataStr) as Map<String, dynamic>;
           final dynamic storeRaw = allData['store'];
           if (storeRaw is Map) {
-            final Map<String, dynamic> loginStore =
-                Map<String, dynamic>.from(storeRaw);
+            final Map<String, dynamic> loginStore = Map<String, dynamic>.from(storeRaw);
             // 合并（不覆盖已有值）
             loginStore.forEach((String key, dynamic value) {
               storeMap.putIfAbsent(key, () => value);
@@ -1571,15 +1566,15 @@ class _SettlePageState extends State<SettlePage> {
   }
 
   /// 金额输入弹窗（对齐 smdcapp PricePopup）
-  /// full_payment 参数控制是否默认填充满全款金额
-  Future<double?> _showPriceInput() async {
+  /// full_payment 参数控制是否默认填充满款金额；[initialAmount] 可指定默认填充金额
+  Future<double?> _showPriceInput({double? initialAmount}) async {
     // 对齐 smdcapp: if(full_payment) etDiscount.setText(price.toString())
     final bool fullPayment = SpUtil.getBool('full_payment', defValue: true) ?? true;
     final String? result = await InputDialog.show(
       context,
       title: '$_payName支付',
       hintText: '输入金额',
-      initialValue: fullPayment ? _dsMoney.toStringAsFixed(2) : '',
+      initialValue: fullPayment ? _rd2(initialAmount ?? _dsMoney).toStringAsFixed(2) : '',
       maxLines: 1,
       // 金额输入默认数字键盘（对齐 smdcapp PricePopup 内置数字键盘）
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -1723,8 +1718,7 @@ class _SettlePageState extends State<SettlePage> {
       // 扫码点菜单 billtype==3 时 newprinttype=2）
       final String printtype = _isPrint ? '2' : '-1';
       String newprinttype = printtype;
-      if (newprinttype != '-1' &&
-          saleMaster['billtype']?.toString() == '3') {
+      if (newprinttype != '-1' && saleMaster['billtype']?.toString() == '3') {
         newprinttype = '2';
       }
 
@@ -1785,20 +1779,16 @@ class _SettlePageState extends State<SettlePage> {
         if (!mounted) return;
         // 跳转结算完成页（对齐 smdcapp SettleFinishActivity）
         // 实收/找零取上传主表字段（对齐 smdcapp tvRealAmt=payment、tvZlAmt=changeamt）
-        final double receivedAmt =
-            (saleMaster['payment'] as num?)?.toDouble() ?? _hasMoney;
-        final double changeAmt =
-            (saleMaster['changeamt'] as num?)?.toDouble() ?? 0;
+        final double receivedAmt = (saleMaster['payment'] as num?)?.toDouble() ?? _hasMoney;
+        final double changeAmt = (saleMaster['changeamt'] as num?)?.toDouble() ?? 0;
         // 支付方式（对齐 smdcapp：t_sale_payway 全部 payname 以 / 拼接）
         final String payNames = salePayway
             .map((Map<String, dynamic> e) => e['payname']?.toString() ?? '')
             .where((String n) => n.isNotEmpty)
             .join('/');
         // 收银员（对齐 smdcapp：有桌台取服务员，否则取当前登录人）
-        final Map<String, dynamic>? finishTmp =
-            widget.tableJson?['tmp'] as Map<String, dynamic>?;
-        final String tmpServerName =
-            finishTmp?['servername']?.toString() ?? '';
+        final Map<String, dynamic>? finishTmp = widget.tableJson?['tmp'] as Map<String, dynamic>?;
+        final String tmpServerName = finishTmp?['servername']?.toString() ?? '';
         final String cashierName = tmpServerName.isNotEmpty
             ? tmpServerName
             : (widget.serverName.isNotEmpty ? widget.serverName : _getUserName());
@@ -1820,8 +1810,7 @@ class _SettlePageState extends State<SettlePage> {
         );
       } else {
         // 失败时透出服务端逐条 retmsg，便于定位落库失败原因
-        Toast.show(
-            recordRetmsg.isNotEmpty ? '结账失败：$recordRetmsg' : '结账失败，请重试');
+        Toast.show(recordRetmsg.isNotEmpty ? '结账失败：$recordRetmsg' : '结账失败，请重试');
       }
     } catch (e) {
       if (mounted) {
@@ -1842,8 +1831,7 @@ class _SettlePageState extends State<SettlePage> {
       return;
     }
     final List<Map<String, dynamic>> pending = widget.detailList
-        .where((Map<String, dynamic> d) =>
-            (d['fornowid']?.toString() ?? '').isEmpty)
+        .where((Map<String, dynamic> d) => (d['fornowid']?.toString() ?? '').isEmpty)
         .toList();
     if (pending.isEmpty) {
       Toast.show('不存在可暂结的商品');
@@ -1870,9 +1858,7 @@ class _SettlePageState extends State<SettlePage> {
               'saleid': d['saleid']?.toString() ?? widget.saleid,
               'onlyid': d['onlyid']?.toString() ?? '',
               'rrprice': _toDouble(d['rrprice']),
-              'discount': _toDouble(d['discount']) == 0
-                  ? 100
-                  : _toDouble(d['discount']),
+              'discount': _toDouble(d['discount']) == 0 ? 100 : _toDouble(d['discount']),
               'rramt': _toDouble(d['rramt']),
               'querytoken': d['querytoken']?.toString() ?? '',
             })
@@ -1913,6 +1899,32 @@ class _SettlePageState extends State<SettlePage> {
             'printMode': 1,
           }));
         }
+        // 对齐 smdcapp cancelOrder：主设备暂结后须调用 TableToBePrePaid 更新为已预结。
+        final Map<String, dynamic> masterTmpDto = TableDataUtils.buildFullTableBean(
+          rawJson: widget.tableJson,
+          fallback: <String, dynamic>{
+            'tableid': widget.tableId,
+            'name': widget.tableName,
+            'code': widget.tableCode,
+            'tmp': <String, dynamic>{
+              'tableid': widget.tableId,
+              'saleid': widget.saleid,
+            },
+          },
+        );
+        final dynamic masterTmp = masterTmpDto['tmp'];
+        if (masterTmp is Map<String, dynamic>) {
+          masterTmp['amt'] = 0.0;
+        }
+        await requestForm(
+          HttpApi.pcTableToBePrePaid,
+          <String, dynamic>{
+            'data': jsonEncode(<String, dynamic>{
+              'masterTmpDto': masterTmpDto,
+            }),
+          },
+          masterDevice: true,
+        );
       } else {
         await requestForm(HttpApi.upPayInfo, <String, dynamic>{
           'saleid': widget.saleid,
@@ -1949,8 +1961,7 @@ class _SettlePageState extends State<SettlePage> {
   String _randomStr(int len) {
     const String chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
     final math.Random random = math.Random();
-    return List<String>.generate(
-        len, (_) => chars[random.nextInt(chars.length)]).join();
+    return List<String>.generate(len, (_) => chars[random.nextInt(chars.length)]).join();
   }
 
   /// 构建销售主表（对齐 smdcapp DealSaleBeanUtil.getSaleMasterBean）
@@ -1960,8 +1971,7 @@ class _SettlePageState extends State<SettlePage> {
     final String sid = _getStoreField('id');
     final String spid = _getStoreField('spid');
     final String machNo = SpUtil.getString(Constant.machNo) ?? '';
-    final Map<String, dynamic>? tmp =
-        widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final Map<String, dynamic>? tmp = widget.tableJson?['tmp'] as Map<String, dynamic>?;
     // 对齐 smdcapp getSaleMasterBean：tablebean==null（快餐）时服务员取当前登录人
     final bool hasTable = widget.tableJson != null || widget.tableId.isNotEmpty;
     final String serverId = widget.serverId.isNotEmpty
@@ -2046,14 +2056,11 @@ class _SettlePageState extends State<SettlePage> {
     final String sid = _getStoreField('id');
     final String spid = _getStoreField('spid');
     final String billno = _generateBillNo();
-    final Map<String, dynamic>? tmp =
-        widget.tableJson?['tmp'] as Map<String, dynamic>?;
-    final String serverId = widget.serverId.isNotEmpty
-        ? widget.serverId
-        : (tmp?['serverid']?.toString() ?? '');
-    final String serverName = widget.serverName.isNotEmpty
-        ? widget.serverName
-        : (tmp?['servername']?.toString() ?? '');
+    final Map<String, dynamic>? tmp = widget.tableJson?['tmp'] as Map<String, dynamic>?;
+    final String serverId =
+        widget.serverId.isNotEmpty ? widget.serverId : (tmp?['serverid']?.toString() ?? '');
+    final String serverName =
+        widget.serverName.isNotEmpty ? widget.serverName : (tmp?['servername']?.toString() ?? '');
     // 明细开单时间：有桌台取开台时间，否则取当前（对齐 smdcapp bean.createtime）
     final String createtime = tmp?['billdate']?.toString() ?? _nowStr();
 
@@ -2103,8 +2110,13 @@ class _SettlePageState extends State<SettlePage> {
       // 金额字段统一保留2位小数（对齐 smdcapp CalcUtils.add2/sub2，
       // 防止 payamt 等因 double 精度尾差超出服务端16字符长度限制）
       for (final String key in <String>[
-        'payamt', 'rramt', 'changeamt', 'faceamt',
-        'actulamt', 'virtualamt', 'vipnowmoney',
+        'payamt',
+        'rramt',
+        'changeamt',
+        'faceamt',
+        'actulamt',
+        'virtualamt',
+        'vipnowmoney',
       ]) {
         if (pw[key] != null) pw[key] = _rd2(_toDouble(pw[key]));
       }
@@ -2125,11 +2137,9 @@ class _SettlePageState extends State<SettlePage> {
       } else if (!pw.containsKey('actulamt') && !pw.containsKey('virtualamt')) {
         int handoverflag = 1;
         for (final Map<String, dynamic> pt in _payTypeList) {
-          final String code =
-              pt['payid']?.toString() ?? pt['code']?.toString() ?? '';
+          final String code = pt['payid']?.toString() ?? pt['code']?.toString() ?? '';
           if (code == pw['payid']) {
-            handoverflag =
-                int.tryParse(pt['handoverflag']?.toString() ?? '') ?? 1;
+            handoverflag = int.tryParse(pt['handoverflag']?.toString() ?? '') ?? 1;
             break;
           }
         }
@@ -2258,16 +2268,14 @@ class _SettlePageState extends State<SettlePage> {
               ),
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('选择支付方式',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                child: Text('选择支付方式', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
               ),
               Flexible(
                 child: ListView.separated(
                   shrinkWrap: true,
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   itemCount: _payTypeList.length,
-                  separatorBuilder: (_, __) =>
-                      const Divider(height: 1, color: Color(0xFFF2F3F5)),
+                  separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFFF2F3F5)),
                   itemBuilder: (BuildContext ctx, int index) {
                     final Map<String, dynamic> item = _payTypeList[index];
                     final String payid = item['payid']?.toString() ?? '';
@@ -2325,9 +2333,7 @@ class _SettlePageState extends State<SettlePage> {
     final String yyMMdd = '${(now.year % 100).toString().padLeft(2, '0')}'
         '${now.month.toString().padLeft(2, '0')}'
         '${now.day.toString().padLeft(2, '0')}';
-    final String seq = ((now.millisecondsSinceEpoch ~/ 1000) % 10000)
-        .toString()
-        .padLeft(4, '0');
+    final String seq = ((now.millisecondsSinceEpoch ~/ 1000) % 10000).toString().padLeft(4, '0');
     _billNoCache = '$storeCode$machNo$yyMMdd$seq';
     return _billNoCache;
   }
@@ -2344,8 +2350,7 @@ class _SettlePageState extends State<SettlePage> {
     try {
       final String userStr = SpUtil.getString(Constant.user) ?? '';
       if (userStr.isNotEmpty) {
-        final Map<String, dynamic> userMap =
-            jsonDecode(userStr) as Map<String, dynamic>;
+        final Map<String, dynamic> userMap = jsonDecode(userStr) as Map<String, dynamic>;
         return userMap['name']?.toString() ?? userMap['username']?.toString() ?? '';
       }
     } catch (_) {}
@@ -2356,8 +2361,7 @@ class _SettlePageState extends State<SettlePage> {
     try {
       final String userStr = SpUtil.getString(Constant.user) ?? '';
       if (userStr.isNotEmpty) {
-        final Map<String, dynamic> userMap =
-            jsonDecode(userStr) as Map<String, dynamic>;
+        final Map<String, dynamic> userMap = jsonDecode(userStr) as Map<String, dynamic>;
         return userMap['id']?.toString() ?? userMap['userid']?.toString() ?? '';
       }
     } catch (_) {}
@@ -2368,8 +2372,7 @@ class _SettlePageState extends State<SettlePage> {
     try {
       final String storeStr = SpUtil.getString(Constant.store) ?? '';
       if (storeStr.isNotEmpty) {
-        final Map<String, dynamic> storeMap =
-            jsonDecode(storeStr) as Map<String, dynamic>;
+        final Map<String, dynamic> storeMap = jsonDecode(storeStr) as Map<String, dynamic>;
         return storeMap[field]?.toString() ?? '';
       }
     } catch (_) {}
@@ -2404,8 +2407,7 @@ class _SettlePageState extends State<SettlePage> {
                   padding: const EdgeInsets.all(12),
                   children: <Widget>[
                     // 对齐 smdcapp SettleActivity：桌台信息为 null（快餐模式）不显示桌台卡片
-                    if (widget.tableJson != null ||
-                        widget.tableId.isNotEmpty) ...[
+                    if (widget.tableJson != null || widget.tableId.isNotEmpty) ...[
                       _buildTableCard(isDark),
                       const SizedBox(height: 10),
                     ],
@@ -2474,9 +2476,7 @@ class _SettlePageState extends State<SettlePage> {
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
                     Icon(
-                      _member != null
-                          ? Icons.badge
-                          : Icons.person_search_outlined,
+                      _member != null ? Icons.badge : Icons.person_search_outlined,
                       size: 18,
                       color: _member != null
                           ? _kBrandRed
@@ -2489,8 +2489,7 @@ class _SettlePageState extends State<SettlePage> {
                         _member != null ? _member!.vipname : '会员',
                         style: TextStyle(
                           fontSize: 14,
-                          fontWeight:
-                              _member != null ? FontWeight.w500 : FontWeight.normal,
+                          fontWeight: _member != null ? FontWeight.w500 : FontWeight.normal,
                           color: _member != null
                               ? _kBrandRed
                               : (isDark ? Colors.white70 : const Color(0xFF4E5969)),
@@ -2559,8 +2558,7 @@ class _SettlePageState extends State<SettlePage> {
   /// 订单明细行（套餐主行后跟缩进明细，对齐 smdcapp OrderDetailsLayout/订单确认页）
   List<Map<String, dynamic>> _orderDetailRows() {
     final List<Map<String, dynamic>> mains = <Map<String, dynamic>>[];
-    final Map<String, List<Map<String, dynamic>>> children =
-        <String, List<Map<String, dynamic>>>{};
+    final Map<String, List<Map<String, dynamic>>> children = <String, List<Map<String, dynamic>>>{};
     for (final Map<String, dynamic> d in widget.detailList) {
       final String combid = d['combid']?.toString() ?? '';
       final String onlyid = d['onlyid']?.toString() ?? '';
@@ -2576,14 +2574,12 @@ class _SettlePageState extends State<SettlePage> {
     final List<Map<String, dynamic>> rows = <Map<String, dynamic>>[];
     for (final Map<String, dynamic> m in mains) {
       rows.add(m);
-      final List<Map<String, dynamic>>? kids =
-          children[m['onlyid']?.toString() ?? ''];
+      final List<Map<String, dynamic>>? kids = children[m['onlyid']?.toString() ?? ''];
       if (kids != null) rows.addAll(kids);
     }
     // 归组失败的明细兜底平铺，避免数据静默丢失
     for (final MapEntry<String, List<Map<String, dynamic>>> e in children.entries) {
-      final bool grouped =
-          mains.any((Map<String, dynamic> m) => m['onlyid']?.toString() == e.key);
+      final bool grouped = mains.any((Map<String, dynamic> m) => m['onlyid']?.toString() == e.key);
       if (!grouped) rows.addAll(e.value);
     }
     return rows;
@@ -2610,10 +2606,8 @@ class _SettlePageState extends State<SettlePage> {
             final double qty = _toDouble(item['qty']);
             final double rramt = _toDouble(item['rramt']);
             // 套餐明细分行缩进展示（对齐 smdcapp dishes_item_set_meal_down）
-            final bool isChild =
-                (item['combproductid']?.toString() ?? '').isNotEmpty &&
-                    (item['combid']?.toString() ?? '') !=
-                        (item['onlyid']?.toString() ?? '');
+            final bool isChild = (item['combproductid']?.toString() ?? '').isNotEmpty &&
+                (item['combid']?.toString() ?? '') != (item['onlyid']?.toString() ?? '');
             final List<Widget> tags = isChild ? const <Widget>[] : _promoTags(item);
             final Color nameColor = isDark
                 ? (isChild ? Colors.white60 : Colors.white70)
@@ -2689,8 +2683,7 @@ class _SettlePageState extends State<SettlePage> {
           _priceRow('服务费', _serviceAmt, isDark),
           _priceRow('低消', _lowAmt, isDark),
           _priceRow('优惠合计', _disAmt, isDark),
-          if (_roundAmt != 0)
-            _priceRow('抹零', -_roundAmt, isDark),
+          if (_roundAmt != 0) _priceRow('抹零', -_roundAmt, isDark),
           const Divider(height: 16, color: Color(0xFFF2F3F5)),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2816,7 +2809,8 @@ class _SettlePageState extends State<SettlePage> {
               ),
             ),
             const SizedBox(width: 4),
-            Icon(Icons.chevron_right, size: 18, color: isDark ? Colors.white38 : const Color(0xFFC9CDD4)),
+            Icon(Icons.chevron_right,
+                size: 18, color: isDark ? Colors.white38 : const Color(0xFFC9CDD4)),
           ],
         ),
       ),
@@ -2850,20 +2844,20 @@ class _SettlePageState extends State<SettlePage> {
                         color: const Color(0xFFFFF3E0),
                         borderRadius: BorderRadius.circular(4),
                       ),
-                      child: Text(p.typeText, style: const TextStyle(fontSize: 11, color: Color(0xFFFF9800))),
+                      child: Text(p.typeText,
+                          style: const TextStyle(fontSize: 11, color: Color(0xFFFF9800))),
                     ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         p.billname,
-                        style: TextStyle(fontSize: 13, color: isDark ? Colors.white70 : const Color(0xFF4E5969)),
+                        style: TextStyle(
+                            fontSize: 13, color: isDark ? Colors.white70 : const Color(0xFF4E5969)),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
                     TextButton(
-                      onPressed: _appliedPromoBillid == p.billid
-                          ? null
-                          : () => _applyPromotion(p),
+                      onPressed: _appliedPromoBillid == p.billid ? null : () => _applyPromotion(p),
                       style: TextButton.styleFrom(
                         foregroundColor: _kBrandRed,
                         disabledForegroundColor: const Color(0xFF86909C),
@@ -2883,7 +2877,8 @@ class _SettlePageState extends State<SettlePage> {
               padding: const EdgeInsets.only(top: 4),
               child: Text(
                 '已优惠：¥${_rd2(_promoDisAmt)}',
-                style: const TextStyle(fontSize: 13, color: _kBrandRed, fontWeight: FontWeight.w500),
+                style:
+                    const TextStyle(fontSize: 13, color: _kBrandRed, fontWeight: FontWeight.w500),
               ),
             ),
         ],
@@ -2921,7 +2916,8 @@ class _SettlePageState extends State<SettlePage> {
               ),
             ),
             const SizedBox(width: 4),
-            Icon(Icons.chevron_right, size: 18, color: isDark ? Colors.white38 : const Color(0xFFC9CDD4)),
+            Icon(Icons.chevron_right,
+                size: 18, color: isDark ? Colors.white38 : const Color(0xFFC9CDD4)),
           ],
         ),
       ),
@@ -2933,8 +2929,8 @@ class _SettlePageState extends State<SettlePage> {
   /// [payId]/[payName] 为支付方式入口传入的平台（13/meituantuangou/kuaishou）；
   /// 从通用"团购核销"卡片进入时为空，由弹窗内选择平台。
   Future<void> _onVerifyCoupon({String payId = '', String payName = ''}) async {
-    final bool memberPay = _salePayWayList
-        .any((Map<String, dynamic> e) => e['payid']?.toString() == '02');
+    final bool memberPay =
+        _salePayWayList.any((Map<String, dynamic> e) => e['payid']?.toString() == '02');
     final VerifyCouponResult? result = await VerifyCouponSheet.show(
       context,
       saleid: widget.saleid,
@@ -3009,10 +3005,7 @@ class _SettlePageState extends State<SettlePage> {
       final double qty = _toDouble(d['qty']);
       final double oldTotal = result.originalAmount;
       final double rramt = oldTotal > 0
-          ? _rd2(qty *
-              _toDouble(d['sellprice']) /
-              oldTotal *
-              result.dealAmount)
+          ? _rd2(qty * _toDouble(d['sellprice']) / oldTotal * result.dealAmount)
           : _toDouble(d['rramt']);
       d['rramt'] = rramt;
       if (qty > 0) {
@@ -3034,8 +3027,7 @@ class _SettlePageState extends State<SettlePage> {
   /// 取消券核销标记（对齐 smdcapp setDyOrMtFlag(dy, false)）
   void _unmarkCouponDetails(String onlyId) {
     if (onlyId.isEmpty) return;
-    final Map<String, Map<String, dynamic>> baseByOnlyId =
-        <String, Map<String, dynamic>>{};
+    final Map<String, Map<String, dynamic>> baseByOnlyId = <String, Map<String, dynamic>>{};
     for (final Map<String, dynamic> b in _baseDetails) {
       baseByOnlyId[b['onlyid']?.toString() ?? ''] = b;
     }
@@ -3044,8 +3036,7 @@ class _SettlePageState extends State<SettlePage> {
       d['isCouponHx'] = false;
       d['douyinflag'] = 0;
       d['querytoken'] = '';
-      final Map<String, dynamic>? base =
-          baseByOnlyId[d['onlyid']?.toString() ?? ''];
+      final Map<String, dynamic>? base = baseByOnlyId[d['onlyid']?.toString() ?? ''];
       if (base != null) {
         d['rramt'] = base['rramt'];
         d['rrprice'] = base['rrprice'];
@@ -3074,6 +3065,10 @@ class _SettlePageState extends State<SettlePage> {
             // 抹零记录不可撤销（对齐 smdcapp: 自动抹零不提供撤销）
             final bool isAutoRound =
                 item['payid']?.toString() == '06' && item['payname']?.toString() == '抹零';
+            // 扫码支付已实际收款，不支持本地撤销（对齐 smdcapp：移动支付不进可撤销列表）
+            final String payid = item['payid']?.toString() ?? '';
+            final bool canCancel =
+                !isAutoRound && payid != '08' && payid != '09' && payid != '10';
             return Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Row(
@@ -3093,7 +3088,7 @@ class _SettlePageState extends State<SettlePage> {
                       color: isDark ? Colors.white : const Color(0xFF1D2129),
                     ),
                   ),
-                  if (!isAutoRound) ...<Widget>[
+                  if (canCancel) ...<Widget>[
                     const SizedBox(width: 8),
                     GestureDetector(
                       onTap: () => _cancelPayRecord(item),
@@ -3222,7 +3217,10 @@ class _SettlePageState extends State<SettlePage> {
   Widget _buildBottomBar(bool isDark) {
     return Container(
       padding: EdgeInsets.fromLTRB(
-        16, 10, 16, MediaQuery.of(context).padding.bottom + 10,
+        16,
+        10,
+        16,
+        MediaQuery.of(context).padding.bottom + 10,
       ),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF232425) : Colors.white,
@@ -3313,9 +3311,8 @@ class _SettlePageState extends State<SettlePage> {
     final double discount = _toDouble(item['discount']);
     if (discount > 0 && discount < 100) {
       final double zhe = discount / 10;
-      final String text = zhe == zhe.roundToDouble()
-          ? zhe.toInt().toString()
-          : zhe.toStringAsFixed(1);
+      final String text =
+          zhe == zhe.roundToDouble() ? zhe.toInt().toString() : zhe.toStringAsFixed(1);
       tags.add(_tag('$text折', const Color(0xFF00C15A)));
     }
     return tags;

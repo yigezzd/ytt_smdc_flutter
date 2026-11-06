@@ -1,0 +1,56 @@
+schema_version: 1
+module_path: root
+title: 点餐 APP (ytt-smdc-flutter) Flutter 应用根
+scope:
+    - README.md
+    - README-EN.md
+    - pubspec.yaml
+    - pubspec.lock
+    - .gitignore
+    - analysis_options.yaml
+    - devtools_options.yaml
+source_files: []
+depends_on: []
+related_to: []
+kk_module_id: 9b0f2409-75cd-4bab-aa43-b0ce65a17726
+kk_cards:
+    architecture_design:
+        id: c1c6180a-3c91-41a3-b96d-c12729788d93
+        title: 点餐 APP (ytt-smdc-flutter) Flutter 应用根
+    coding_conventions:
+        id: 88ec7d74-94a6-40fe-96aa-db5c29eea9a9
+        title: 点餐 APP (ytt-smdc-flutter) Flutter 应用根
+    overview:
+        id: a9002c53-9158-40b0-b31b-e956f040a1a3
+        title: 点餐 APP (ytt-smdc-flutter) Flutter 应用根
+    tech_stack:
+        id: 60c18171-bb3c-4e41-b4f5-f2189b1fc42e
+        title: 点餐 APP (ytt-smdc-flutter) Flutter 应用根
+    unique_setup_and_commands:
+        id: f0847b86-69b5-423b-ad75-706d933e1a79
+        title: 点餐 APP (ytt-smdc-flutter) Flutter 应用根
+    build_system:
+        id: 8fa97bb3-4a92-478a-b762-f0491d46a38f
+        title: Flutter 多端构建与 CI 打包体系
+    configuration_system:
+        id: e2fd3e64-eedd-4e61-b290-57966fd610a9
+        title: Flutter 点餐应用配置体系：常量集中 + SharedPreferences 持久化 + Dio baseUrl 注入
+    dependency_management:
+        id: 71523e13-110f-44ee-9da9-cca398958a6a
+        title: Flutter 项目依赖管理：pubspec + Android Gradle + CocoaPods 三方声明
+    error_handling:
+        id: a7196a80-d627-4095-926f-7a8ebae91520
+        title: Flutter 点餐应用错误处理体系：网络异常、全局崩溃与业务状态码统一归口
+    frontend_style:
+        id: 1c2b7c10-1357-4648-b83b-236ca979d86c
+        title: Flutter Material 主题与 Design Tokens（颜色/字号/间距）集中管理
+    logging_system:
+        id: d5d1714e-ee4f-4c4a-a977-1d9c003618f4
+        title: 日志系统：控制台格式化输出 + 本地分类文件落盘 + 敏感操作上报与 FTP 压缩上传
+kk_repo_cards:
+    - build_system
+    - configuration_system
+    - dependency_management
+    - error_handling
+    - frontend_style
+    - logging_system

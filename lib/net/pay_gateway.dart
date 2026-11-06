@@ -122,10 +122,14 @@ class PayGateway {
     return _boyouQuery(billNo: billNo, payid: payid);
   }
 
-  /// 关闭订单（对齐 smdcapp closeTrade / boYouPay.closeOrdersLoad）
+  /// 关闭订单（对齐 smdcapp closeTrade / LePos.closeOrdersLoad / boYouPay.closeOrdersLoad）
   Future<void> closeOrder(String billNo) async {
     if (payType == '1') {
       return; // 收钱吧不需要主动关闭（对齐 smdcapp 注释掉的 cancel 调用）
+    }
+    if (payType == '2') {
+      await _leshuaClose(billNo);
+      return;
     }
     await _boyouClose(billNo);
   }
@@ -496,19 +500,23 @@ class PayGateway {
   /// 乐刷通知地址（对齐 smdcapp LePos.notify_url）
   static const String _leshuaNotifyUrl = 'http://yun.bypos.net/LePos/common/notify.do';
 
-  /// 乐刷付款码支付（对齐 smdcapp LePos.payAuthCode）
+  /// 乐刷付款码支付（对齐 smdcapp LesPayDialog.pay → LePos.payAuthCode）
   ///
-  /// [payid] 08=支付宝 09=微信
+  /// [payid] 08=支付宝 09=微信 10=云闪付
   /// [amtFen] 金额（分）
   /// [authCode] 客户付款码
+  ///
+  /// 返回值只代表"支付是否已最终成功"：resp_code/result_code 双 0 仅表示受理成功，
+  /// 还必须 status=2（对齐 smdcapp：status!=2 一律继续轮询，status 0 为支付中）
   Future<bool> leshuaPay({
     required String payid,
     required String billNo,
     required int amtFen,
     required String authCode,
   }) async {
-    // pay_way: 支付宝=ALIPAY 微信=WECHAT（对齐 smdcapp LePos payway 映射）
-    final String payWay = payid == '08' ? 'ALIPAY' : 'WECHAT';
+    // pay_way 与 smdcapp LesPayDialog.pay 一致：支付宝=ZFBZF 微信=WXZF 云闪付=空
+    final String payWay =
+        payid == '08' ? 'ZFBZF' : (payid == '09' ? 'WXZF' : '');
     final Map<String, String> params = <String, String>{
       'service': 'upload_authcode',
       'pay_way': payWay,
@@ -533,14 +541,42 @@ class PayGateway {
         options: Options(contentType: Headers.formUrlEncodedContentType),
       );
       final Map<String, String> result = _parseXml(response.data ?? '');
+      _leshuaPayResponse = result;
+      _leshuaResponseReceived = true;
       final String respCode = result['resp_code'] ?? '';
       final String resultCode = result['result_code'] ?? '';
       _leshuaTradeNo = result['leshua_order_id'] ?? '';
-      // resp_code=0 且 result_code=0 表示支付成功
-      return respCode == '0' && resultCode == '0';
+      if (respCode != '0' || resultCode != '0') return false;
+      // 受理成功不等于支付成功，仅 status=2 为支付成功（对齐 smdcapp）
+      return result['status'] == '2';
     } catch (_) {
       return false;
     }
+  }
+
+  /// 乐刷支付响应缓存（用于判定明确失败/提取错误信息）
+  Map<String, String> _leshuaPayResponse = <String, String>{};
+  bool _leshuaResponseReceived = false;
+
+  /// 乐刷支付是否明确失败（对齐 smdcapp LesPayDialog.pay：resp_code/result_code
+  /// 非 0，或 status 处于 6=订单已关闭 / 8=支付失败）
+  /// 网络异常未收到响应时返回 false（对齐 smdcapp onFailure → clickTrade 轮询）
+  bool get leshuaPayDefinitelyFailed {
+    if (!_leshuaResponseReceived) return false;
+    final String respCode = _leshuaPayResponse['resp_code'] ?? '';
+    if (respCode != '0') return true;
+    final String resultCode = _leshuaPayResponse['result_code'] ?? '';
+    if (resultCode != '0') return true;
+    final String status = _leshuaPayResponse['status'] ?? '';
+    return status == '6' || status == '8';
+  }
+
+  /// 获取乐刷支付错误信息
+  String get leshuaErrorMsg {
+    final String errMsg = _leshuaPayResponse['error_msg'] ?? '';
+    if (errMsg.isNotEmpty) return errMsg;
+    final String respMsg = _leshuaPayResponse['resp_msg'] ?? '';
+    return respMsg.isNotEmpty ? respMsg : '支付失败';
   }
 
   /// 乐刷查询支付状态（对齐 smdcapp LePos.payCheckStatusV3）
@@ -565,11 +601,27 @@ class PayGateway {
       );
       final Map<String, String> result = _parseXml(response.data ?? '');
       final String respCode = result['resp_code'] ?? '';
+      final String resultCode = result['result_code'] ?? '';
       final String status = result['status'] ?? '';
       final String tradeNo = result['leshua_order_id'] ?? '';
-      // status=2 表示支付成功（对齐 smdcapp LePos 状态判断）
-      if (respCode == '0' && status == '2') {
+      // 通信失败为终态（对齐 smdcapp LesPayDialog.queryLeshua: closeOrder(resp_msg,false)）
+      if (respCode != '0') {
+        final String errMsg = result['resp_msg'] ?? '支付失败';
+        return ScanPayResult(
+            success: false, trade: errMsg, payid: payid, billNo: billNo, errorMsg: errMsg);
+      }
+      // 业务码非 0 未出终态，继续轮询（对齐 smdcapp 不做处理）
+      if (resultCode != '0') {
+        return ScanPayResult(success: false, trade: '', payid: payid, billNo: billNo);
+      }
+      if (status == '2') {
         return ScanPayResult(success: true, trade: tradeNo, payid: payid, billNo: billNo);
+      }
+      if (status == '6' || status == '8') {
+        // 订单已关闭/支付失败（对齐 smdcapp：closeOrder(error_msg,false)）
+        final String errMsg = result['error_msg'] ?? '支付失败';
+        return ScanPayResult(
+            success: false, trade: errMsg, payid: payid, billNo: billNo, errorMsg: errMsg);
       }
       // status=0/1 为未支付/支付中，非终态
       return ScanPayResult(success: false, trade: '', payid: payid, billNo: billNo);
@@ -588,6 +640,27 @@ class PayGateway {
   String _leshuaSign(Map<String, String> params) {
     final String paramStr = _sortedParamStr(params);
     return _md5('$paramStr&key=$terminalkey').toUpperCase();
+  }
+
+  /// 乐刷关闭订单（对齐 smdcapp LePos.closeOrdersLoad）
+  Future<void> _leshuaClose(String billNo) async {
+    final Map<String, String> params = <String, String>{
+      'service': 'close_order',
+      'merchant_id': terminalsn,
+      'third_order_id': billNo,
+      'nonce_str': _uuid(),
+    };
+    params['sign'] = _leshuaSign(params);
+    final String requestBody = _sortedParamStr(params);
+    try {
+      await _payDio.post<String>(
+        _leshuaDomain,
+        data: requestBody,
+        options: Options(contentType: Headers.formUrlEncodedContentType),
+      );
+    } catch (_) {
+      // 关闭订单失败不处理（对齐 smdcapp）
+    }
   }
 
   // ═══════════════════ 退款 ═══════════════════

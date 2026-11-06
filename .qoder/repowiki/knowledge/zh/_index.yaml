@@ -1,0 +1,36 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+commit: a232b15d92a7e44dc66fad6ddda73c0111c89cdd
+branch: main
+exported_at: "2026-10-27T02:34:42Z"
+modules:
+    ci_and_scripts:
+        dir_name: Flutter 跨平台构建与 CI 辅助脚本
+        title: Flutter 跨平台构建与 CI 辅助脚本
+        scope:
+            - build_apk.ps1
+            - build_ipa.ps1
+            - download_flutter.ps1
+            - get_short_path.ps1
+            - codemagic.yaml
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    root:
+        dir_name: 点餐 APP (ytt-smdc-flutter) Flutter 应用根
+        title: 点餐 APP (ytt-smdc-flutter) Flutter 应用根
+        scope:
+            - README.md
+            - README-EN.md
+            - pubspec.yaml
+            - pubspec.lock
+            - .gitignore
+            - analysis_options.yaml
+            - devtools_options.yaml
+        source_files: []
+        children:
+            - ci_and_scripts
+        depends_on: []
+        related_to: []

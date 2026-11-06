@@ -4,7 +4,7 @@ import 'package:sp_util/sp_util.dart';
 
 /// 扫码支付异常订单本地缓存（对齐 smdcapp PayFlow 表）
 ///
-/// 支付中途断网/超时/用户关闭支付弹窗时记录一笔待查询订单，
+/// 支付中途断网/超时/失败/用户关闭支付弹窗时记录一笔待查询订单，
 /// 供“异常订单”页面重新发起交易查询。
 class ScanPendingStore {
   ScanPendingStore._();
@@ -45,7 +45,8 @@ class ScanPendingStore {
       'tablename': tableName,
       'cashname': cashname,
       'billdate': DateTime.now().toString().substring(0, 19),
-      'hasUploadFlag': '0',
+      // 2=交易异常（对齐 smdcapp PayFlow，0=流水未上传）
+      'hasUploadFlag': '2',
       'payConfig': payConfig,
     });
     SpUtil.putString(_key, json.encode(list));

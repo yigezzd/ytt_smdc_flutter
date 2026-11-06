@@ -20,6 +20,7 @@ import 'package:flutter_deer/pages/order/nth_discount_manager.dart';
 import 'package:flutter_deer/pages/order/order_models.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/pages/order/promotion_manager.dart';
+import 'package:flutter_deer/pages/order/stock_check.dart';
 import 'package:flutter_deer/pages/order/widgets/promotion_gift_sheet.dart';
 import 'package:flutter_deer/pages/order/widgets/set_meal_sheet.dart';
 import 'package:flutter_deer/res/constant.dart';
@@ -114,6 +115,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
   /// 已下单明细接口原始行（下单前促销校验接口的 details 入参，对齐 smdcapp
   /// post() 传完整 detailList：待下单 + 已下单）
   List<Map<String, dynamic>> _orderedRawRows = <Map<String, dynamic>>[];
+
+  /// 下单前沽清快照（主设备回写沽清时合并 saleqty/leftqty，对齐 smdcapp OrderProcessor.guQingData）
+  List<Map<String, dynamic>> _guQingData = <Map<String, dynamic>>[];
 
   /// 本地计算的低消差（R17：服务端低消配置变更后立即可用）
   double _localLowAmt = 0;
@@ -709,6 +713,11 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       if (success) {
         Toast.show('下单成功');
         _logAction('下单成功');
+        // 对齐 smdcapp OrderProcessor：下单成功后按本批新明细回写沽清数量（异步，失败不阻断）
+        OrderRepository.updateQtyWarnAfterOrder(
+          warnProducts: _buildWarnProducts(),
+          guQingData: _guQingData,
+        );
         // 云服务：客单/出品单/出品分单/杯贴/挂起单已通过 printtype 交给服务端重建，
         // 不再额外调用 restPrint，避免同一票据重复打印。
         // 对齐 smdcapp：下单成功后返回桌台首页并刷新桌台数据（桌台变为待结算状态）
@@ -755,6 +764,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         };
         final List<String> disabled = <String>[];
         final List<String> repriced = <String>[];
+        // 规格商品最新规格价（按商品缓存；null 表示接口失败，跳过校验对齐 fail-open）
+        final Map<String, DishSpecData?> specCache = <String, DishSpecData?>{};
         for (final CartItem item in pending) {
           // 临时菜不在商品档案内，跳过
           if (item.tpdishflag == 1) continue;
@@ -763,17 +774,70 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
             disabled.add(item.displayName);
             continue;
           }
-          final bool simple = !item.isCombo &&
-              !item.isWeigh &&
-              !item.isNthPromo &&
-              item.specText.isEmpty &&
-              item.customPrice == null &&
-              item.discount >= 100 &&
-              !item.isGift;
-          if (!simple) continue;
-          final double oldPrice = item.product.price;
+          // 手工改价/折扣/赠送/称重/第N份促销/套餐行价格非商品档案价，不参与改价同步
+          if (item.isCombo ||
+              item.isWeigh ||
+              item.isNthPromo ||
+              item.customPrice != null ||
+              item.discount < 100 ||
+              item.isGift) {
+            continue;
+          }
+          // 规格商品按规格价校验（商品主价不参与规格行定价，对齐 smdcapp）
+          if (item.specid.isNotEmpty || item.specName.isNotEmpty) {
+            if (!specCache.containsKey(item.product.id)) {
+              try {
+                specCache[item.product.id] =
+                    await OrderRepository.fetchProductCookSpec(item.product.id);
+              } catch (_) {
+                specCache[item.product.id] = null;
+              }
+              if (!mounted) return false;
+            }
+            final DishSpecData? specData = specCache[item.product.id];
+            if (specData == null) continue;
+            DishSpec? matched;
+            for (final DishSpec s in specData.specdata) {
+              if (item.specid.isNotEmpty && s.specid == item.specid) {
+                matched = s;
+                break;
+              }
+            }
+            if (matched == null && item.specName.isNotEmpty) {
+              for (final DishSpec s in specData.specdata) {
+                if (s.specname == item.specName) {
+                  matched = s;
+                  break;
+                }
+              }
+            }
+            if (matched == null) {
+              disabled.add('${item.displayName}（规格已下架）');
+              continue;
+            }
+            // 行单价含做法数量加价，剥离后与最新规格价比对
+            final double oldSpecPrice = item.product.price - item.unitCookExtra;
+            final double newSpecPrice = matched.actualPrice;
+            if ((newSpecPrice - oldSpecPrice).abs() <= 0.005) continue;
+            item.product.price = newSpecPrice + item.unitCookExtra;
+            item.jcmbillid = '';
+            item.specpriceflag = 0;
+            item.promoPrice = 0;
+            PromotionManager.instance.applyToCartItem(item);
+            repriced.add(
+              '${item.displayName} ¥${oldSpecPrice.toStringAsFixed(2)} → '
+              '¥${newSpecPrice.toStringAsFixed(2)}',
+            );
+            FileLogWriter.instance.writeToFile(
+              '下单前实时改价: ${item.product.name} $oldSpecPrice -> $newSpecPrice',
+              tag: '下单',
+            );
+            continue;
+          }
+          // 无规格（可能含做法）：单价剥离做法数量加价后与最新主价比对
+          final double oldPrice = item.product.price - item.unitCookExtra;
           if ((latest.sellprice - oldPrice).abs() <= 0.005) continue;
-          item.product.price = latest.sellprice;
+          item.product.price = latest.sellprice + item.unitCookExtra;
           item.jcmbillid = '';
           item.specpriceflag = 0;
           item.promoPrice = 0;
@@ -815,6 +879,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     try {
       final List<Map<String, dynamic>> warns = await OrderRepository.fetchWarnList();
       if (!mounted) return false;
+      _guQingData = warns;
       final Map<String, double> leftMap = <String, double>{};
       for (final Map<String, dynamic> w in warns) {
         final String pid = w['productid']?.toString() ?? '';
@@ -856,39 +921,21 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     } catch (_) {}
 
     // 3. 实时库存校验（对齐 smdcapp OrderProcessor.checkStock → checkOrderStock）
-    final String overStock = ParamsSpUtils.getOverStockPerSale();
-    if (overStock != '1') {
-      try {
-        final List<Map<String, dynamic>>? errs =
-            await OrderRepository.checkOrderStock(_buildDetailList());
-        if (!mounted) return false;
-        if (errs != null && errs.isNotEmpty) {
-          final List<String> lines = errs.map((Map<String, dynamic> e) {
-            final String name = e['productname']?.toString() ?? '';
-            final String qty = (e['newqty'] ?? e['qty'] ?? '').toString();
-            final String stock = (e['stockqty'] ?? e['rawstockqty'] ?? '').toString();
-            return '$name（需$qty，剩余$stock）';
-          }).toList();
-          final String content = '以下菜品库存不足：\n${lines.join('\n')}';
-          if (overStock == '2') {
-            final bool goOn = await ConfirmDialog.show(
-              context,
-              content: '$content\n是否继续下单？',
-              confirmText: '继续下单',
-            );
-            if (!goOn) return false;
-          } else {
-            await ConfirmDialog.show(
-              context,
-              content: '$content\n请调整数量后再下单',
-              singleButton: true,
-            );
-            return false;
-          }
-        }
-      } catch (_) {}
-    }
+    //    参数 1 不提示 / 2 允许销售提示 / 3 不允许销售，弹窗与点菜页去下单共用
+    final bool stockOk = await checkStockBeforeOrder(
+      context,
+      _pendingItems,
+      onChanged: _onStockRowsRemoved,
+    );
+    if (!stockOk) return false;
     return true;
+  }
+
+  /// 库存不足删除菜品后同步点菜页购物车（两页共用同一批 CartItem 引用）
+  void _onStockRowsRemoved() {
+    widget.cartItems.removeWhere((CartItem c) => !_pendingItems.contains(c));
+    _applyNthDiscount();
+    if (mounted) setState(() {});
   }
 
   String _fmtQtyForCheck(double qty) =>
@@ -1342,6 +1389,49 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'cooktext': bagText,
         'createtime': now,
       });
+    }
+    return list;
+  }
+
+  /// 本批新下单明细 → 沽清回写入参（对齐 smdcapp OrderProcessor：
+  /// detailList 中 id==0 的明细，套餐子行按子商品一并计入）
+  List<Map<String, dynamic>> _buildWarnProducts() {
+    final List<Map<String, dynamic>> list = <Map<String, dynamic>>[];
+    void add(String productid, String productname, String specid, int specflag, double qty) {
+      if (productid.isEmpty || qty == 0) {
+        return;
+      }
+      final Map<String, dynamic> row = <String, dynamic>{
+        'productid': productid,
+        'productname': productname,
+        'qty': qty,
+      };
+      if (specflag == 1 && specid.isNotEmpty) {
+        row['specid'] = specid;
+      }
+      list.add(row);
+    }
+
+    for (final CartItem item in _pendingItems) {
+      add(
+        item.product.id,
+        item.displayName,
+        item.specid,
+        item.product.specflag,
+        item.isWeigh ? item.weighNum : item.qtyValue,
+      );
+      if (!item.isCombo) {
+        continue;
+      }
+      for (final ComboSelectedItem c in item.combItems) {
+        add(
+          c.productid,
+          c.productname,
+          c.specid,
+          (c.specid.isNotEmpty || c.specname.isNotEmpty) ? 1 : 0,
+          c.qty * item.qtyValue,
+        );
+      }
     }
     return list;
   }

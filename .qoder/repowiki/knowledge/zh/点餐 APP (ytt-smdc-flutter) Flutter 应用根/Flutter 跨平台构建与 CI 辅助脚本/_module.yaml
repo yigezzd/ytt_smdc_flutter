@@ -1,0 +1,29 @@
+schema_version: 1
+module_path: ci_and_scripts
+title: Flutter 跨平台构建与 CI 辅助脚本
+scope:
+    - build_apk.ps1
+    - build_ipa.ps1
+    - download_flutter.ps1
+    - get_short_path.ps1
+    - codemagic.yaml
+source_files: []
+depends_on: []
+related_to: []
+kk_module_id: 8369ec88-6301-49f4-ba3f-961291cfab2c
+kk_cards:
+    architecture_design:
+        id: 6cd4a966-c736-42e6-866a-6aac49352f4f
+        title: Flutter 跨平台构建与 CI 辅助脚本
+    coding_conventions:
+        id: 2fc2671e-2f11-43e1-99c4-efd9f3bb7595
+        title: Flutter 跨平台构建与 CI 辅助脚本
+    overview:
+        id: 1da1f697-0dc1-40d5-9561-a8b3242a0772
+        title: Flutter 跨平台构建与 CI 辅助脚本
+    tech_stack:
+        id: 172c7b27-a0de-4b64-bf37-b7aae70cb2d8
+        title: Flutter 跨平台构建与 CI 辅助脚本
+    unique_setup_and_commands:
+        id: d7edfeb2-a79e-4b44-ac76-57e2f053071b
+        title: Flutter 跨平台构建与 CI 辅助脚本

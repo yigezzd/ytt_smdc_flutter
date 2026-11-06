@@ -13,16 +13,16 @@ class HttpApi {
 
   /// 基础域名（含 /app 前缀，由 [baseUrlYttRoot] 拼接而来，无需单独修改）
   static const String baseUrlYtt = '$baseUrlYttRoot/app';
-  
+
   /// 登录接口（表单编码 POST）
   static const String yttLogin = '/yttlogin';
-  
+
   /// 获取多商户列表（手机号/商户号绑定多个商户时）
   static const String mobileStoreList = '/mobileStoreList';
-  
+
   /// APP版本检查更新
   static const String appCheckVersion = '/version/getversion';
-  
+
   /// 权限相关 API
   static const String roleGetInfoRetMap = '/role/getRoleInfo';
 
@@ -312,6 +312,9 @@ class HttpApi {
 
   /// 主设备-暂结（对齐 smdcapp /api/table/InsertPayawyFornow）
   static const String pcInsertPayawyFornow = '/api/table/InsertPayawyFornow';
+
+  /// 主设备-待结算改已预结（对齐 smdcapp /api/table/TableToBePrePaid）
+  static const String pcTableToBePrePaid = '/api/table/TableToBePrePaid';
 
   /// 云服务-上传暂结单（对齐 smdcapp /YttSvr/app/fornowsale/upPayInfo）
   static const String upPayInfo = '/fornowsale/upPayInfo';

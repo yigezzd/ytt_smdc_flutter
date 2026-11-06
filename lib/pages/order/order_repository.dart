@@ -16,14 +16,24 @@ class DishCategory {
     required this.name,
     this.isort = 0,
     this.stopflag = 0,
-  });
+    this.createtime = '',
+    List<DishCategory>? children,
+  }) : children = children ?? <DishCategory>[];
 
   factory DishCategory.fromJson(Map<String, dynamic> json) {
+    final dynamic rawChildren = json['children'];
     return DishCategory(
       typeid: json['typeid']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
       isort: _toInt(json['isort']),
       stopflag: _toInt(json['stopflag']),
+      createtime: json['createtime']?.toString() ?? '',
+      children: rawChildren is List
+          ? rawChildren
+              .whereType<Map<dynamic, dynamic>>()
+              .map((Map<dynamic, dynamic> e) => DishCategory.fromJson(e.cast<String, dynamic>()))
+              .toList()
+          : null,
     );
   }
 
@@ -31,6 +41,10 @@ class DishCategory {
   final String name;
   final int isort;
   final int stopflag;
+  final String createtime;
+
+  /// 二级分类（对齐 smdcapp ProductType.children）
+  final List<DishCategory> children;
 }
 
 /// 出品档口模型（对齐 smdcapp KitchenBean.ListBean 核心字段）
@@ -900,25 +914,69 @@ class OrderRepository {
 
   // ==================== 本地缓存数据源（对齐 smdcapp 主设备模式读本地库） ====================
 
-  /// 从本地缓存读取一级分类列表（对齐 smdcapp ProductTypeDao.queryAllLevel1）
+  /// 从本地缓存读取分类树（对齐 smdcapp ProductTypeDao.queryAllLevel1/queryAllLevel2ByTypeid）
   ///
-  /// 过滤条件：level=1 && stopflag=0 && status=1 && mobileshowflag=1，按 isort 升序。
+  /// 一级过滤：level=1 && stopflag=0 && status=1 && mobileshowflag=1；
+  /// 二级过滤：level=2 && stopflag=0 && status=1 && mobileshowflag=1，
+  /// 按 isort 升序、createtime 降序挂到对应一级分类下。
   static Future<List<DishCategory>> _fetchCategoriesFromLocal() async {
-    final List<Map<String, dynamic>> rows =
-        await TableDownloadManager.readTableData('t_bi_type');
+    final List<Map<String, dynamic>> rows = await TableDownloadManager.readTableData('t_bi_type');
     if (rows.isEmpty) {
       return <DishCategory>[];
     }
+    bool visible(Map<String, dynamic> r) =>
+        _toInt(r['stopflag']) == 0 && _toInt(r['status']) == 1 && _toInt(r['mobileshowflag']) == 1;
+
     final List<DishCategory> result = rows
-        .where((Map<String, dynamic> r) =>
-            _toInt(r['level']) == 1 &&
-            _toInt(r['stopflag']) == 0 &&
-            _toInt(r['status']) == 1 &&
-            _toInt(r['mobileshowflag']) == 1)
+        .where((Map<String, dynamic> r) => _toInt(r['level']) == 1 && visible(r))
         .map((Map<String, dynamic> r) => DishCategory.fromJson(r))
         .toList()
-      ..sort((DishCategory a, DishCategory b) => a.isort.compareTo(b.isort));
+      ..sort(_compareCategory);
+    if (result.isEmpty) {
+      return result;
+    }
+
+    // 二级分类按 parenttypeid 归到一级分类（对齐 smdcapp LIKE typeid || '%' 前缀匹配）
+    final List<String> levelOneIds =
+        result.map((DishCategory c) => c.typeid).where((String id) => id.isNotEmpty).toList();
+    final Map<String, List<DishCategory>> childrenMap = <String, List<DishCategory>>{};
+    for (final Map<String, dynamic> r in rows) {
+      if (_toInt(r['level']) != 2 || !visible(r)) continue;
+      final String id = r['typeid']?.toString() ?? '';
+      if (id.isEmpty) continue;
+      final String parent = _resolveParentTypeId(
+        r['parenttypeid']?.toString() ?? '',
+        levelOneIds,
+      );
+      if (parent.isEmpty) continue;
+      childrenMap.putIfAbsent(parent, () => <DishCategory>[]).add(DishCategory.fromJson(r));
+    }
+    for (final DishCategory parent in result) {
+      final List<DishCategory>? children = childrenMap[parent.typeid];
+      if (children == null) continue;
+      children.sort(_compareCategory);
+      parent.children.addAll(children);
+    }
     return result;
+  }
+
+  /// 分类排序（对齐 smdcapp ORDER BY isort ASC, createtime DESC）
+  static int _compareCategory(DishCategory a, DishCategory b) {
+    final int bySort = a.isort.compareTo(b.isort);
+    return bySort != 0 ? bySort : b.createtime.compareTo(a.createtime);
+  }
+
+  /// 解析二级分类的父级一级分类（精确匹配优先，其次最长前缀匹配）
+  static String _resolveParentTypeId(String parentTypeId, List<String> levelOneIds) {
+    if (parentTypeId.isEmpty) return '';
+    if (levelOneIds.contains(parentTypeId)) return parentTypeId;
+    String matched = '';
+    for (final String id in levelOneIds) {
+      if (id.isNotEmpty && parentTypeId.startsWith(id) && id.length > matched.length) {
+        matched = id;
+      }
+    }
+    return matched;
   }
 
   /// 读取本地分类的二级→一级映射（对齐 smdcapp ProductType.parenttypeid）
@@ -927,26 +985,28 @@ class OrderRepository {
   /// 若不向上归并，二级分类下的菜品不会出现在任何分类里（对齐 smdcapp formatType）。
   static Future<Map<String, String>> fetchCategoryParentMap() async {
     try {
-      final List<Map<String, dynamic>> rows =
-          await TableDownloadManager.readTableData('t_bi_type');
+      final List<Map<String, dynamic>> rows = await TableDownloadManager.readTableData('t_bi_type');
       if (rows.isEmpty) return <String, String>{};
-      final Map<String, String> levelOne = <String, String>{};
-      for (final Map<String, dynamic> r in rows) {
-        final String id = r['typeid']?.toString() ?? '';
-        if (id.isNotEmpty && _toInt(r['level']) == 1) levelOne[id] = id;
-      }
+      final List<String> levelOneIds = rows
+          .where((Map<String, dynamic> r) => _toInt(r['level']) == 1)
+          .map((Map<String, dynamic> r) => r['typeid']?.toString() ?? '')
+          .where((String id) => id.isNotEmpty)
+          .toList();
       final Map<String, String> map = <String, String>{};
       for (final Map<String, dynamic> r in rows) {
         final String id = r['typeid']?.toString() ?? '';
         if (id.isEmpty) continue;
         // 一级分类映射到自身
-        if (levelOne.containsKey(id)) {
+        if (levelOneIds.contains(id)) {
           map[id] = id;
           continue;
         }
-        // 二级分类向上找一级父级（父级缺失时退化为自身，避免商品被丢弃）
-        final String parent = r['parenttypeid']?.toString() ?? '';
-        map[id] = levelOne.containsKey(parent) ? parent : id;
+        // 二级分类向上找一级父级（前缀匹配对齐 smdcapp；父级缺失时退化为自身，避免商品被丢弃）
+        final String parent = _resolveParentTypeId(
+          r['parenttypeid']?.toString() ?? '',
+          levelOneIds,
+        );
+        map[id] = parent.isNotEmpty ? parent : id;
       }
       return map;
     } catch (_) {
@@ -1327,7 +1387,14 @@ class OrderRepository {
         <String, dynamic>{'saledetail': jsonEncode(details)},
         showError: false,
       );
-      final dynamic data = resp['data'] ?? resp['Data'];
+      // 对齐 smdcapp RootResponse<CheckStockBean>：服务端 SaleController
+      // 把 SaleService 返回的 ResultVo 作为 data 再包一层，
+      // errlist 实际位于 data.data.errlist（兼容只包一层的情况）。
+      dynamic data = resp['data'] ?? resp['Data'];
+      if (data is Map && data['errlist'] is! List) {
+        final dynamic inner = data['data'] ?? data['Data'];
+        if (inner is Map) data = inner;
+      }
       if (data is Map) {
         final dynamic errlist = data['errlist'];
         if (errlist is List) {
@@ -1941,6 +2008,66 @@ class OrderRepository {
       }
     } catch (_) {}
     return <Map<String, dynamic>>[];
+  }
+
+  /// 下单后回写沽清数量（对齐 smdcapp OrderProcessor.updateQtywarnPro）
+  ///
+  /// [warnProducts] 本批新下单明细，每项 productid/productname/qty，规格商品带 specid。
+  /// [guQingData] 下单前拉取的沽清列表，主设备模式据此合并 saleqty/leftqty 后整行回写。
+  /// 失败不影响下单结果（对齐 smdcapp 异步静默处理）。
+  static Future<void> updateQtyWarnAfterOrder({
+    required List<Map<String, dynamic>> warnProducts,
+    required List<Map<String, dynamic>> guQingData,
+  }) async {
+    if (warnProducts.isEmpty) {
+      return;
+    }
+    try {
+      if (ConnectionManager.pcAlive) {
+        if (guQingData.isEmpty) {
+          return;
+        }
+        final Map<String, Map<String, dynamic>> guQingMap = <String, Map<String, dynamic>>{
+          for (final Map<String, dynamic> g in guQingData)
+            '${g['productid']}_${g['specid'] ?? ''}': g,
+        };
+        final List<Map<String, dynamic>> updateList = <Map<String, dynamic>>[];
+        for (final Map<String, dynamic> w in warnProducts) {
+          final Map<String, dynamic>? g = guQingMap['${w['productid']}_${w['specid'] ?? ''}'];
+          if (g == null) {
+            continue;
+          }
+          final double qty = _toDouble(w['qty']);
+          updateList.add(<String, dynamic>{
+            'spid': int.tryParse(UserHelper.getSpidStr()) ?? 0,
+            'sid': int.tryParse(UserHelper.getSidStr()) ?? 0,
+            'warnqty': _toDouble(g['warnqty']),
+            'productid': g['productid']?.toString() ?? '',
+            'specid': g['specid']?.toString() ?? '',
+            'onlyid': g['onlyid']?.toString() ?? '',
+            'id': _toInt(g['id']),
+            'status': 1,
+            'saleqty': _toDouble(g['saleqty']) + qty,
+            'leftqty': _toDouble(g['leftqty']) - qty,
+          });
+        }
+        if (updateList.isEmpty) {
+          return;
+        }
+        await requestForm(
+          HttpApi.pcReplaceProductWarnList,
+          <String, dynamic>{'productwarnlist': jsonEncode(updateList)},
+          masterDevice: true,
+          showError: false,
+        );
+      } else {
+        await requestForm(
+          HttpApi.updateQtyWarnPro,
+          <String, dynamic>{'warnproducts': jsonEncode(warnProducts)},
+          showError: false,
+        );
+      }
+    } catch (_) {}
   }
 
   /// 做法沽清编码缓存（对齐 smdcapp CartGoodsModel.cookWarnList）

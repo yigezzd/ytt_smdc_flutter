@@ -5,8 +5,8 @@ import 'package:flutter_deer/util/scan_pending_store.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 
 /// 异常订单查询页（对齐 smdcapp YcOrderActivity）
-/// smdcapp 中此页面读取本地 Room 数据库 PayFlow 表，展示未上传/交易异常的流水。
-/// Flutter 端暂无本地流水缓存机制，此页预留结构，后续对接本地存储。
+/// 展示扫码支付中断/失败时写入本地的待查询订单（ScanPendingStore），
+/// 支持重新发起交易查询。
 class YcOrderPage extends StatefulWidget {
   const YcOrderPage({super.key});
 

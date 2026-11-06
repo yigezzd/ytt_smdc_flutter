@@ -78,6 +78,12 @@ class _ScanPayDialogState extends State<ScanPayDialog> {
   Timer? _countdownTimer;
   Timer? _pollTimer;
   bool _payFinished = false;
+
+  /// 结果已返回结算页（成功或手动关闭），防止异步查询结果重复 pop
+  bool _resultDelivered = false;
+
+  /// 交易查询进行中（按钮显示 loading，防止重复点击）
+  bool _querying = false;
   bool _isPaying = false;
 
   @override
@@ -114,7 +120,10 @@ class _ScanPayDialogState extends State<ScanPayDialog> {
       }
       setState(() {
         _countdown--;
-        _loadingText = '交易正在处理，请勿操作...${_countdown}s';
+        // 已展示查询失败/交易查询入口时，不再被倒计时文案覆盖
+        if (_state == 0) {
+          _loadingText = '交易正在处理，请勿操作...${_countdown}s';
+        }
       });
       if (_countdown == 2 && !_payFinished) {
         // 对齐 smdcapp needCloseTrade: 58秒时提示
@@ -144,21 +153,32 @@ class _ScanPayDialogState extends State<ScanPayDialog> {
 
       if (directSuccess) {
         // 直接支付成功（对齐 smdcapp handlerTradeSuccess → closeOrder(trade, true)）
-        final String trade = widget.gateway.payType == '1'
-            ? widget.gateway.sqbTradeNo
-            : widget.gateway.boyouTrade;
+        final String trade;
+        if (widget.gateway.payType == '1') {
+          trade = widget.gateway.sqbTradeNo;
+        } else if (widget.gateway.payType == '2') {
+          trade = widget.gateway.leshuaTradeNo;
+        } else {
+          trade = widget.gateway.boyouTrade;
+        }
         _finishPay(true, trade);
         return;
       }
 
       // 检查是否明确失败（对齐 smdcapp PAY_FAIL / status 6/8）
-      final bool definitelyFailed = widget.gateway.payType == '1'
-          ? widget.gateway.sqbPayDefinitelyFailed
-          : widget.gateway.boyouPayDefinitelyFailed;
+      final bool definitelyFailed;
+      final String errMsg;
+      if (widget.gateway.payType == '1') {
+        definitelyFailed = widget.gateway.sqbPayDefinitelyFailed;
+        errMsg = widget.gateway.sqbErrorMsg;
+      } else if (widget.gateway.payType == '2') {
+        definitelyFailed = widget.gateway.leshuaPayDefinitelyFailed;
+        errMsg = widget.gateway.leshuaErrorMsg;
+      } else {
+        definitelyFailed = widget.gateway.boyouPayDefinitelyFailed;
+        errMsg = widget.gateway.boyouErrorMsg;
+      }
       if (definitelyFailed) {
-        final String errMsg = widget.gateway.payType == '1'
-            ? widget.gateway.sqbErrorMsg
-            : widget.gateway.boyouErrorMsg;
         await widget.gateway.closeOrder(widget.billNo);
         if (mounted) _finishPay(false, errMsg);
         return;
@@ -168,9 +188,21 @@ class _ScanPayDialogState extends State<ScanPayDialog> {
       _startPolling();
     } catch (_) {
       if (!mounted) return;
-      // 网络异常 → 尝试查询（对齐 smdcapp onFailure → clickTrade）
+      // 网络异常 → 立即展示交易查询入口并继续轮询
+      // （对齐 smdcapp onFailure → clickTrade → showQueryTradeFail）
+      _showQueryFailed();
       _startPolling();
     }
+  }
+
+  /// 展示“查询异常”及交易查询按钮，轮询与超时流程保持运行
+  void _showQueryFailed() {
+    if (!mounted || _resultDelivered) return;
+    setState(() {
+      _state = 1;
+      _showTradeQuery = true;
+      _loadingText = '查询异常';
+    });
   }
 
   /// 轮询支付状态（对齐 smdcapp queryServer.scheduleAtFixedRate 每2秒）
@@ -207,14 +239,19 @@ class _ScanPayDialogState extends State<ScanPayDialog> {
   }
 
   /// 结束支付（对齐 smdcapp closeOrder）
+  ///
+  /// 支付失败后仍可点“交易查询”补查到成功，因此失败不是最终态：
+  /// 只拦截重复失败，成功结果始终允许返回结算页。
   void _finishPay(bool success, String tradeOrError) {
-    if (_payFinished) return;
+    if (_resultDelivered) return;
+    if (!success && _payFinished) return;
     _payFinished = true;
     _countdownTimer?.cancel();
     _pollTimer?.cancel();
 
     if (success) {
       // 支付成功 → 关闭弹窗返回结果
+      _resultDelivered = true;
       if (mounted) {
         Navigator.of(context).pop(ScanPayResult(
           success: true,
@@ -235,14 +272,36 @@ class _ScanPayDialogState extends State<ScanPayDialog> {
     }
   }
 
+  /// 手动关闭：返回失败结果，结算页据此生成异常订单
+  void _closeManually() {
+    if (_resultDelivered) return;
+    _resultDelivered = true;
+    _payFinished = true;
+    _countdownTimer?.cancel();
+    _pollTimer?.cancel();
+    if (!mounted) return;
+    Navigator.of(context).pop(ScanPayResult(
+      success: false,
+      trade: _loadingText,
+      payid: widget.payid,
+      billNo: widget.billNo,
+      errorMsg: _loadingText,
+    ));
+  }
+
   /// 交易查询（对齐 smdcapp clickTrade：手动查询一次）
   Future<void> _onTradeQuery() async {
+    if (_querying || _resultDelivered) return;
+    setState(() {
+      _querying = true;
+      _loadingText = '正在查询...';
+    });
     try {
       final ScanPayResult result = await widget.gateway.queryStatus(
         billNo: widget.billNo,
         payid: widget.payid,
       );
-      if (!mounted) return;
+      if (!mounted || _resultDelivered) return;
       if (result.success) {
         _finishPay(true, result.trade);
       } else if (result.trade.isNotEmpty) {
@@ -259,6 +318,10 @@ class _ScanPayDialogState extends State<ScanPayDialog> {
         setState(() {
           _loadingText = '查询异常';
         });
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _querying = false);
       }
     }
   }
@@ -342,6 +405,7 @@ class _ScanPayDialogState extends State<ScanPayDialog> {
                         child: DialogActionButton(
                           text: '交易查询',
                           color: const Color(0xFF1677FF),
+                          loading: _querying,
                           onTap: _onTradeQuery,
                         ),
                       ),
@@ -351,15 +415,7 @@ class _ScanPayDialogState extends State<ScanPayDialog> {
                       child: DialogActionButton(
                         text: '关闭',
                         primary: false,
-                        onTap: () {
-                          Navigator.of(context).pop(ScanPayResult(
-                            success: false,
-                            trade: _loadingText,
-                            payid: widget.payid,
-                            billNo: widget.billNo,
-                            errorMsg: _loadingText,
-                          ));
-                        },
+                        onTap: _closeManually,
                       ),
                     ),
                   ],

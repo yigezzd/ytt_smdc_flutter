@@ -279,11 +279,56 @@ class AmountCalcUtils {
 
   // ──────────── 台桌服务费计算（对齐 smdcapp GetServiceAmountUtils.calcTableServiceMoneyV2）─────────
 
+  /// 解析服务费配置（对齐 smdcapp：开台费标志位决定用附加费 id 还是桌台类型 id）
+  static Future<TableTypeEntity?> resolveServiceConfig({
+    required Map<String, dynamic>? tmp,
+    required String tableTypeId,
+  }) async {
+    final bool openAmt = ParamsSpUtils.getOpenTableAmtFlag() != '0';
+    final String additionId = tmp?['additionid']?.toString() ?? '';
+    final String id = (openAmt && additionId.isNotEmpty) ? additionId : tableTypeId;
+    if (id.isEmpty) return null;
+    return TableTypeDao.instance.getByCreateid(id);
+  }
+
+  /// 明细是否带菜品「收服务费」开关字段（旧数据可能缺失，缺失时回退整单金额）
+  static bool hasServiceFeeFlag(List<Map<String, dynamic>> detailList) {
+    for (final Map<String, dynamic> b in detailList) {
+      if (b.containsKey('servicefeeflag')) return true;
+    }
+    return false;
+  }
+
+  /// 服务费基数：只统计开启收服务费的菜品（对齐 smdcapp Arith.showAllPriceInfo）
+  ///
+  /// - servicefeeflag==1 才计入，关闭的菜品不参与，全部关闭时基数为 0；
+  /// - 按消费金额计费且 serviceamtflag==1 时取折前 oldrramt，否则取折后 rramt；
+  /// - 套餐子行金额已并入主套餐行，跳过避免重复统计。
+  static double calcServiceBaseAmount({
+    required List<Map<String, dynamic>> detailList,
+    required int serviceamtflag,
+  }) {
+    double base = 0;
+    for (final Map<String, dynamic> b in detailList) {
+      if ((b['combproductid']?.toString() ?? '').isNotEmpty &&
+          (b['combid']?.toString() ?? '').isNotEmpty) {
+        continue;
+      }
+      if (_toInt(b['servicefeeflag']) != 1) continue;
+      final double amt = serviceamtflag == 1
+          ? _toDouble(b['oldrramt'] ?? b['rramt'])
+          : _toDouble(b['rramt'] ?? b['oldrramt']);
+      base = _round2By(base + amt);
+    }
+    return base;
+  }
+
   /// 台桌服务费（按桌台类型/附加费配置计算）
   ///
   /// [tmp] 订单 tmp（提供 additionid / personnum / billdate / servicebegintime / serviceendtime）
   /// [tableTypeId] 桌台 tabletypeid（未开附加费或无 additionid 时使用）
-  /// [saleMoney] 折后消费金额（servicetype=1 按其百分比计费）
+  /// [saleMoney] 服务费基数：按消费金额时传 [calcServiceBaseAmount] 的结果
+  /// [tableType] 已解析的服务费配置，传入可避免重复查库
   ///
   /// servicetype：1=按消费金额百分比 2=指定金额 3=按小时 4=按人
   /// 5（起步递增）/6（时段区间）需附加费区间表，此处返回 0 由服务端结果兜底。
@@ -291,18 +336,15 @@ class AmountCalcUtils {
     required Map<String, dynamic>? tmp,
     required String tableTypeId,
     required double saleMoney,
+    TableTypeEntity? tableType,
   }) async {
     // 仅正餐模式收取服务费（对齐 smdcapp: getCurrentStoremodel() != 2 直接返回 0）
     if (StoreModeUtils.getCurrentStoreModel() != StoreModeUtils.storeModelNormal) {
       return 0;
     }
-    // 开台费标志位：开则优先用 additionid，否则用 tabletypeid
-    final bool openAmt = ParamsSpUtils.getOpenTableAmtFlag() != '0';
-    final String additionId = tmp?['additionid']?.toString() ?? '';
-    final String id = (openAmt && additionId.isNotEmpty) ? additionId : tableTypeId;
-    if (id.isEmpty) return 0;
 
-    final TableTypeEntity? type = await TableTypeDao.instance.getByCreateid(id);
+    final TableTypeEntity? type = tableType ??
+        await resolveServiceConfig(tmp: tmp, tableTypeId: tableTypeId);
     if (type == null || type.servicetype == 0) return 0;
     final double serviceamt = type.serviceamt;
 
@@ -338,6 +380,17 @@ class AmountCalcUtils {
   }
 
   static double _round2By(double v) => (v * 100).roundToDouble() / 100;
+
+  static int _toInt(dynamic v) {
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse(v?.toString() ?? '') ?? 0;
+  }
+
+  static double _toDouble(dynamic v) {
+    if (v is num) return v.toDouble();
+    return double.tryParse(v?.toString() ?? '') ?? 0;
+  }
 
   static DateTime? _parseDateTime(String v) {
     if (v.isEmpty) return null;

@@ -34,8 +34,8 @@ class CartPanelSheet extends StatefulWidget {
 
   final List<CartItem> cartItems;
 
-  /// 增加某条目数量
-  final ValueChanged<CartItem> onAdd;
+  /// 增加某条目数量（异步：必点菜需等待二次确认后再刷新面板）
+  final Future<void> Function(CartItem) onAdd;
 
   /// 减少某条目数量
   final ValueChanged<CartItem> onRemove;
@@ -55,7 +55,7 @@ class CartPanelSheet extends StatefulWidget {
   static Future<void> show(
     BuildContext context, {
     required List<CartItem> cartItems,
-    required ValueChanged<CartItem> onAdd,
+    required Future<void> Function(CartItem) onAdd,
     required ValueChanged<CartItem> onRemove,
     required VoidCallback onClear,
     ValueChanged<CartItem>? onItemChanged,
@@ -89,14 +89,15 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
   int get _totalCount =>
       widget.cartItems.fold<double>(0, (double sum, CartItem item) => sum + item.qtyValue).round();
 
-  void _handleAdd(CartItem item) {
+  Future<void> _handleAdd(CartItem item) async {
     // 对齐 smdcapp checkQtyValid：第N份促销拆分行不能直接加数量
     if (item.isNthPromo) {
       Toast.show('促销商品不能操作');
       return;
     }
-    widget.onAdd(item);
-    setState(() {});
+    // 等页面处理完（必点菜二次确认）再刷新，避免确认后数量不立即变化
+    await widget.onAdd(item);
+    if (mounted) setState(() {});
   }
 
   void _handleRemove(CartItem item) {

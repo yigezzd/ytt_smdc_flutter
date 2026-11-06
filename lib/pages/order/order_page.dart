@@ -22,6 +22,7 @@ import 'package:flutter_deer/pages/order/nth_discount_manager.dart';
 import 'package:flutter_deer/pages/order/order_models.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/pages/order/promotion_manager.dart';
+import 'package:flutter_deer/pages/order/stock_check.dart';
 import 'package:flutter_deer/pages/order/widgets/cart_panel_sheet.dart';
 import 'package:flutter_deer/pages/order/widgets/must_select_sheet.dart';
 import 'package:flutter_deer/pages/order/widgets/set_meal_sheet.dart';
@@ -54,11 +55,38 @@ const double _kProductHeight = 100.0;
 /// 分类 header 高度
 const double _kHeaderHeight = 40.0;
 
+/// 二级分类标题高度
+const double _kSubHeaderHeight = 30.0;
+
+/// 顶部二级分类栏高度
+const double _kSubCategoryBarHeight = 42.0;
+
 /// 推荐菜虚拟分类 ID（对齐 smdcapp ProductHelper.getDisType，非后台分类数据）
 const String _kRecommendTypeId = '000000';
 
 /// 底部购物车栏内容高度（不含 SafeArea，供列表底部预留）
 const double _kCartBarHeight = 58.0;
+
+/// 二级分类分组（typeId 为一级分类 typeid 时表示“全部”）
+class _SubCategoryGroup {
+  const _SubCategoryGroup({
+    required this.typeId,
+    required this.name,
+    required this.count,
+    required this.startIndex,
+    required this.headerOffset,
+  });
+
+  final String typeId;
+  final String name;
+  final int count;
+
+  /// 在所属一级分类商品列表中的起始下标
+  final int startIndex;
+
+  /// 分组标题（“全部”为一级分类标题）在列表中的偏移量
+  final double headerOffset;
+}
 
 /// 商品实时快照（加购前校验停用/改价，2 秒内复用同一分类结果）
 class _RealtimeProductSnapshot {
@@ -150,6 +178,18 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   /// 商品所属分类反查 Map（productid → typeid），用于分类角标统计
   final Map<String, String> _productTypeIdMap = <String, String>{};
 
+  /// 商品所属二级分类 Map（productid → 二级 typeid，无二级时等于一级 typeid）
+  final Map<String, String> _productSubTypeIdMap = <String, String>{};
+
+  /// 一级分类 → 可见二级分类（对齐 smdcapp ProductType.children）
+  final Map<String, List<DishCategory>> _subCategories = <String, List<DishCategory>>{};
+
+  /// 一级分类 → 二级分组（首项为“全部”），用于顶部标签与滚动定位
+  final Map<String, List<_SubCategoryGroup>> _subGroups = <String, List<_SubCategoryGroup>>{};
+
+  /// 顶部二级分类栏当前选中的 typeid（等于一级 typeid 表示“全部”）
+  final ValueNotifier<String?> _activeSubTypeId = ValueNotifier<String?>(null);
+
   /// 分类购物车数量 Map（typeid → 数量），用于左侧分类角标
   final Map<String, int> _categoryCountMap = <String, int>{};
 
@@ -202,6 +242,9 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   /// 页面是否已销毁（锁台请求跨过退出时机时兜底释放）
   bool _disposed = false;
 
+  /// 去下单库存校验中（防重复点击弹出多个弹窗）
+  bool _checkingStock = false;
+
   String get _currentSaleid {
     final String tmpSaleid = widget.tableJson?['tmp']?['saleid']?.toString() ?? '';
     return tmpSaleid.isNotEmpty ? tmpSaleid : widget.saleid;
@@ -246,6 +289,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     _categoryScrollController.dispose();
     _cartBadgeController.dispose();
     _activeCategoryIndex.dispose();
+    _activeSubTypeId.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -385,12 +429,45 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       // 挂在二级分类下的菜品需归并到其父分类，否则整批菜品不显示）
       final Map<String, String> categoryParentMap = await OrderRepository.fetchCategoryParentMap();
 
-      // 按 typeid 分组
+      // 可见二级分类树：用于顶部二级分类栏、列表分组与滚动定位
+      final Map<String, String> childParentMap = <String, String>{};
+      final Map<String, int> childOrderMap = <String, int>{};
+      _subCategories.clear();
+      for (final DishCategory parent in categories) {
+        if (parent.children.isEmpty) continue;
+        _subCategories[parent.typeid] = parent.children;
+        for (int i = 0; i < parent.children.length; i++) {
+          final DishCategory child = parent.children[i];
+          childParentMap[child.typeid] = parent.typeid;
+          childOrderMap[child.typeid] = i + 1;
+        }
+      }
+
+      // 按一级 typeid 分组，同时记录每个商品所属二级分类
+      _productTypeIdMap.clear();
+      _productSubTypeIdMap.clear();
       final Map<String, List<DishProduct>> grouped = <String, List<DishProduct>>{};
       for (final DishProduct p in products) {
-        final String typeId = categoryParentMap[p.typeid] ?? p.typeid;
+        final String? childParent = childParentMap[p.typeid];
+        final String typeId = childParent ?? categoryParentMap[p.typeid] ?? p.typeid;
         grouped.putIfAbsent(typeId, () => <DishProduct>[]).add(p);
         _productTypeIdMap[p.productid] = typeId;
+        _productSubTypeIdMap[p.productid] = childParent != null ? p.typeid : typeId;
+      }
+
+      // 一级分类内按 二级分类顺序 → typeproisort → isort 排序
+      // （对齐 smdcapp ProductScrollViewModel.buildDisplayList）
+      for (final MapEntry<String, List<DishProduct>> entry in grouped.entries) {
+        final bool hasChildren = (_subCategories[entry.key]?.isNotEmpty ?? false);
+        entry.value.sort((DishProduct a, DishProduct b) {
+          if (hasChildren) {
+            final int ai = childOrderMap[_productSubTypeIdMap[a.productid]] ?? 0;
+            final int bi = childOrderMap[_productSubTypeIdMap[b.productid]] ?? 0;
+            if (ai != bi) return ai.compareTo(bi);
+          }
+          final int bySort = a.typeproisort.compareTo(b.typeproisort);
+          return bySort != 0 ? bySort : a.isort.compareTo(b.isort);
+        });
       }
 
       // 推荐菜虚拟分类（对齐 smdcapp ProductHelper.getDisType / ProductScrollViewModel：
@@ -419,6 +496,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
       // 计算各分类区块偏移量
       _calculateSectionOffsets();
+      _activeSubTypeId.value = _defaultSubTypeId(0);
 
       // 必点菜自动加购 → 恢复已保存菜品（对齐 smdcapp DishesHomeAct2：initData(initMust) → delay(100) → initGetSaveData）
       _initCartFromServer();
@@ -431,15 +509,55 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     }
   }
 
-  /// 计算每个分类区块在列表中的起始偏移
+  /// 计算每个分类区块及二级分组的起始偏移
   void _calculateSectionOffsets() {
     _sectionOffsets.clear();
+    _subGroups.clear();
     double offset = 0;
     for (final DishCategory cat in _categories) {
       _sectionOffsets.add(offset);
-      final int productCount = _groupedProducts[cat.typeid]?.length ?? 0;
-      // 分类 header + 商品卡片
-      offset += _kHeaderHeight + productCount * _kProductHeight;
+      final List<DishProduct> products = _groupedProducts[cat.typeid] ?? <DishProduct>[];
+      final List<DishCategory>? children = _subCategories[cat.typeid];
+      if (children == null || children.isEmpty) {
+        // 分类 header + 商品卡片
+        offset += _kHeaderHeight + products.length * _kProductHeight;
+        continue;
+      }
+
+      final Map<String, int> counts = <String, int>{};
+      for (final DishProduct p in products) {
+        final String subId = _productSubTypeIdMap[p.productid] ?? cat.typeid;
+        counts[subId] = (counts[subId] ?? 0) + 1;
+      }
+
+      final List<_SubCategoryGroup> groups = <_SubCategoryGroup>[];
+      final int directCount = counts[cat.typeid] ?? 0;
+      // “全部”分组：定位到一级分类标题位置
+      groups.add(_SubCategoryGroup(
+        typeId: cat.typeid,
+        name: '全部',
+        count: directCount,
+        startIndex: 0,
+        headerOffset: offset,
+      ));
+      int startIndex = directCount;
+      double groupOffset = offset + _kHeaderHeight + directCount * _kProductHeight;
+      for (final DishCategory child in children) {
+        final int count = counts[child.typeid] ?? 0;
+        groups.add(_SubCategoryGroup(
+          typeId: child.typeid,
+          name: child.name,
+          count: count,
+          startIndex: startIndex,
+          headerOffset: groupOffset,
+        ));
+        if (count > 0) {
+          groupOffset += _kSubHeaderHeight + count * _kProductHeight;
+        }
+        startIndex += count;
+      }
+      _subGroups[cat.typeid] = groups;
+      offset = groupOffset;
     }
   }
 
@@ -713,6 +831,45 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     } catch (_) {
       // 必点菜同步失败不影响主流程（对齐 smdcapp 静默处理）
     }
+  }
+
+  /// 必点菜加量超额提示（文案对齐 smdcapp MustUtil.mustHint / MustHelper.check）
+  ///
+  /// 按加量后的有效数量与该商品所属固定必点方案的需求数量比较，
+  /// 超出时返回“订单必点菜数量超额，是否继续？\n方案名称：xxx”，未超出返回 null。
+  String? _mustOverQtyHint(CartItem item, double addQty) {
+    if (_mustGroups.isEmpty) return null;
+    final int personNum = _currentPersonNum();
+    final String pid = item.product.id;
+    final String itemSpecid = item.specid;
+    for (final Map<String, dynamic> group in _mustGroups) {
+      // 对齐 smdcapp：仅固定必点菜（mustrule==0）存在超额概念，可选必点只校验缺少
+      if (_mustToInt(group['mustrule']) != 0) continue;
+      final dynamic rawList = group['mustproductlist'];
+      if (rawList is! List || rawList.isEmpty) continue;
+      final bool perPerson = _mustToInt(group['musttype']) == 0;
+      for (final dynamic raw in rawList) {
+        if (raw is! Map<String, dynamic>) continue;
+        if ((raw['productid']?.toString() ?? '') != pid) continue;
+        // 对齐 smdcapp MustHelper.matchProductAndSpec：方案未指定规格时只匹配商品
+        final String ruleSpecid = raw['specid']?.toString() ?? '';
+        if (ruleSpecid.isNotEmpty && ruleSpecid != itemSpecid) continue;
+        final double baseQty =
+            _mustToDouble(raw['mustqty']) < 1 ? 1.0 : _mustToDouble(raw['mustqty']);
+        final double requiredQty = perPerson ? baseQty * (personNum < 1 ? 1 : personNum) : baseQty;
+        // 统计口径对齐 smdcapp MustHelper.check：同商品全部有效明细，退菜不计
+        final double currentQty = _cartItems
+            .where((CartItem c) =>
+                c.product.id == pid &&
+                (ruleSpecid.isEmpty || c.specid == ruleSpecid) &&
+                !c.isRefunded)
+            .fold(0.0, (double sum, CartItem c) => sum + c.qtyValue);
+        if (currentQty + addQty > requiredQty) {
+          return '订单必点菜数量超额，是否继续？\n方案名称：${group['name']?.toString() ?? ''}';
+        }
+      }
+    }
+    return null;
   }
 
   /// 恢复桌台已保存的未落单菜品（对齐 smdcapp DishesHomeAct2.initGetSaveData）
@@ -1023,6 +1180,38 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       _activeCategoryIndex.value = newIndex;
       _scrollCategoryToVisible(newIndex);
     }
+    _syncActiveSubCategory(newIndex, scrollPos);
+  }
+
+  /// 滚动时同步顶部二级分类高亮（对齐 ytt-smdc menu.vue handleScroll）
+  void _syncActiveSubCategory(int parentIndex, double scrollPos) {
+    if (parentIndex < 0 || parentIndex >= _categories.length) return;
+    final List<_SubCategoryGroup>? groups = _subGroups[_categories[parentIndex].typeid];
+    if (groups == null || groups.isEmpty) {
+      if (_activeSubTypeId.value != null) _activeSubTypeId.value = null;
+      return;
+    }
+
+    _SubCategoryGroup? matched;
+    for (final _SubCategoryGroup group in groups) {
+      if (group.headerOffset > scrollPos + 1) break;
+      if (group.count > 0) matched = group;
+    }
+    // 无直挂商品时“全部”为空分组，以第一个有商品的二级分类为准
+    matched ??= groups.firstWhere(
+      (_SubCategoryGroup g) => g.count > 0,
+      orElse: () => groups.first,
+    );
+    if (_activeSubTypeId.value != matched.typeId) {
+      _activeSubTypeId.value = matched.typeId;
+    }
+  }
+
+  /// 指定一级分类默认选中的二级分类（“全部”，无二级时为 null）
+  String? _defaultSubTypeId(int index) {
+    if (index < 0 || index >= _categories.length) return null;
+    final List<_SubCategoryGroup>? groups = _subGroups[_categories[index].typeid];
+    return (groups == null || groups.isEmpty) ? null : groups.first.typeId;
   }
 
   /// 确保左侧分类项可见
@@ -1052,6 +1241,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   void _onCategoryTap(int index) {
     if (index == _activeCategoryIndex.value) return;
     _activeCategoryIndex.value = index;
+    _activeSubTypeId.value = _defaultSubTypeId(index);
 
     if (index < _sectionOffsets.length && _listScrollController.hasClients) {
       _isProgrammaticScroll = true;
@@ -1065,6 +1255,42 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         _isProgrammaticScroll = false;
       });
     }
+  }
+
+  /// 点击二级分类 → 定位到对应分组标题（对齐 ytt-smdc handleSecondClick / smdcapp scrollToCategory）
+  void _onSubCategoryTap(DishCategory parent, _SubCategoryGroup group) {
+    _activeSubTypeId.value = group.typeId;
+    final int parentIndex = _categories.indexWhere((DishCategory c) => c.typeid == parent.typeid);
+    if (parentIndex < 0 || parentIndex >= _sectionOffsets.length) return;
+
+    double target = _sectionOffsets[parentIndex];
+    final List<_SubCategoryGroup>? groups = _subGroups[parent.typeid];
+    if (groups != null && group.typeId != parent.typeid) {
+      _SubCategoryGroup resolved = group;
+      if (resolved.count <= 0) {
+        // 空分组顺延到下一个有商品的二级分类，找不到则回退到前一个有商品的分组
+        final int groupIndex = groups.indexOf(group);
+        resolved = groups.skip(groupIndex).firstWhere(
+              (_SubCategoryGroup g) => g.count > 0,
+              orElse: () => groups
+                  .take(groupIndex)
+                  .lastWhere((_SubCategoryGroup g) => g.count > 0, orElse: () => groups.first),
+            );
+      }
+      target = resolved.headerOffset;
+    }
+
+    if (!_listScrollController.hasClients) return;
+    _isProgrammaticScroll = true;
+    _listScrollController
+        .animateTo(
+      target,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOut,
+    )
+        .then((_) {
+      _isProgrammaticScroll = false;
+    });
   }
 
   // ==================== 购物车逻辑 ====================
@@ -1236,11 +1462,14 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   }
 
   /// 刷新分类商品与沽清实时快照（2 秒节流；接口失败时保留旧快照/不拦截）
-  Future<void> _refreshRealtimeSnapshot(String typeid) async {
+  ///
+  /// [force] 为 true 时跳过商品快照节流（规格弹窗打开等低频场景需取最新价）。
+  Future<void> _refreshRealtimeSnapshot(String typeid, {bool force = false}) async {
     final DateTime now = DateTime.now();
     final _RealtimeProductSnapshot? cached = _realtimeSnapshots[typeid];
-    final bool productFresh =
-        cached != null && now.difference(cached.at) < const Duration(seconds: 2);
+    final bool productFresh = !force &&
+        cached != null &&
+        now.difference(cached.at) < const Duration(seconds: 2);
     if (!productFresh) {
       try {
         final List<DishProduct> products =
@@ -1369,25 +1598,43 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           ),
         ),
       );
-      final DishSpecData specData = await OrderRepository.fetchProductCookSpec(dish.productid);
+      // R4/R5：打开规格弹窗前实时校验停用/改价，避免 Web 改价后仍按原价下单
+      await _refreshRealtimeSnapshot(dish.typeid, force: true);
+      if (!mounted) return;
+      final _RealtimeProductSnapshot? snapshot = _realtimeSnapshots[dish.typeid];
+      final DishProduct? latest = snapshot?.products[dish.productid];
+      if (snapshot != null && (latest == null || latest.isDisabled)) {
+        Navigator.of(context).pop(); // 关闭 loading
+        Toast.show('菜品【${dish.name}】已停用，无法点餐');
+        return;
+      }
+      // 商品主价以实时快照为准；规格/做法价由 getProductCookSpec 实时返回
+      final DishProduct effectiveDish = latest ?? dish;
+      final DishSpecData specData =
+          await OrderRepository.fetchProductCookSpec(effectiveDish.productid);
       if (!mounted) return;
       Navigator.of(context).pop(); // 关闭 loading
 
       if (specData.specdata.isEmpty && specData.cookdata.isEmpty) {
         // 无规格做法数据，直接加购
-        _addToCart(dish);
+        _addToCart(effectiveDish);
         return;
+      }
+
+      if ((effectiveDish.sellprice - dish.sellprice).abs() > 0.005) {
+        Toast.show(
+            '菜品【${dish.name}】价格已更新为 ¥${_fmtPrice(effectiveDish.sellprice)}');
       }
 
       await SpecCookSheet.show(
         context,
-        product: dish,
+        product: effectiveDish,
         specData: specData,
         onAddToCart: (SpecCookSubmit data) {
-          _addSpecToCart(dish, data);
+          _addSpecToCart(effectiveDish, data);
         },
         onBuyNow: (SpecCookSubmit data) {
-          _addSpecToCart(dish, data);
+          _addSpecToCart(effectiveDish, data);
           _goConfirm();
         },
       );
@@ -1628,27 +1875,8 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     CartPanelSheet.show(
       context,
       cartItems: _cartItems,
-      onAdd: (CartItem item) {
+      onAdd: (CartItem item) async {
         final double step = _findDishProduct(item.product.id)?.addQty ?? 1;
-        void addQuantity() {
-          setState(() {
-            _setCartItemQty(item, item.qtyValue + step);
-            _applyNthDiscount();
-            _rebuildCountMap();
-          });
-        }
-
-        // R80：必点菜允许增加数量，但需二次确认（对齐安卓“允许并提示是否继续”）
-        if (item.mustflag == 1) {
-          ConfirmDialog.show(
-            context,
-            content: '该菜品为必点菜，修改数量可能影响必点规则，是否继续？',
-          ).then((bool ok) {
-            if (!ok || !mounted) return;
-            addQuantity();
-          });
-          return;
-        }
         // 对齐 smdcapp checkQtyValid：第N份促销拆分行不能直接加数量
         if (item.isNthPromo) {
           Toast.show('促销商品不能操作');
@@ -1660,7 +1888,19 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
           Toast.show('库存不足，剩余${_fmtQty(left)}');
           return;
         }
-        addQuantity();
+        // 必点菜加量：超出方案要求数量时二次确认（文案对齐 smdcapp MustUtil.mustHint）
+        if (item.mustflag == 1) {
+          final String? hint = _mustOverQtyHint(item, step);
+          if (hint != null) {
+            final bool ok = await ConfirmDialog.show(context, content: hint);
+            if (!ok || !mounted) return;
+          }
+        }
+        setState(() {
+          _setCartItemQty(item, item.qtyValue + step);
+          _applyNthDiscount();
+          _rebuildCountMap();
+        });
       },
       onRemove: (CartItem item) {
         // 必点菜数量受规则约束，不允许减少
@@ -1719,14 +1959,6 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
   /// 编辑购物车数量（R4：支持小数，称重菜编辑重量）
   Future<void> _editCartQty(CartItem item) async {
-    if (item.mustflag == 1) {
-      // R80：必点菜允许改数量，但需二次确认
-      final bool ok = await ConfirmDialog.show(
-        context,
-        content: '该菜品为必点菜，修改数量可能影响必点规则，是否继续？',
-      );
-      if (!ok || !mounted) return;
-    }
     // 对齐 smdcapp checkInputQtyValid：第N份促销拆分行不能单独改数量
     if (item.isNthPromo) {
       Toast.show('第N份促销商品不能操作');
@@ -1755,6 +1987,14 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     if (left != null && nextQty > left) {
       Toast.show('库存不足，剩余${_fmtQty(left)}');
       return;
+    }
+    // 必点菜调大数量：超出方案要求数量时二次确认（文案对齐 smdcapp MustUtil.mustHint）
+    if (item.mustflag == 1 && nextQty > item.qtyValue) {
+      final String? hint = _mustOverQtyHint(item, nextQty - item.qtyValue);
+      if (hint != null) {
+        final bool ok = await ConfirmDialog.show(context, content: hint);
+        if (!ok || !mounted) return;
+      }
     }
     setState(() {
       if (item.isWeigh) {
@@ -1844,6 +2084,25 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     // ProductMustValidator(isCheckOptional=true)：不满足时弹可选必点菜弹窗）
     final bool mustOk = await _ensureOptionalMustSelected();
     if (!mustOk || !mounted) return;
+    // 去下单库存校验（对齐 smdcapp DishesHomeAct2.toCheckActivity →
+    // OrderProcessor.postDown(checkStock=true)：校验发生在跳转确认页之前）
+    if (_checkingStock) return;
+    _checkingStock = true;
+    final bool stockOk;
+    try {
+      stockOk = await checkStockBeforeOrder(
+        context,
+        _cartItems,
+        onChanged: () {
+          if (!mounted) return;
+          setState(_rebuildCountMap);
+          _cartBadgeController.forward(from: 0);
+        },
+      );
+    } finally {
+      _checkingStock = false;
+    }
+    if (!stockOk || !mounted) return;
     NavigatorUtils.push(
       context,
       Routes.orderConfirmPage,
@@ -1954,6 +2213,10 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     setState(() {
       _searchKeyword = value.trim();
     });
+    // 搜索态隐藏二级分类栏；列表回到顶部，同步重置一级/二级分类高亮
+    _activeCategoryIndex.value = 0;
+    _scrollCategoryToVisible(0);
+    _activeSubTypeId.value = _searchKeyword.isEmpty ? _defaultSubTypeId(0) : null;
     // 搜索时重置滚动位置
     if (_searchKeyword.isNotEmpty && _listScrollController.hasClients) {
       _isProgrammaticScroll = true;
@@ -3365,6 +3628,123 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     );
   }
 
+  /// 顶部二级分类栏（对齐 smdcapp 点菜页 rv_top / ytt-smdc 二级分类标签）
+  ///
+  /// 仅当前一级分类存在二级分类时展示；点击标签定位到对应商品分组。
+  Widget _buildSubCategoryBar(bool isDark) {
+    return AnimatedBuilder(
+      animation: Listenable.merge(<Listenable>[_activeCategoryIndex, _activeSubTypeId]),
+      builder: (BuildContext context, Widget? child) {
+        if (_searchKeyword.isNotEmpty) return const SizedBox.shrink();
+        final int index = _activeCategoryIndex.value;
+        if (index < 0 || index >= _categories.length) return const SizedBox.shrink();
+        final DishCategory parent = _categories[index];
+        final List<_SubCategoryGroup>? groups = _subGroups[parent.typeid];
+        if (groups == null || groups.isEmpty) return const SizedBox.shrink();
+
+        final String activeId = _activeSubTypeId.value ?? groups.first.typeId;
+        return Container(
+          height: _kSubCategoryBarHeight,
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF242526) : Colors.white,
+            border: Border(
+              bottom: BorderSide(
+                color: isDark ? const Color(0xFF2A2B2C) : const Color(0xFFF2F3F5),
+                width: 0.5,
+              ),
+            ),
+          ),
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            itemCount: groups.length,
+            separatorBuilder: (BuildContext context, int i) => const SizedBox(width: 8),
+            itemBuilder: (BuildContext context, int i) {
+              final _SubCategoryGroup group = groups[i];
+              final bool selected = group.typeId == activeId;
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _onSubCategoryTap(parent, group),
+                child: Container(
+                  alignment: Alignment.center,
+                  constraints: const BoxConstraints(minWidth: 48),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? _kBrandRed
+                        : (isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF5F5F5)),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    group.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                      color: selected
+                          ? Colors.white
+                          : (isDark ? const Color(0xFFB8B8B8) : const Color(0xFF4E5969)),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  /// 二级分类标题（独立成行，对齐 ytt-smdc .typename2“一级 > 二级”）
+  Widget _buildSubCategoryHeader(String parentName, String name, bool isDark) {
+    return Container(
+      height: _kSubHeaderHeight,
+      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      color: isDark ? const Color(0xFF1F1F1F) : const Color(0xFFF2F3F5),
+      child: Text(
+        '$parentName > $name',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: isDark ? const Color(0xFFB8B8B8) : const Color(0xFF86909C),
+        ),
+      ),
+    );
+  }
+
+  /// 商品列表 Sliver（懒加载 + RepaintBoundary 隔离重绘）
+  Widget _buildProductSliver(List<DishProduct> products, bool isDark) {
+    return SliverList(
+      delegate: SliverChildBuilderDelegate(
+        (BuildContext context, int index) {
+          final DishProduct product = products[index];
+          return RepaintBoundary(
+            child: _DishProductCard(
+              key: ValueKey<String>(product.productid),
+              product: product,
+              count: _productCount(product),
+              isDark: isDark,
+              showNum: SpUtil.getBool('ENABLE_PRODUCT_NUM', defValue: true) ?? true,
+              // 沽清剩余基数（对齐 smdcapp GuQingBean.leftqty，来自 PC/云沽清接口）
+              guQingLeft: _guQingLeftMap[product.productid],
+              onAdd: _getAddCallback(product),
+              onRemove: _getRemoveCallback(product),
+              onSpec: () => _openSpecSheet(product),
+              onComb: () => _openSetMealSheet(product),
+              onTimePriceOrWeigh: () => _openTimePriceOrWeighSheet(product),
+            ),
+          );
+        },
+        childCount: products.length,
+        addAutomaticKeepAlives: false,
+      ),
+    );
+  }
+
   /// 右侧商品列表（一次性加载全部，按分类分组 + 分类 header）
   Widget _buildProductList(bool isDark) {
     if (_loading) {
@@ -3449,34 +3829,29 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
       hasAnyResult = true;
 
-      // 该分类下的商品（SliverList 懒加载 + RepaintBoundary 隔离重绘）
-      slivers.add(
-        SliverList(
-          delegate: SliverChildBuilderDelegate(
-            (BuildContext context, int index) {
-              final DishProduct product = products[index];
-              return RepaintBoundary(
-                child: _DishProductCard(
-                  key: ValueKey<String>(product.productid),
-                  product: product,
-                  count: _productCount(product),
-                  isDark: isDark,
-                  showNum: SpUtil.getBool('ENABLE_PRODUCT_NUM', defValue: true) ?? true,
-                  // 沽清剩余基数（对齐 smdcapp GuQingBean.leftqty，来自 PC/云沽清接口）
-                  guQingLeft: _guQingLeftMap[product.productid],
-                  onAdd: _getAddCallback(product),
-                  onRemove: _getRemoveCallback(product),
-                  onSpec: () => _openSpecSheet(product),
-                  onComb: () => _openSetMealSheet(product),
-                  onTimePriceOrWeigh: () => _openTimePriceOrWeighSheet(product),
-                ),
-              );
-            },
-            childCount: products.length,
-            addAutomaticKeepAlives: false,
-          ),
-        ),
-      );
+      // 有二级分类且非搜索态：按二级分组渲染标题 + 商品（对齐 ytt-smdc .typename2）
+      final List<_SubCategoryGroup>? groups =
+          _searchKeyword.isEmpty ? _subGroups[cat.typeid] : null;
+      if (groups == null || groups.isEmpty) {
+        slivers.add(_buildProductSliver(products, isDark));
+        continue;
+      }
+
+      // 首项“全部”为直挂在一级分类下的商品，不重复渲染二级标题
+      final int directCount = groups.first.count;
+      if (directCount > 0) {
+        slivers.add(_buildProductSliver(products.sublist(0, directCount), isDark));
+      }
+      for (final _SubCategoryGroup group in groups.skip(1)) {
+        if (group.count <= 0) continue;
+        slivers.add(SliverToBoxAdapter(
+          child: _buildSubCategoryHeader(cat.name, group.name, isDark),
+        ));
+        slivers.add(_buildProductSliver(
+          products.sublist(group.startIndex, group.startIndex + group.count),
+          isDark,
+        ));
+      }
     }
 
     // 底部留白（给购物车栏让位）
@@ -3680,7 +4055,12 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                       Expanded(
                         child: ColoredBox(
                           color: isDark ? const Color(0xFF18191A) : Colors.white,
-                          child: _buildProductList(isDark),
+                          child: Column(
+                            children: <Widget>[
+                              _buildSubCategoryBar(isDark),
+                              Expanded(child: _buildProductList(isDark)),
+                            ],
+                          ),
                         ),
                       ),
                     ],

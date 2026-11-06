@@ -432,28 +432,39 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       final String tableTypeId = tmpRaw?['tabletypeid']?.toString() ??
           widget.tableJson?['tabletypeid']?.toString() ??
           '';
-      bool hasServiceFlag = false;
-      double serviceBase = 0;
-      for (final Map<String, dynamic> b in _detailList) {
-        if (!b.containsKey('servicefeeflag')) continue;
-        hasServiceFlag = true;
-        if (_toInt(b['servicefeeflag']) == 1) {
-          serviceBase = _round2(serviceBase + _toDouble(b['rramt']));
-        }
-      }
+      final TableTypeEntity? svcType =
+          await AmountCalcUtils.resolveServiceConfig(
+        tmp: tmpRaw,
+        tableTypeId: tableTypeId,
+      );
+      final bool hasServiceFlag =
+          AmountCalcUtils.hasServiceFeeFlag(_detailList);
+      // R68：按消费金额时只统计开启“收服务费”的菜品，关闭的菜品不计入，
+      // 全部关闭（如单菜桌台）时基数为 0，服务费为 0（对齐 smdcapp Arith.showAllPriceInfo）
       final double saleMoney = hasServiceFlag
-          ? serviceBase
+          ? AmountCalcUtils.calcServiceBaseAmount(
+              detailList: _detailList,
+              serviceamtflag: svcType?.serviceamtflag ?? 1,
+            )
           : _round2(_dishAmt - _disAmt);
       final double fee = await AmountCalcUtils.calcTableServiceFee(
         tmp: tmpRaw,
         tableTypeId: tableTypeId,
         saleMoney: saleMoney,
+        tableType: svcType,
       );
-      if (hasServiceFlag) {
+      // 本地仅实现类型 1-4；5/6 依赖附加费时段表，沿用服务端金额
+      final int svcTypeVal = svcType?.servicetype ?? 0;
+      final bool locallyCalc =
+          hasServiceFlag && svcTypeVal >= 1 && svcTypeVal <= 4;
+      if (locallyCalc) {
         // 明细带服务费标志时以本地计算为准（含关闭后归零）
         _serviceAmt = fee;
         _payAmt = _round2(_dishAmt - _disAmt + _serviceAmt + _lowAmt);
-      } else if (_serviceAmt == 0 && fee > 0) {
+      } else if (svcTypeVal >= 1 &&
+          svcTypeVal <= 4 &&
+          _serviceAmt == 0 &&
+          fee > 0) {
         _serviceAmt = fee;
         _payAmt = _round2(_payAmt + fee);
       }
