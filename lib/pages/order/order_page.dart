@@ -630,7 +630,9 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       // 快餐模式 areaid 为空时查全部，对齐 queryAreaZCALL），本地为空回退云 yxMust 接口
       List<Map<String, dynamic>> mustGroups =
           await OrderRepository.fetchMustDishesFromLocal(areaid: areaid);
-      if (mustGroups.isEmpty) {
+      // 本地已有必点菜表数据时，空结果表示当前区域/时段无适用方案，
+      // 不能再回退云接口，否则区域限定方案会在未指定区域重新生效
+      if (mustGroups.isEmpty && !await OrderRepository.hasLocalMustData()) {
         mustGroups = await OrderRepository.fetchMustDishes(areaid: areaid);
       }
       if (mustGroups.isEmpty || !mounted) return;
@@ -764,7 +766,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       if (groups.isEmpty) {
         final String areaid = widget.tableJson?['areaid']?.toString() ?? '';
         groups = await OrderRepository.fetchMustDishesFromLocal(areaid: areaid);
-        if (groups.isEmpty) {
+        if (groups.isEmpty && !await OrderRepository.hasLocalMustData()) {
           groups = await OrderRepository.fetchMustDishes(areaid: areaid);
         }
         if (groups.isEmpty || !mounted) return;
@@ -1093,6 +1095,13 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     );
     item.remark = d['remark']?.toString() ?? '';
     item.isGift = _mustToInt(d['presentflag']) == 1;
+    // 敏感操作类型/原因回显（上传时写 opertype/operremark，避免再次保存时丢失报表标识）
+    item.opertype = _mustToInt(d['opertype']);
+    if (item.isGift) {
+      item.giftRemark = d['operremark']?.toString() ?? '';
+    } else {
+      item.discountRemark = d['operremark']?.toString() ?? '';
+    }
     // 必点菜标识还原（对齐 smdcapp DetailListBean mustflag/mustType）
     item.mustflag = _mustToInt(d['mustflag']);
     item.mustType = _mustToInt(d['mustType'] ?? d['musttype']);

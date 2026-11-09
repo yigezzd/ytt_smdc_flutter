@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_deer/components/confirm_dialog.dart';
 import 'package:flutter_deer/db/deposit_dao.dart';
-import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/net/pay_gateway.dart';
@@ -458,6 +457,8 @@ class _DepositSheetState extends State<DepositSheet> {
         'spid': spid,
         'billno': billno,
       };
+      // printtype=13 由服务端推送押金单打印任务（云服务/主设备两种连接模式通用），
+      // 此处不能再调 printDeposit，否则会重复出一张“(补打)”押金单
       await requestForm(HttpApi.depositSave, <String, dynamic>{
         'data': jsonEncode(depositData),
         // 打印押金单（对齐 smdcapp isDy → printtype=13）
@@ -470,12 +471,6 @@ class _DepositSheetState extends State<DepositSheet> {
         } catch (e) {
           debugPrint('本地押金流水写入失败: $e');
         }
-      }
-      // 打印押金单（对齐 smdcapp：PC 模式调 /api/print/PrintDepositInfo）
-      if (_printBill) {
-        try {
-          await PrintService.instance.printDeposit(jsonEncode(depositData));
-        } catch (_) {}
       }
       if (!mounted) return;
       Toast.show('交押金成功');

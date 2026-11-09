@@ -511,8 +511,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     item.isBag = _toInt(d['bagstatus']) == 1 || item.bagPrice > 0;
     // 基础促销还原（用于"促"标签与折后价展示）
     item.discount = _toDouble(d['discount']) == 0 ? 100 : _toDouble(d['discount']);
-    // 打折原因回显（下单时写在 operremark，旧数据兜底读 disremark）
-    if (item.discount < 100) {
+    // 原因回显（下单时写在 operremark；赠送/打折按 presentflag 还原）
+    if (presentflag == 1) {
+      item.giftRemark = d['operremark']?.toString() ?? '';
+    } else if (item.discount < 100) {
       item.discountRemark = d['operremark']?.toString() ?? d['disremark']?.toString() ?? '';
     }
     item.jcmbillid = d['jcmbillid']?.toString() ?? '';
@@ -1511,8 +1513,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'bxxpxxflag': item.bxxpxxflag,
         'isGive': item.isGift,
         'remark': item.remark,
-        // 打折原因下沉为敏感操作备注（对齐 smdcapp updataDis → operRemark → operremark）
-        'operremark': item.discountRemark,
+        // 打折/赠送原因下沉为敏感操作备注（对齐 smdcapp updataDis/GiveNumPopup → operRemark）
+        'operremark': item.isGift ? item.giftRemark : item.discountRemark,
         // 套餐主行 spec 置空（对齐 smdcapp OrderModel: spec=getSpecName 对套餐返回空）；
         // 套餐明细以独立子行上传，避免拼接串超出服务端 spec 60字符限制
         'spec': isComb ? '' : item.specName,
@@ -2091,8 +2093,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         'bxxpxxflag': item.bxxpxxflag,
         'isGive': item.isGift,
         'remark': item.remark,
-        // 打折原因下沉为敏感操作备注（对齐 smdcapp updataDis → operRemark → operremark）
-        'operremark': item.discountRemark,
+        // 打折/赠送原因下沉为敏感操作备注（对齐 smdcapp updataDis/GiveNumPopup → operRemark）
+        'operremark': item.isGift ? item.giftRemark : item.discountRemark,
         // 套餐主行 spec 置空，明细以独立子行上传（对齐 smdcapp，避免 spec 超长）
         'spec': isComb ? '' : item.specName,
         'specname': isComb ? '' : item.specName,

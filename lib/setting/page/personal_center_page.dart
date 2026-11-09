@@ -282,7 +282,7 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
       content: '确认退出当前登录账号？',
     );
     if (confirmed && mounted) {
-      NavigatorUtils.push(context, LoginRouter.loginPage, clearStack: true);
+      logoutAndRedirect(context);
     }
   }
 

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_deer/components/confirm_dialog.dart';
-import 'package:flutter_deer/pages/login/login_router.dart';
-import 'package:flutter_deer/routers/fluro_navigator.dart';
+import 'package:flutter_deer/net/http_helper.dart';
 
 class ExitDialog extends StatelessWidget {
   const ExitDialog({super.key});
@@ -47,11 +46,7 @@ class ExitDialog extends StatelessWidget {
                 Expanded(
                   child: DialogActionButton(
                     text: '退出',
-                    onTap: () => NavigatorUtils.push(
-                      context,
-                      LoginRouter.loginPage,
-                      clearStack: true,
-                    ),
+                    onTap: () => logoutAndRedirect(context),
                   ),
                 ),
               ],

@@ -1117,13 +1117,13 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
 
   /// 录入会员（对齐 smdcapp onActivityResult → upMember(true, ...)）
   Future<void> _loginMember(VipMember member) async {
-    await _syncMemberToServer(
+    final bool synced = await _syncMemberToServer(
       vipid: member.vipid,
       vipno: member.vipno,
       vipname: member.vipname,
       vipmobile: member.mobile,
     );
-    if (!mounted) return;
+    if (!mounted || !synced) return;
     setState(() {
       _member = member;
       // 立即按会员价重算，避免等待详情接口期间仍显示原价
@@ -1131,42 +1131,53 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         _applyMemberPricing(clearMemberMark: true);
       }
     });
-    // 对齐 smdcapp：会员录入成功后刷新订单数据（showData + postInfo）
-    _loadOrderDetail();
+    await _postMemberPriceChange();
   }
 
   /// 退出会员（对齐 smdcapp upMember(false)）
   Future<void> _logoutMember() async {
-    await _syncMemberToServer(
+    final bool synced = await _syncMemberToServer(
       vipid: '',
       vipno: '',
       vipname: '',
       vipmobile: '',
     );
-    if (!mounted) return;
+    if (!mounted || !synced) return;
     setState(() {
       _member = null;
       if (_detailList.isNotEmpty) {
         _applyMemberPricing(clearMemberMark: true);
       }
     });
-    _loadOrderDetail();
+    await _postMemberPriceChange();
+  }
+
+  /// 会员变更后回传订单（对齐 smdcapp upMember onResult → postInfo）
+  ///
+  /// updateMasterTmp 只写会员字段，桌台金额仍在服务端保持原价；
+  /// 需再上传按会员价重算后的主单与明细，桌台卡片 tmp.amt 才会更新。
+  Future<void> _postMemberPriceChange() async {
+    if (_detailList.isEmpty) {
+      _loadOrderDetail();
+      return;
+    }
+    await _postOrderUpdate();
   }
 
   /// 同步会员信息到后端桌台（对齐 smdcapp OrderModel.updateMasterTmp）
-  Future<void> _syncMemberToServer({
+  Future<bool> _syncMemberToServer({
     required String vipid,
     required String vipno,
     required String vipname,
     required String vipmobile,
   }) async {
-    if (_memberSyncing) return;
+    if (_memberSyncing) return false;
     final Map<String, dynamic>? tmp =
         widget.tableJson?['tmp'] as Map<String, dynamic>?;
     final String saleid = tmp?['saleid']?.toString() ?? _saleid;
     if (saleid.isEmpty) {
       Toast.show('订单信息错误，无法同步会员');
-      return;
+      return false;
     }
 
     setState(() => _memberSyncing = true);
@@ -1205,8 +1216,10 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         _member = null;
       }
       TableEventBus.fireTableChanged();
+      return true;
     } catch (_) {
       Toast.show('同步会员信息失败');
+      return false;
     } finally {
       if (mounted) {
         setState(() => _memberSyncing = false);
@@ -1996,6 +2009,8 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       target['rrprice'] = 0;
       target['rramt'] = 0;
       target['remark'] = give.remark;
+      // 敏感操作备注：Web 菜品敏感操作明细的「原因」列取 operremark
+      target['operremark'] = give.remark;
       // R46：Web 订单明细报表按 opertype 显示【赠】标识
       target['opertype'] = 3;
       target['updateflag'] = 1;
@@ -3289,7 +3304,9 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       final String areaid = widget.tableJson?['areaid']?.toString() ?? '';
       List<Map<String, dynamic>> groups =
           await OrderRepository.fetchMustDishesFromLocal(areaid: areaid);
-      if (groups.isEmpty) {
+      // 本地已有必点菜表数据时不回退云接口（云接口返回方案不带区域信息，
+      // 会导致区域限定方案在未指定区域生效）
+      if (groups.isEmpty && !await OrderRepository.hasLocalMustData()) {
         groups = await OrderRepository.fetchMustDishes(areaid: areaid);
       }
       if (groups.isEmpty || !mounted) return;

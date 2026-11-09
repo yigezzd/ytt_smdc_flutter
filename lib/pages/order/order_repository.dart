@@ -2286,6 +2286,20 @@ class OrderRepository {
     }
   }
 
+  /// 本地必点菜主表是否已有下载数据
+  ///
+  /// 用于区分"未做数据交换（本地无表数据）"与"当前区域/时段内无适用方案"：
+  /// 后者必须返回空，不能回退云接口，否则云接口方案会绕过区域过滤重新生效。
+  static Future<bool> hasLocalMustData() async {
+    try {
+      final List<Map<String, dynamic>> masters =
+          await TableDownloadManager.readTableData('t_must_master');
+      return masters.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// 必点菜时段校验（对齐 smdcapp getMustProduct timeperiod1/2/3 链式判定）
   ///
   /// 时段1在当前有效(stopflag=0)时判定；时段2/3 仅在前一时段未命中(stopflag=1)时判定，

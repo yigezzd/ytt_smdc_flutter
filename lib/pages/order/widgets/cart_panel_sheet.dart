@@ -569,6 +569,7 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
           item.discount = result.discount;
           // 对齐 smdcapp updataDis：100% 时不打折，清空打折原因
           item.discountRemark = result.discount >= 100 ? '' : result.remark;
+          item.opertype = result.discount > 0 && result.discount < 100 ? 4 : 0;
           _notifyChanged(item);
         }
 
@@ -577,6 +578,7 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
         if (item.isGift) {
           item.isGift = false;
           item.giftRemark = '';
+          item.opertype = 0;
           _notifyChanged(item);
           Toast.show('已取消赠送');
           return;
@@ -596,6 +598,7 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
         if (result != null) {
           item.isGift = true;
           item.giftRemark = result.remark;
+          item.opertype = 3;
           _notifyChanged(item);
         }
 
@@ -619,6 +622,7 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
           // 对齐 smdcapp: price == 当前单价时取消改价
           if ((price - item.unitPrice).abs() < 0.005) {
             item.customPrice = null;
+            item.opertype = 0;
           } else {
             item.customPrice = price;
             // 改价即最终价，清除整单折扣避免再次被打折（R14）
@@ -626,6 +630,7 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
             item.specpriceflag = 0;
             item.jcmbillid = '';
             item.promoPrice = 0;
+            item.opertype = 5;
           }
           _notifyChanged(item);
         }

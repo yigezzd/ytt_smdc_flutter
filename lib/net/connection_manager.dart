@@ -25,6 +25,10 @@ class ConnectionManager {
   static String? _activeServerType;
   static bool _manualCloud = false;
 
+  /// 本次会话是否因本机不在主设备网段（移动数据）而跳过了探活。
+  /// 跳过时不应再提示"无法连接到主设备"，否则会误导用户。
+  static bool masterProbeSkipped = false;
+
   // 业务调用以 pcAlive 选路；仅主设备断线时仍须保留 PC 路由，禁止降级到云端。
   static bool get pcAlive =>
       isMasterOnly || (!isCloudOnly && _masterDeviceReachable);
@@ -42,6 +46,7 @@ class ConnectionManager {
     _activeServerType = getServerType();
     _masterDeviceReachable = false;
     _manualCloud = false;
+    masterProbeSkipped = false;
   }
 
   static final StreamController<void> _masterDeviceLostController =

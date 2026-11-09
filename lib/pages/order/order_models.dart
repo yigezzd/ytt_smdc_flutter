@@ -626,15 +626,25 @@ class CartItem {
     return isNthPromo && nthPrice > 0 ? nthPrice : (promoPrice > 0 ? promoPrice : regular);
   }
 
-  /// 未打折前的单份实际价格（改价/会员价 > 促销基础价 + 单份做法加价）
-  double get unitPrice => (customPrice ?? memberUnitPrice ?? baseUnitPrice) + unitCookExtra;
+  /// 生效基础单价：改价 > 第N份促销价 > 会员价 > 促销基础价
+  ///
+  /// 第N份促销行必须优先取 [nthPrice]：整行原地转促销（[markNthPromo]）时
+  /// 会员价字段仍保留在行上，若会员价优先会盖掉促销价，表现为促销不生效。
+  double get effectiveBasePrice {
+    if (customPrice != null) return customPrice!;
+    if (isNthPromo && nthPrice > 0) return nthPrice;
+    return memberUnitPrice ?? baseUnitPrice;
+  }
+
+  /// 未打折前的单份实际价格（改价/第N份促销/会员价 > 促销基础价 + 单份做法加价）
+  double get unitPrice => effectiveBasePrice + unitCookExtra;
 
   /// 折扣后单价
   ///
   /// 折扣只作用于菜品基础价（对齐 smdcapp getMemberPrice：discount 乘的是 sellprice），
   /// 做法加价按原价另计，不被折扣放大。
   double get discountedUnitPrice {
-    final double base = customPrice ?? memberUnitPrice ?? baseUnitPrice;
+    final double base = effectiveBasePrice;
     final double discounted =
         (discount < 100 && discount > 0 && customPrice == null && memberUnitPrice == null)
             ? base * discount / 100
@@ -644,7 +654,7 @@ class CartItem {
 
   /// 折扣后、未含做法加价的单份价（上传 rrprice 用，对齐 smdcapp）
   double get baseRrPrice {
-    final double base = customPrice ?? memberUnitPrice ?? baseUnitPrice;
+    final double base = effectiveBasePrice;
     if (discount < 100 && discount > 0 && customPrice == null && memberUnitPrice == null) {
       return base * discount / 100;
     }

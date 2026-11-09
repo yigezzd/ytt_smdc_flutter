@@ -10,6 +10,7 @@ import 'package:flutter_deer/main.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/dio_utils.dart';
 import 'package:flutter_deer/net/http_api.dart';
+import 'package:flutter_deer/net/lan_probe.dart';
 import 'package:flutter_deer/pages/login/page/login_page.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/util/device_utils.dart';
@@ -23,6 +24,17 @@ bool _isRedirectingToLogin = false;
 
 /// 本文件所有接口调用均为 POST（云服务 JSON、主设备表单编码）
 const String _kHttpMethod = 'POST';
+
+/// 主设备探活专用 Dio：独立短超时，避免移动数据下等满全局 15s 连接超时
+final Dio _probeDio = Dio(
+  BaseOptions(
+    connectTimeout: const Duration(seconds: 2),
+    sendTimeout: const Duration(seconds: 3),
+    receiveTimeout: const Duration(seconds: 5),
+    responseType: ResponseType.plain,
+    validateStatus: (_) => true,
+  ),
+);
 
 /// 不逐条记录成功流水的接口路径（对齐 smdcapp LoggingInterceptor.IGNORE_PATHS）
 ///
@@ -253,15 +265,25 @@ Future<Map<String, dynamic>> request(
 }
 
 /// 强制下线处理：弹窗提示 → 清除缓存 → 跳转登录页
-void _handleForceLogout(String retmsg) {
+///
+/// 供 MQ retcode=6（后台数据清空/强制下线）等外部通道调用。
+void handleForceLogout(String retmsg) {
   if (_isRedirectingToLogin) return;
   _isRedirectingToLogin = true;
+
+  void finish() {
+    _clearCachePreservingRemember();
+    _navigateToLogin();
+    // 跳转完成后释放防重入标记，否则重新登录后再次被踢下线会被忽略
+    Future.delayed(const Duration(seconds: 3), () {
+      _isRedirectingToLogin = false;
+    });
+  }
 
   final navigatorState = MyApp.navigatorKey.currentState;
   if (navigatorState == null) {
     // navigator 未就绪，降级为直接跳转
-    _clearCachePreservingRemember();
-    _navigateToLogin();
+    finish();
     return;
   }
 
@@ -272,10 +294,7 @@ void _handleForceLogout(String retmsg) {
       content: retmsg.isNotEmpty ? retmsg : '您已被强制下线，请重新登录',
       singleButton: true,
     ),
-  ).then((_) {
-    _clearCachePreservingRemember();
-    _navigateToLogin();
-  });
+  ).then((_) => finish());
 }
 
 void _handleLoginExpired(String retmsg) {
@@ -644,6 +663,15 @@ String _friendlyNetworkError(DioException e) {
   }
 }
 
+/// 本机是否存在与主设备同网段的网卡（失败时按可达处理，保持原探活行为）
+Future<bool> _hasLanRouteTo(String localhost) async {
+  try {
+    return isHostInLocalSubnet(Uri.parse(localhost).host);
+  } catch (_) {
+    return true;
+  }
+}
+
 Future<bool> checkMasterDeviceAlive({bool updateConnection = true}) async {
   if (ConnectionManager.isCloudOnly) {
     return false;
@@ -658,9 +686,16 @@ Future<bool> checkMasterDeviceAlive({bool updateConnection = true}) async {
       _logApi(HttpApi.pcGetHostSyncTime, null, '登录响应未返回主设备地址，跳过探测');
       return false;
     }
+    // 移动数据下本机网卡不在主设备网段，探活必然失败，直接跳过省掉连接超时
+    if (!await _hasLanRouteTo(localhost)) {
+      ConnectionManager.masterProbeSkipped = true;
+      _logApi(HttpApi.pcGetHostSyncTime, null, '本机无与主设备同网段的网卡，跳过探活');
+      return false;
+    }
+    ConnectionManager.masterProbeSkipped = false;
     final Map<String, dynamic> signedData =
         await _buildSignedParams(<String, dynamic>{'data': ''}, fullUrl);
-    final Response<String> response = await DioUtils.instance.dio.post<String>(
+    final Response<String> response = await _probeDio.post<String>(
       fullUrl,
       data: signedData,
       options: Options(contentType: Headers.formUrlEncodedContentType),

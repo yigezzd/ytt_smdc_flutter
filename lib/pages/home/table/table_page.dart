@@ -19,7 +19,6 @@ import 'package:flutter_deer/pages/home/table/widgets/status_filter_bar.dart';
 import 'package:flutter_deer/pages/home/table/widgets/table_card.dart';
 import 'package:flutter_deer/pages/home/table/widgets/table_operation_dialog.dart';
 import 'package:flutter_deer/pages/home/table/widgets/union_tables_dialog.dart';
-import 'package:flutter_deer/pages/login/login_router.dart';
 import 'package:flutter_deer/res/colors.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
@@ -102,6 +101,9 @@ class _TablePageState extends State<TablePage>
   /// 主设备连接丢失事件订阅（对齐 smdcapp onNetModeEvent → showTipDialog）
   StreamSubscription<void>? _masterLostSubscription;
 
+  /// MQ 强制下线订阅（对齐 smdcapp retcode=6 数据清空 → 强制退出登录）
+  StreamSubscription<String>? _forceLogoutSubscription;
+
   @override
   void initState() {
     super.initState();
@@ -132,6 +134,10 @@ class _TablePageState extends State<TablePage>
       _showMasterDeviceCheckDialog();
     });
 
+    // 订阅 MQ 强制下线（对齐 smdcapp retcode=6 → AppStateManager 登录状态置 0）
+    _forceLogoutSubscription =
+        MqService.instance.onForceLogout.listen(handleForceLogout);
+
     // 对齐 smdcapp：先探活确定连接模式，再按该模式加载数据（避免两套接口都调用）
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initPage();
@@ -152,36 +158,48 @@ class _TablePageState extends State<TablePage>
   }
 
   Future<void> _initPage() async {
-    if (!ConnectionManager.sessionInitialized) {
-      ConnectionManager.beginSession();
-      if (!ConnectionManager.isCloudOnly) {
-        await checkMasterDeviceAlive();
+    // 探活/建连阶段也展示加载态，避免空态"没有符合条件的桌台"被当成卡死
+    if (mounted) {
+      setState(() => _loading = true);
+    }
+    try {
+      if (!ConnectionManager.sessionInitialized) {
+        ConnectionManager.beginSession();
+        if (!ConnectionManager.isCloudOnly) {
+          await checkMasterDeviceAlive();
+        }
       }
-    }
-    if (!mounted) {
-      return;
-    }
-    setState(() => _pcAlive = ConnectionManager.masterDeviceReachable);
-
-    if (ConnectionManager.isMasterOnly && !_pcAlive) {
-      await _showMasterDeviceCheckDialog();
-      if (!mounted || !ConnectionManager.masterDeviceReachable) {
+      if (!mounted) {
         return;
       }
-    }
+      setState(() => _pcAlive = ConnectionManager.masterDeviceReachable);
 
-    _connectionReady = true;
-    await _loadData();
-    if (!mounted) {
-      return;
-    }
-    MqService.instance.connect();
+      if (ConnectionManager.isMasterOnly && !_pcAlive) {
+        await _showMasterDeviceCheckDialog();
+        if (!mounted || !ConnectionManager.masterDeviceReachable) {
+          return;
+        }
+      }
 
-    final String localhost = ConnectionManager.getLocalhost();
-    if (!ConnectionManager.isCloudOnly &&
-        localhost.startsWith('http') &&
-        !ConnectionManager.masterDeviceReachable) {
-      await _showMasterDeviceCheckDialog();
+      _connectionReady = true;
+      await _loadData();
+      if (!mounted) {
+        return;
+      }
+      MqService.instance.connect();
+
+      final String localhost = ConnectionManager.getLocalhost();
+      if (!ConnectionManager.isCloudOnly &&
+          // 移动数据下未探活，不应误报主设备连接失败
+          !ConnectionManager.masterProbeSkipped &&
+          localhost.startsWith('http') &&
+          !ConnectionManager.masterDeviceReachable) {
+        await _showMasterDeviceCheckDialog();
+      }
+    } finally {
+      if (mounted && _loading) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -203,7 +221,8 @@ class _TablePageState extends State<TablePage>
       return;
     }
     if (connected == false) {
-      NavigatorUtils.push(context, LoginRouter.loginPage, clearStack: true);
+      // 重新登录必须清空会话，否则杀进程重进会自动登录回桌台页
+      logoutAndRedirect(context);
       return;
     }
     setState(() => _pcAlive = ConnectionManager.masterDeviceReachable);
@@ -218,6 +237,7 @@ class _TablePageState extends State<TablePage>
     _mqSubscription?.cancel();
     _eventSubscription?.cancel();
     _masterLostSubscription?.cancel();
+    _forceLogoutSubscription?.cancel();
     _searchController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _pcCheckDialogShowing = false;

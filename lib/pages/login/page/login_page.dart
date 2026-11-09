@@ -532,7 +532,7 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  /// 顶部区域：欢迎语 + 应用名 + 版本号
+  /// 顶部区域：欢迎语 + 应用名 + 版本号 + 右侧插画
   Widget _buildHeader() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24.0, 40.0, 24.0, 24.0),
@@ -570,6 +570,12 @@ class _LoginPageState extends State<LoginPage> {
                 ),
               ],
             ),
+          ),
+          // 右侧插画区：与 smdcapp 一致的登录图片
+          Image.asset(
+            'assets/images/login/bg_login.png',
+            width: 110.0,
+            height: 110.0,
           ),
         ],
       ),
