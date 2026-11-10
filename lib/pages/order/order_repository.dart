@@ -2215,13 +2215,15 @@ class OrderRepository {
         if (!appOk) continue;
         if (_toInt(m['stopflag']) != 0) continue;
         if (_toInt(m['status']) != 1) continue;
-        // 日期有效性：dateflag=1 时需在 startdate~enddate 内；
-        // dateflag=0 的直接跳过（对齐 getMustProduct `dateflag == 0 → continue`）
-        if (_toInt(m['dateflag']) != 1) continue;
-        final String start = _datePart(m['startdate']);
-        final String end = _datePart(m['enddate']);
-        if (start.isNotEmpty && today.compareTo(start) < 0) continue;
-        if (end.isNotEmpty && today.compareTo(end) > 0) continue;
+        // 日期有效性（对齐 MustMasterDao.queryAreaZC）：dateflag=0 长期有效，
+        // dateflag=1 需落在 startdate~enddate 区间内（日期为空视为无边界）。
+        // 注意不能整体跳过 dateflag=0：后台默认长期有效的方案 dateflag 即为 0。
+        if (_toInt(m['dateflag']) == 1) {
+          final String start = _datePart(m['startdate']);
+          final String end = _datePart(m['enddate']);
+          if (start.isNotEmpty && today.compareTo(start) < 0) continue;
+          if (end.isNotEmpty && today.compareTo(end) > 0) continue;
+        }
         // 区域匹配（对齐 queryAreaZC：b.areaid = :areaid or b.areaid IS NULL）
         if (areaid.isNotEmpty) {
           final List<String>? areaIds =
@@ -2286,20 +2288,6 @@ class OrderRepository {
     }
   }
 
-  /// 本地必点菜主表是否已有下载数据
-  ///
-  /// 用于区分"未做数据交换（本地无表数据）"与"当前区域/时段内无适用方案"：
-  /// 后者必须返回空，不能回退云接口，否则云接口方案会绕过区域过滤重新生效。
-  static Future<bool> hasLocalMustData() async {
-    try {
-      final List<Map<String, dynamic>> masters =
-          await TableDownloadManager.readTableData('t_must_master');
-      return masters.isNotEmpty;
-    } catch (_) {
-      return false;
-    }
-  }
-
   /// 必点菜时段校验（对齐 smdcapp getMustProduct timeperiod1/2/3 链式判定）
   ///
   /// 时段1在当前有效(stopflag=0)时判定；时段2/3 仅在前一时段未命中(stopflag=1)时判定，
@@ -2326,60 +2314,6 @@ class OrderRepository {
   /// 当前门店 sid/spid（对齐 smdcapp SpUtils.getSID/getSPID，取自登录保存的 store）
   static List<String> _currentSidSpid() =>
       <String>[UserHelper.getSidStr(), UserHelper.getSpidStr()];
-
-  /// 获取必点菜列表-云服务实时接口（对齐 smdcapp DishesApi.yxMust）
-  ///
-  /// 仅作为本地缓存为空时的回退（对齐分类/商品的本地优先策略）。
-  /// [areaid] 桌台区域ID，[yxtype] 类型（默认 "1"）
-  static Future<List<Map<String, dynamic>>> fetchMustDishes({
-    required String areaid,
-    String yxtype = '1',
-  }) async {
-    try {
-      final Map<String, dynamic> resp = await requestForm(
-        HttpApi.yxMust,
-        <String, dynamic>{
-          'areaid': areaid,
-          'yxtype': yxtype,
-        },
-        showError: false,
-      );
-      final dynamic data = resp['data'] ?? resp['Data'];
-      if (data is List) {
-        return data
-            .whereType<Map<String, dynamic>>()
-            .map(_normalizeMustGroup)
-            .toList();
-      } else if (data is Map<String, dynamic>) {
-        final dynamic list = data['list'];
-        if (list is List) {
-          return list
-              .whereType<Map<String, dynamic>>()
-              .map(_normalizeMustGroup)
-              .toList();
-        }
-      }
-    } catch (_) {}
-    return <Map<String, dynamic>>[];
-  }
-
-  /// 归一化云接口必点菜商品数量字段（mustqty/mustnum/qty 兼容，缺省 1）
-  static Map<String, dynamic> _normalizeMustGroup(Map<String, dynamic> group) {
-    final dynamic rawList = group['mustproductlist'];
-    if (rawList is! List) return group;
-    final List<Map<String, dynamic>> list = <Map<String, dynamic>>[];
-    for (final dynamic raw in rawList) {
-      if (raw is! Map) continue;
-      final Map<String, dynamic> item = raw.cast<String, dynamic>();
-      double qty = _toDouble(item['mustqty']);
-      if (qty <= 0) qty = _toDouble(item['mustnum']);
-      if (qty <= 0) qty = _toDouble(item['qty']);
-      item['mustqty'] = qty > 0 ? qty : 1.0;
-      list.add(item);
-    }
-    group['mustproductlist'] = list;
-    return group;
-  }
 
   /// 获取桌台保存的未落单菜品（对齐 smdcapp DishesHttpUtilPC.getSaveProductList）
   ///

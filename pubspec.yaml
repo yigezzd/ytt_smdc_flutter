@@ -80,6 +80,14 @@ dev_dependencies:
   sqflite_common_ffi: ^2.4.5
   test: ^1.16.8
 
+# 依赖覆盖
+dependency_overrides:
+  # sqlite3 3.5+ 引入 native assets hook，构建时需从 GitHub 下载 libsqlite3 预编译库，
+  # 国内网络访问 GitHub 超时且下载内容哈希校验失败。
+  # 降级到 3.4.0（最后一个无 hook 的版本），满足 sqflite_common_ffi 的约束
+  # >=3.1.2 <5.0.0；Android 运行时走 sqflite 平台实现，不受影响。
+  sqlite3: 3.4.0
+
 # For information on the generic Dart part of this file, see the
 # following page: https:/w.dartlang.org/tools/pub/pubspec
 

@@ -397,8 +397,24 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     }
 
     // 人数（对齐 smdcapp initTabInfo：tmp.personnum；改开台信息后随之刷新）
-    final int personNum = _toInt(data['personnum']);
-    if (personNum > 0) _personNum = personNum;
+    // 主设备详情把人数放在 Data.tableMaster.tmp.personnum，云服务在顶层 personnum / tmp.personnum
+    final Map<String, dynamic>? masterTmp =
+        ((data['tableMaster'] as Map<dynamic, dynamic>?)?['tmp']
+                as Map<dynamic, dynamic>?)
+            ?.cast<String, dynamic>();
+    final Map<String, dynamic>? dataTmp =
+        (data['tmp'] as Map<dynamic, dynamic>?)?.cast<String, dynamic>();
+    final int personNum = _toInt(
+        data['personnum'] ?? masterTmp?['personnum'] ?? dataTmp?['personnum']);
+    if (personNum > 0) {
+      _personNum = personNum;
+      // 同步桌台快照，保证后续修改开台信息/回传主单带上最新人数
+      final Map<String, dynamic>? pageTmp =
+          widget.tableJson?['tmp'] as Map<String, dynamic>?;
+      if (pageTmp != null) {
+        pageTmp['personnum'] = personNum;
+      }
+    }
 
     // 最后下单时间（对齐 smdcapp：取 detailList 中 createtime 最大值）
     if (_detailList.isNotEmpty) {
@@ -3299,16 +3315,11 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       return;
     }
     try {
-      final Map<String, dynamic>? tmp =
-          widget.tableJson?['tmp'] as Map<String, dynamic>?;
       final String areaid = widget.tableJson?['areaid']?.toString() ?? '';
-      List<Map<String, dynamic>> groups =
+      // 本地 tabledown 必点菜表为唯一数据源（对齐 smdcapp getMustProduct）；
+      // 云 yxMust 不按 areaid 过滤，区域限定方案会在其他区域越权生效
+      final List<Map<String, dynamic>> groups =
           await OrderRepository.fetchMustDishesFromLocal(areaid: areaid);
-      // 本地已有必点菜表数据时不回退云接口（云接口返回方案不带区域信息，
-      // 会导致区域限定方案在未指定区域生效）
-      if (groups.isEmpty && !await OrderRepository.hasLocalMustData()) {
-        groups = await OrderRepository.fetchMustDishes(areaid: areaid);
-      }
       if (groups.isEmpty || !mounted) return;
       bool changed = false;
       for (final Map<String, dynamic> group in groups) {

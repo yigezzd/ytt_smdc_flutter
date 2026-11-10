@@ -626,15 +626,11 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       }
 
       final String areaid = widget.tableJson?['areaid']?.toString() ?? '';
-      // 数据源：优先读本地 tabledown 必点菜表（对齐 smdcapp ProductHelper.getMustProduct，
-      // 快餐模式 areaid 为空时查全部，对齐 queryAreaZCALL），本地为空回退云 yxMust 接口
-      List<Map<String, dynamic>> mustGroups =
+      // 数据源：本地 tabledown 必点菜表（对齐 smdcapp CartGoodsModel.getMustData →
+      // ProductHelper.getMustProduct，快餐模式 areaid 为空时查全部，对齐 queryAreaZCALL）。
+      // 不走云 yxMust：云接口不按 areaid 过滤，区域限定方案会在其他区域越权生效
+      final List<Map<String, dynamic>> mustGroups =
           await OrderRepository.fetchMustDishesFromLocal(areaid: areaid);
-      // 本地已有必点菜表数据时，空结果表示当前区域/时段无适用方案，
-      // 不能再回退云接口，否则区域限定方案会在未指定区域重新生效
-      if (mustGroups.isEmpty && !await OrderRepository.hasLocalMustData()) {
-        mustGroups = await OrderRepository.fetchMustDishes(areaid: areaid);
-      }
       if (mustGroups.isEmpty || !mounted) return;
       _mustGroups = mustGroups;
 
@@ -766,9 +762,6 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       if (groups.isEmpty) {
         final String areaid = widget.tableJson?['areaid']?.toString() ?? '';
         groups = await OrderRepository.fetchMustDishesFromLocal(areaid: areaid);
-        if (groups.isEmpty && !await OrderRepository.hasLocalMustData()) {
-          groups = await OrderRepository.fetchMustDishes(areaid: areaid);
-        }
         if (groups.isEmpty || !mounted) return;
         _mustGroups = groups;
       }

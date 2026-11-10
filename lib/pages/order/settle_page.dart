@@ -2357,12 +2357,17 @@ class _SettlePageState extends State<SettlePage> {
     return '';
   }
 
+  /// 当前操作员 userid（= operid）
+  ///
+  /// 注意：必须用 userid 而非用户表主键 id。saleflow 上传的
+  /// t_sale_master.cashid 与交班 reportOnShiftByMachno 的 cashid
+  /// 查询条件同源，用 id 会导致结账成功但交班统计查不到该单据。
   String _getUserId() {
     try {
       final String userStr = SpUtil.getString(Constant.user) ?? '';
       if (userStr.isNotEmpty) {
         final Map<String, dynamic> userMap = jsonDecode(userStr) as Map<String, dynamic>;
-        return userMap['id']?.toString() ?? userMap['userid']?.toString() ?? '';
+        return userMap['userid']?.toString() ?? userMap['id']?.toString() ?? '';
       }
     } catch (_) {}
     return '';
