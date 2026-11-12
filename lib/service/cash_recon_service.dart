@@ -482,11 +482,19 @@ class CashReconService {
       if (data is Map) {
         final dynamic children = data['children'];
         if (children is List) {
-          await BaseDataDao.instance.saveTypes(
-              children
-                  .whereType<Map<dynamic, dynamic>>()
-                  .map((Map<dynamic, dynamic> e) => e.cast<String, dynamic>())
-                  .toList());
+          // getTypeList 返回分类树，需展平全部层级入库，否则本地表丢 level=2 行导致点菜页二级分类栏消失
+          final List<Map<String, dynamic>> rows = <Map<String, dynamic>>[];
+          void collect(Map<dynamic, dynamic> node) {
+            final Map<String, dynamic> row = node.cast<String, dynamic>();
+            rows.add(row);
+            final dynamic subs = row['children'];
+            if (subs is List) {
+              subs.whereType<Map<dynamic, dynamic>>().forEach(collect);
+            }
+          }
+
+          children.whereType<Map<dynamic, dynamic>>().forEach(collect);
+          await BaseDataDao.instance.saveTypes(rows);
         }
       }
     } catch (_) {}

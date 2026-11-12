@@ -3,6 +3,7 @@ import 'package:flutter_deer/net/table_event_bus.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
 import 'package:flutter_deer/util/store_mode_utils.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 
 /// 品牌红
 const Color _kBrandRed = Color(0xFFE13426);
@@ -57,13 +58,14 @@ class SettleFinishPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return WillPopScope(
       onWillPop: () async {
         _finish(context);
         return false;
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFFF5F6F8),
+        backgroundColor: isDark ? const Color(0xFF18191A) : const Color(0xFFF5F6F8),
         body: SafeArea(
           child: Column(
             children: <Widget>[
@@ -79,9 +81,13 @@ class SettleFinishPage extends StatelessWidget {
                 child: const Icon(Icons.check_circle, size: 56, color: Colors.green),
               ),
               const SizedBox(height: 20),
-              const Text(
+              Text(
                 '结账成功',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600, color: Color(0xFF1D2129)),
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? Colors.white : const Color(0xFF1D2129),
+                ),
               ),
               // 取餐号（对齐 smdcapp 快餐模式叫号 TakeSnackcode）
               if (takecode.isNotEmpty)
@@ -117,7 +123,10 @@ class SettleFinishPage extends StatelessWidget {
                       const SizedBox(width: 5),
                       Text(
                         tableName,
-                        style: const TextStyle(fontSize: 14, color: Color(0xFF86909C)),
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: isDark ? Colors.white54 : const Color(0xFF86909C),
+                        ),
                       ),
                     ],
                   ),
@@ -127,7 +136,7 @@ class SettleFinishPage extends StatelessWidget {
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 24),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: isDark ? const Color(0xFF232425) : Colors.white,
                   borderRadius: BorderRadius.circular(12),
                   boxShadow: const <BoxShadow>[
                     BoxShadow(color: Color(0x0D000000), blurRadius: 8, offset: Offset(0, 2)),
@@ -149,23 +158,26 @@ class SettleFinishPage extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(width: 7),
-                          const Text(
+                          Text(
                             '订单明细',
                             style: TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w600,
-                              color: Color(0xFF1D2129),
+                              color: isDark ? Colors.white : const Color(0xFF1D2129),
                             ),
                           ),
                           const Spacer(),
                           Text(
                             '共$detailCount份,应收：¥${payAmt.toStringAsFixed(2)}',
-                            style: const TextStyle(fontSize: 14, color: Color(0xFF1D2129)),
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: isDark ? Colors.white : const Color(0xFF1D2129),
+                            ),
                           ),
                         ],
                       ),
                     ),
-                    _divider(),
+                    _divider(isDark),
                     // 实收 / 找零（对齐 smdcapp：找零金额红色）
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -173,10 +185,19 @@ class SettleFinishPage extends StatelessWidget {
                         children: <Widget>[
                           Text(
                             '实收：¥${receivedAmt.toStringAsFixed(2)}',
-                            style: const TextStyle(fontSize: 14, color: Color(0xFF1D2129)),
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: isDark ? Colors.white : const Color(0xFF1D2129),
+                            ),
                           ),
                           const Spacer(),
-                          const Text('找零：', style: TextStyle(fontSize: 14, color: Color(0xFF1D2129))),
+                          Text(
+                            '找零：',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: isDark ? Colors.white : const Color(0xFF1D2129),
+                            ),
+                          ),
                           Text(
                             '¥${changeAmt.toStringAsFixed(2)}',
                             style: const TextStyle(fontSize: 14, color: _kBrandRed),
@@ -184,14 +205,14 @@ class SettleFinishPage extends StatelessWidget {
                         ],
                       ),
                     ),
-                    _divider(),
-                    _infoRow('订单号：', billno),
-                    _divider(),
-                    _infoRow('收银员：', cashierName),
-                    _divider(),
-                    _infoRow('支付方式：', payName),
-                    _divider(),
-                    _infoRow('支付时间：', billdate),
+                    _divider(isDark),
+                    _infoRow('订单号：', billno, isDark),
+                    _divider(isDark),
+                    _infoRow('收银员：', cashierName, isDark),
+                    _divider(isDark),
+                    _infoRow('支付方式：', payName, isDark),
+                    _divider(isDark),
+                    _infoRow('支付时间：', billdate, isDark),
                   ],
                 ),
               ),
@@ -220,21 +241,24 @@ class SettleFinishPage extends StatelessWidget {
     );
   }
 
-  Widget _divider() {
+  Widget _divider(bool isDark) {
     return Container(
       height: 1,
       margin: const EdgeInsets.symmetric(horizontal: 10),
-      color: const Color(0xFFEFEFEF),
+      color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFEFEFEF),
     );
   }
 
   /// 标签 + 右对齐值（对齐 smdcapp SettleFinishActivity 明细行）
-  Widget _infoRow(String label, String value) {
+  Widget _infoRow(String label, String value, bool isDark) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Row(
         children: <Widget>[
-          Text(label, style: const TextStyle(fontSize: 14, color: Color(0xFF86909C))),
+          Text(
+            label,
+            style: TextStyle(fontSize: 14, color: isDark ? Colors.white54 : const Color(0xFF86909C)),
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
@@ -242,7 +266,7 @@ class SettleFinishPage extends StatelessWidget {
               textAlign: TextAlign.right,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 14, color: Color(0xFF1D2129)),
+              style: TextStyle(fontSize: 14, color: isDark ? Colors.white : const Color(0xFF1D2129)),
             ),
           ),
         ],

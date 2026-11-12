@@ -11,6 +11,7 @@ import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/service/cash_recon_service.dart';
 import 'package:flutter_deer/util/amount_calc_utils.dart';
 import 'package:flutter_deer/util/print_service.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:sp_util/sp_util.dart';
 
@@ -323,18 +324,21 @@ class _HandoverPageState extends State<HandoverPage> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
+    final Color textColor = isDark ? Colors.white : Colors.black87;
+
     return Scaffold(
-      backgroundColor: _bgColor,
+      backgroundColor: isDark ? const Color(0xFF18191A) : _bgColor,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: isDark ? const Color(0xFF232425) : Colors.white,
         elevation: 0.5,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios, size: 20, color: Colors.black87),
+          icon: Icon(Icons.arrow_back_ios, size: 20, color: textColor),
           onPressed: () => NavigatorUtils.goBack(context),
         ),
-        title: const Text(
+        title: Text(
           '交接班',
-          style: TextStyle(color: Colors.black87, fontSize: 17, fontWeight: FontWeight.bold),
+          style: TextStyle(color: textColor, fontSize: 17, fontWeight: FontWeight.bold),
         ),
         centerTitle: true,
       ),
@@ -364,26 +368,29 @@ class _HandoverPageState extends State<HandoverPage> {
 
   /// 交班人卡片（对齐 activity_hand_word 第一个白色圆角卡片）
   Widget _buildCashierCard() {
+    final bool isDark = context.isDark;
+    final Color cardColor = isDark ? const Color(0xFF232425) : Colors.white;
+    final Color textColor = isDark ? Colors.white : _textBlack;
     return Container(
       height: 51,
       margin: const EdgeInsets.fromLTRB(10, 6, 10, 0),
       padding: const EdgeInsets.only(left: 15),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: cardColor,
         borderRadius: BorderRadius.circular(6),
       ),
       child: Row(
         children: <Widget>[
-          const Icon(Icons.person_outline, size: 26, color: _textBlack),
+          Icon(Icons.person_outline, size: 26, color: textColor),
           const SizedBox(width: 1),
-          const Text('交班人', style: TextStyle(fontSize: 19, color: _textBlack)),
+          Text('交班人', style: TextStyle(fontSize: 19, color: textColor)),
           Expanded(
             child: Padding(
               padding: const EdgeInsets.only(right: 15),
               child: Text(
                 _getUserName(),
                 textAlign: TextAlign.right,
-                style: const TextStyle(fontSize: 18, color: _textBlack),
+                style: TextStyle(fontSize: 18, color: textColor),
               ),
             ),
           ),
@@ -394,6 +401,9 @@ class _HandoverPageState extends State<HandoverPage> {
 
   /// 统计菜品/统计分类开关行（对齐活动页第二个白色区块）
   Widget _buildSwitchRow() {
+    final bool isDark = context.isDark;
+    final Color cardColor = isDark ? const Color(0xFF232425) : Colors.white;
+    final Color textColor = isDark ? Colors.white : _textBlack;
     return Container(
       height: 43,
       margin: const EdgeInsets.fromLTRB(10, 9, 10, 0),
@@ -401,14 +411,14 @@ class _HandoverPageState extends State<HandoverPage> {
         children: <Widget>[
           Expanded(
             child: Container(
-              color: Colors.white,
+              color: cardColor,
               child: Row(
                 children: <Widget>[
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       '统计菜品',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 19, color: _textBlack),
+                      style: TextStyle(fontSize: 19, color: textColor),
                     ),
                   ),
                   Padding(
@@ -424,14 +434,14 @@ class _HandoverPageState extends State<HandoverPage> {
           ),
           Expanded(
             child: Container(
-              color: Colors.white,
+              color: cardColor,
               child: Row(
                 children: <Widget>[
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       '统计分类',
                       textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 19, color: _textBlack),
+                      style: TextStyle(fontSize: 19, color: textColor),
                     ),
                   ),
                   Padding(
@@ -452,6 +462,8 @@ class _HandoverPageState extends State<HandoverPage> {
 
   /// 销售汇总卡片（对齐 XML：红条标题 + 收入金额/应交金额）
   Widget _buildSaleSummaryCard() {
+    final bool isDark = context.isDark;
+    final Color cardColor = isDark ? const Color(0xFF232425) : Colors.white;
     // 加上本次交班剩余的押金（对齐 initView：saleamt+bcSyYjSum / payableamt+bcSyYjSum）
     final double bcSyYjSum = _toDouble(_sumData?['bcSyYjSum']);
     final double income = AmountCalcUtils.add(_toDouble(_sumData?['saleamt']), bcSyYjSum);
@@ -459,7 +471,7 @@ class _HandoverPageState extends State<HandoverPage> {
     return Container(
       margin: const EdgeInsets.fromLTRB(10, 9, 10, 0),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: cardColor,
         borderRadius: BorderRadius.circular(6),
       ),
       child: Column(
@@ -474,13 +486,18 @@ class _HandoverPageState extends State<HandoverPage> {
 
   /// 交班单卡片（对齐 XML：详情行 + 支付方式 + 收支合计 + 押金 + 菜品 + 分类）
   Widget _buildHandoverCard() {
+    final bool isDark = context.isDark;
+    final Color cardColor = isDark ? const Color(0xFF232425) : Colors.white;
+    final Color rowLineColor = isDark ? const Color(0xFF3A3C3D) : _rowLineColor;
+    final Color dividerColor = isDark ? const Color(0xFF4A4C4D) : _dividerColor;
+    final Color textColor = isDark ? Colors.white : _textBlack;
     final bool showDish = _totalPro == 0;
     final bool showCategory = _totalProType == 0;
     final bool showYj = _tableYjList.isNotEmpty;
     return Container(
       margin: const EdgeInsets.fromLTRB(10, 9, 10, 0),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: cardColor,
         borderRadius: BorderRadius.circular(6),
       ),
       child: Column(
@@ -490,9 +507,9 @@ class _HandoverPageState extends State<HandoverPage> {
           Container(
             margin: const EdgeInsets.fromLTRB(12, 0, 12, 15),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: cardColor,
               borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: _rowLineColor, width: 1),
+              border: Border.all(color: rowLineColor, width: 1),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -518,18 +535,18 @@ class _HandoverPageState extends State<HandoverPage> {
                     '退款金额：￥${_fmt(_toDouble(_sumData?['returnamt']))}'),
                 // 押金统计（对齐 ll_yjtj：有桌台押金数据才显示）
                 if (showYj) ...[
-                  const _DottedLine(color: _dividerColor),
-                  const Padding(
-                    padding: EdgeInsets.only(left: 6, top: 5),
-                    child: Text('押金统计：', style: TextStyle(fontSize: 15, color: _textBlack)),
+                  _DottedLine(color: dividerColor),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 6, top: 5),
+                    child: Text('押金统计：', style: TextStyle(fontSize: 15, color: textColor)),
                   ),
                   ..._tableYjList.map(_buildPayWayRow),
                   const SizedBox(height: 5),
-                  const _DottedLine(color: _dividerColor),
-                  const _DottedLine(color: _dividerColor),
-                  const Padding(
-                    padding: EdgeInsets.only(left: 6, top: 5),
-                    child: Text('押金合计：', style: TextStyle(fontSize: 15, color: _textBlack)),
+                  _DottedLine(color: dividerColor),
+                  _DottedLine(color: dividerColor),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 6, top: 5),
+                    child: Text('押金合计：', style: TextStyle(fontSize: 15, color: textColor)),
                   ),
                   _buildSumRow('支付笔数：${_tableYjNumSum(_tableYjList)}',
                       '金额：￥${_fmt(_tableYjMoneySum(_tableYjList))}'),
@@ -544,9 +561,9 @@ class _HandoverPageState extends State<HandoverPage> {
                   _buildHeaderRow('菜品', '数量', '金额'),
                   ..._proList.map(_buildDishRow),
                   _buildDivider(),
-                  const Padding(
-                    padding: EdgeInsets.only(left: 6),
-                    child: Text('菜品合计', style: TextStyle(fontSize: 15, color: _textBlack)),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: Text('菜品合计', style: TextStyle(fontSize: 15, color: textColor)),
                   ),
                   _buildSumRow('数量：${_numText(_proSum()['billnum'])}',
                       '金额：￥${_fmt(_proSum()['billprice'])}'),
@@ -556,9 +573,9 @@ class _HandoverPageState extends State<HandoverPage> {
                   _buildHeaderRow('类别', '数量', '金额'),
                   ..._protypeList.map(_buildDishRow),
                   _buildDivider(),
-                  const Padding(
-                    padding: EdgeInsets.only(left: 6),
-                    child: Text('分类合计', style: TextStyle(fontSize: 15, color: _textBlack)),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: Text('分类合计', style: TextStyle(fontSize: 15, color: textColor)),
                   ),
                   _buildSumRow('数量：${_numText(_protypeSum()['billnum'])}',
                       '金额：￥${_fmt(_protypeSum()['billprice'])}'),
@@ -573,6 +590,8 @@ class _HandoverPageState extends State<HandoverPage> {
 
   /// 底部：交班打印开关 + 交班按钮（对齐 ll_print）
   Widget _buildBottomBar() {
+    final bool isDark = context.isDark;
+    final Color textColor = isDark ? Colors.white : _textBlack;
     return SafeArea(
       top: false,
       child: Container(
@@ -584,7 +603,7 @@ class _HandoverPageState extends State<HandoverPage> {
                 height: 40,
                 child: Row(
                   children: <Widget>[
-                    const Text('交班打印', style: TextStyle(fontSize: 19, color: _textBlack)),
+                    Text('交班打印', style: TextStyle(fontSize: 19, color: textColor)),
                     const SizedBox(width: 3),
                     _ToggleSwitch(
                       value: _handPrintFlag == 1,
@@ -620,6 +639,7 @@ class _HandoverPageState extends State<HandoverPage> {
 
   /// 区块标题：红条 + 文字（对齐 XML 销售汇总/交班单标题行）
   Widget _buildSectionTitle(String title) {
+    final bool isDark = context.isDark;
     return Container(
       height: 50,
       padding: const EdgeInsets.only(left: 14),
@@ -631,7 +651,7 @@ class _HandoverPageState extends State<HandoverPage> {
             color: _brandRed,
           ),
           const SizedBox(width: 4),
-          Text(title, style: const TextStyle(fontSize: 19, color: _textBlack)),
+          Text(title, style: TextStyle(fontSize: 19, color: isDark ? Colors.white : _textBlack)),
         ],
       ),
     );
@@ -639,17 +659,18 @@ class _HandoverPageState extends State<HandoverPage> {
 
   /// 销售汇总金额行（对齐 AmountTextView/handTextView）
   Widget _buildAmountRow(String label, double value) {
+    final bool isDark = context.isDark;
     return Container(
       height: 50,
       padding: const EdgeInsets.symmetric(horizontal: 18),
       child: Row(
         children: <Widget>[
-          Text(label, style: const TextStyle(fontSize: 19, color: _textBlack)),
+          Text(label, style: TextStyle(fontSize: 19, color: isDark ? Colors.white : _textBlack)),
           Expanded(
             child: Text(
               '￥${_fmt(value)}',
               textAlign: TextAlign.right,
-              style: const TextStyle(fontSize: 20, color: _textGray33),
+              style: TextStyle(fontSize: 20, color: isDark ? Colors.white70 : _textGray33),
             ),
           ),
         ],
@@ -659,20 +680,27 @@ class _HandoverPageState extends State<HandoverPage> {
 
   /// 交班单详情行：label 15sp + value 16sp 右对齐，底部灰线
   Widget _detailRow(String label, String value) {
+    final bool isDark = context.isDark;
+    final Color textColor = isDark ? Colors.white : _textBlack;
     return Container(
       height: 35,
       margin: const EdgeInsets.symmetric(horizontal: 6),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: _rowLineColor, width: 1)),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: isDark ? const Color(0xFF3A3C3D) : _rowLineColor,
+            width: 1,
+          ),
+        ),
       ),
       child: Row(
         children: <Widget>[
-          Text(label, style: const TextStyle(fontSize: 15, color: _textBlack)),
+          Text(label, style: TextStyle(fontSize: 15, color: textColor)),
           Expanded(
             child: Text(
               value,
               textAlign: TextAlign.right,
-              style: const TextStyle(fontSize: 16, color: _textBlack),
+              style: TextStyle(fontSize: 16, color: textColor),
             ),
           ),
         ],
@@ -682,20 +710,22 @@ class _HandoverPageState extends State<HandoverPage> {
 
   /// 收支/合计行：左文 + 右文（对齐 tv_rramt 等 35dp 行）
   Widget _buildSumRow(String left, String right) {
+    final bool isDark = context.isDark;
+    final Color textColor = isDark ? Colors.white : _textBlack;
     return Container(
       height: 35,
       margin: const EdgeInsets.symmetric(horizontal: 6),
       child: Row(
         children: <Widget>[
           Expanded(
-            child: Text(left, style: const TextStyle(fontSize: 15, color: _textBlack)),
+            child: Text(left, style: TextStyle(fontSize: 15, color: textColor)),
           ),
           if (right.isNotEmpty)
             Expanded(
               child: Text(
                 right,
                 textAlign: TextAlign.right,
-                style: const TextStyle(fontSize: 15, color: _textBlack),
+                style: TextStyle(fontSize: 15, color: textColor),
               ),
             ),
         ],
@@ -705,6 +735,8 @@ class _HandoverPageState extends State<HandoverPage> {
 
   /// 支付方式行（对齐 item_hand_pay：名称 + 支付笔数/金额 + 可选退款行）
   Widget _buildPayWayRow(Map<String, dynamic> e) {
+    final bool isDark = context.isDark;
+    final Color textColor = isDark ? Colors.white : _textBlack;
     final int rebillnum = _toInt(e['rebillnum']);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -713,7 +745,7 @@ class _HandoverPageState extends State<HandoverPage> {
           padding: const EdgeInsets.only(left: 6, top: 4),
           child: Text(
             e['payway']?.toString() ?? '',
-            style: const TextStyle(fontSize: 15, color: _textBlack),
+            style: TextStyle(fontSize: 15, color: textColor),
           ),
         ),
         Container(
@@ -724,14 +756,14 @@ class _HandoverPageState extends State<HandoverPage> {
               Expanded(
                 child: Text(
                   '支付笔数：${_toInt(e['billnum'])}',
-                  style: const TextStyle(fontSize: 15, color: _textBlack),
+                  style: TextStyle(fontSize: 15, color: textColor),
                 ),
               ),
               Expanded(
                 child: Text(
                   '金额：￥${_fmt(_toDouble(e['saleamt']))}',
                   textAlign: TextAlign.right,
-                  style: const TextStyle(fontSize: 15, color: _textBlack),
+                  style: TextStyle(fontSize: 15, color: textColor),
                 ),
               ),
             ],
@@ -747,14 +779,14 @@ class _HandoverPageState extends State<HandoverPage> {
                 Expanded(
                   child: Text(
                     '退款笔数：$rebillnum',
-                    style: const TextStyle(fontSize: 15, color: _textBlack),
+                    style: TextStyle(fontSize: 15, color: textColor),
                   ),
                 ),
                 Expanded(
                   child: Text(
                     '金额：￥${_fmt(_toDouble(e['resaleamt']))}',
                     textAlign: TextAlign.right,
-                    style: const TextStyle(fontSize: 15, color: _textBlack),
+                    style: TextStyle(fontSize: 15, color: textColor),
                   ),
                 ),
               ],
@@ -766,6 +798,8 @@ class _HandoverPageState extends State<HandoverPage> {
 
   /// 菜品/分类行（对齐 item_hand_dishes：名称/数量/金额 权重 2:1:2）
   Widget _buildDishRow(Map<String, dynamic> e) {
+    final bool isDark = context.isDark;
+    final Color textColor = isDark ? Colors.white : _textBlack;
     return Container(
       margin: const EdgeInsets.only(top: 4),
       child: Row(
@@ -776,7 +810,7 @@ class _HandoverPageState extends State<HandoverPage> {
               padding: const EdgeInsets.only(left: 6),
               child: Text(
                 e['productname']?.toString() ?? e['typename']?.toString() ?? '',
-                style: const TextStyle(fontSize: 15, color: _textBlack),
+                style: TextStyle(fontSize: 15, color: textColor),
               ),
             ),
           ),
@@ -784,7 +818,7 @@ class _HandoverPageState extends State<HandoverPage> {
             flex: 1,
             child: Text(
               _numText(_toDouble(e['qty'])),
-              style: const TextStyle(fontSize: 15, color: _textBlack),
+              style: TextStyle(fontSize: 15, color: textColor),
             ),
           ),
           Expanded(
@@ -794,7 +828,7 @@ class _HandoverPageState extends State<HandoverPage> {
               child: Text(
                 '￥${_fmt(_toDouble(e['rramt']))}',
                 textAlign: TextAlign.right,
-                style: const TextStyle(fontSize: 15, color: _textBlack),
+                style: TextStyle(fontSize: 15, color: textColor),
               ),
             ),
           ),
@@ -805,21 +839,28 @@ class _HandoverPageState extends State<HandoverPage> {
 
   /// 列表表头（对齐 dishLienarLayout/categoryLienarLayout 35dp 白底灰线行）
   Widget _buildHeaderRow(String c1, String c2, String c3) {
+    final bool isDark = context.isDark;
+    final Color textColor = isDark ? Colors.white : _textBlack;
     return Container(
       height: 35,
       margin: const EdgeInsets.symmetric(horizontal: 6),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: _rowLineColor, width: 1)),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(
+            color: isDark ? const Color(0xFF3A3C3D) : _rowLineColor,
+            width: 1,
+          ),
+        ),
       ),
       child: Row(
         children: <Widget>[
           Expanded(
             flex: 2,
-            child: Text(c1, style: const TextStyle(fontSize: 15, color: _textBlack)),
+            child: Text(c1, style: TextStyle(fontSize: 15, color: textColor)),
           ),
           Expanded(
             flex: 1,
-            child: Text(c2, style: const TextStyle(fontSize: 15, color: _textBlack)),
+            child: Text(c2, style: TextStyle(fontSize: 15, color: textColor)),
           ),
           Expanded(
             flex: 2,
@@ -828,7 +869,7 @@ class _HandoverPageState extends State<HandoverPage> {
               child: Text(
                 c3,
                 textAlign: TextAlign.right,
-                style: const TextStyle(fontSize: 15, color: _textBlack),
+                style: TextStyle(fontSize: 15, color: textColor),
               ),
             ),
           ),
@@ -839,10 +880,11 @@ class _HandoverPageState extends State<HandoverPage> {
 
   /// 灰色分割线（对齐 #707070 1dp 分割线）
   Widget _buildDivider() {
+    final bool isDark = context.isDark;
     return Container(
       height: 1,
       margin: const EdgeInsets.symmetric(vertical: 10),
-      color: _dividerColor,
+      color: isDark ? const Color(0xFF4A4C4D) : _dividerColor,
     );
   }
 
@@ -1018,6 +1060,10 @@ class _HandoverDoneDialogState extends State<_HandoverDoneDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
+    final Color dialogColor = isDark ? const Color(0xFF232425) : Colors.white;
+    final Color fillColor = isDark ? const Color(0xFF2E2F30) : const Color(0xFFF5F5F5);
+    final Color textColor = isDark ? Colors.white : const Color(0xFF000000);
     return PopScope(
       canPop: false,
       child: Center(
@@ -1026,19 +1072,19 @@ class _HandoverDoneDialogState extends State<_HandoverDoneDialog> {
           child: Container(
             width: 300,
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: dialogColor,
               borderRadius: BorderRadius.circular(6),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 // 标题（对齐 tv_title：居中 15sp）
-                const SizedBox(
+                SizedBox(
                   height: 30,
                   child: Center(
                     child: Text(
                       '消息提示',
-                      style: TextStyle(fontSize: 15, color: Color(0xFF000000)),
+                      style: TextStyle(fontSize: 15, color: textColor),
                     ),
                   ),
                 ),
@@ -1052,12 +1098,12 @@ class _HandoverDoneDialogState extends State<_HandoverDoneDialog> {
                         margin: const EdgeInsets.symmetric(horizontal: 10),
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF5F5F5),
+                          color: fillColor,
                           borderRadius: BorderRadius.circular(5),
                         ),
                         child: Text(
                           '在$_seconds秒后退出应用',
-                          style: const TextStyle(fontSize: 14, color: Color(0xFF000000)),
+                          style: TextStyle(fontSize: 14, color: textColor),
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -1066,12 +1112,12 @@ class _HandoverDoneDialogState extends State<_HandoverDoneDialog> {
                         margin: const EdgeInsets.symmetric(horizontal: 10),
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF5F5F5),
+                          color: fillColor,
                           borderRadius: BorderRadius.circular(5),
                         ),
-                        child: const Text(
+                        child: Text(
                           '请选择退出方式？',
-                          style: TextStyle(fontSize: 14, color: Color(0xFF000000)),
+                          style: TextStyle(fontSize: 14, color: textColor),
                         ),
                       ),
                     ],
@@ -1105,21 +1151,31 @@ class _HandoverDoneDialogState extends State<_HandoverDoneDialog> {
   }
 
   Widget _dialogButton(String text, {required bool red, required VoidCallback onTap}) {
+    final bool isDark = context.isDark;
     return GestureDetector(
       onTap: onTap,
       child: Container(
         height: 30,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: red ? const Color(0xFFE13426) : Colors.white,
+          color: red
+              ? const Color(0xFFE13426)
+              : (isDark ? const Color(0xFF2E2F30) : Colors.white),
           borderRadius: BorderRadius.circular(6),
-          border: red ? null : Border.all(color: const Color(0xFFE5E5E5), width: 1),
+          border: red
+              ? null
+              : Border.all(
+                  color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E5E5),
+                  width: 1,
+                ),
         ),
         child: Text(
           text,
           style: TextStyle(
             fontSize: 12,
-            color: red ? Colors.white : const Color(0xFF000000),
+            color: red
+                ? Colors.white
+                : (isDark ? Colors.white : const Color(0xFF000000)),
           ),
         ),
       ),
@@ -1136,6 +1192,7 @@ class _ToggleSwitch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -1143,7 +1200,9 @@ class _ToggleSwitch extends StatelessWidget {
         height: 24,
         padding: const EdgeInsets.all(2),
         decoration: BoxDecoration(
-          color: value ? const Color(0xFF4CAF50) : const Color(0xFFDDDDDD),
+          color: value
+              ? const Color(0xFF4CAF50)
+              : (isDark ? const Color(0xFF4A4C4D) : const Color(0xFFDDDDDD)),
           borderRadius: BorderRadius.circular(12),
         ),
         child: AnimatedAlign(

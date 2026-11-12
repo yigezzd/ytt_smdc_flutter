@@ -379,40 +379,43 @@ class _LockedByOtherDialogState extends State<_LockedByOtherDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     return Dialog(
       backgroundColor: Colors.transparent,
       child: Container(
         width: 300,
         padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: isDark ? const Color(0xFF2C2C2E) : Colors.white,
           borderRadius: BorderRadius.circular(16),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            const Text(
+            Text(
               '提示',
               style: TextStyle(
                 fontSize: 17,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF1D2129),
+                color: isDark ? Colors.white : const Color(0xFF1D2129),
               ),
             ),
             const SizedBox(height: 16),
             Text(
               widget.message,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 14,
                 height: 1.6,
-                color: Color(0xFF4E5969),
+                color: isDark ? Colors.white70 : const Color(0xFF4E5969),
               ),
             ),
             const SizedBox(height: 8),
             Text(
               '$_seconds 秒后自动返回',
-              style: const TextStyle(fontSize: 12, color: Color(0xFF86909C)),
+              style: TextStyle(
+                  fontSize: 12,
+                  color: isDark ? Colors.white54 : const Color(0xFF86909C)),
             ),
             const SizedBox(height: 12),
             SizedBox(

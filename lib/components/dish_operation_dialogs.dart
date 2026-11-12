@@ -914,6 +914,18 @@ class _DishRemarkSheetState extends State<DishRemarkSheet> {
     );
   }
 
+  void _confirm() {
+    final String text = _controller.text.trim();
+    // 后台要求菜品备注必填时必须选择/输入（对齐 smdcapp ProductRemarkPopup2 typeid=06）
+    if (ParamsSpUtils.isRemarkMust('06') && text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请选择或填写备注原因'), duration: Duration(seconds: 1)),
+      );
+      return;
+    }
+    Navigator.of(context).pop(text);
+  }
+
   @override
   Widget build(BuildContext context) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1045,9 +1057,7 @@ class _DishRemarkSheetState extends State<DishRemarkSheet> {
               width: double.infinity,
               height: 44,
               child: ElevatedButton(
-                onPressed: () {
-                  Navigator.of(context).pop(_controller.text.trim());
-                },
+                onPressed: _confirm,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _kBrandRed,
                   foregroundColor: Colors.white,
@@ -2222,7 +2232,7 @@ class _DishReturnSheetState extends State<DishReturnSheet> {
                   width: 36,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFE5E6EB),
+                    color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -2234,17 +2244,19 @@ class _DishReturnSheetState extends State<DishReturnSheet> {
                   Expanded(
                     child: Text(
                       '退菜 - ${widget.dishName}',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF1D2129),
+                        color: isDark ? Colors.white : const Color(0xFF1D2129),
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   IconButton(
                     onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close, size: 20, color: Color(0xFFC9CDD4)),
+                    icon: Icon(Icons.close,
+                        size: 20,
+                        color: isDark ? Colors.white54 : const Color(0xFFC9CDD4)),
                   ),
                 ],
               ),
@@ -2253,7 +2265,10 @@ class _DishReturnSheetState extends State<DishReturnSheet> {
               if (!widget.isWeigh)
                 Row(
                   children: <Widget>[
-                    const Text('退菜数量', style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
+                    Text('退菜数量',
+                        style: TextStyle(
+                            fontSize: 14,
+                            color: isDark ? Colors.white70 : const Color(0xFF4E5969))),
                     const Spacer(),
                     IconButton(
                       onPressed: _num > 1
@@ -2284,13 +2299,18 @@ class _DishReturnSheetState extends State<DishReturnSheet> {
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Text(
                     '称重菜退菜数量：${widget.maxQty}',
-                    style: const TextStyle(fontSize: 14, color: Color(0xFF4E5969)),
+                    style: TextStyle(
+                        fontSize: 14,
+                        color: isDark ? Colors.white70 : const Color(0xFF4E5969)),
                   ),
                 ),
               const SizedBox(height: 12),
               // 退菜原因（对齐 smdcapp rv reason typeid=02）
               if (widget.reasons.isNotEmpty) ...<Widget>[
-                const Text('退菜原因', style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
+                Text('退菜原因',
+                    style: TextStyle(
+                        fontSize: 14,
+                        color: isDark ? Colors.white70 : const Color(0xFF4E5969))),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
@@ -2304,17 +2324,23 @@ class _DishReturnSheetState extends State<DishReturnSheet> {
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
-                          color: selected ? const Color(0xFFFEECEB) : const Color(0xFFF7F8FA),
+                          color: selected
+                              ? (isDark ? const Color(0xFF3A2422) : const Color(0xFFFEECEB))
+                              : (isDark ? const Color(0xFF2E2F30) : const Color(0xFFF7F8FA)),
                           borderRadius: BorderRadius.circular(6),
                           border: Border.all(
-                            color: selected ? _kBrandRed : const Color(0xFFE5E6EB),
+                            color: selected
+                                ? _kBrandRed
+                                : (isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB)),
                           ),
                         ),
                         child: Text(
                           r,
                           style: TextStyle(
                             fontSize: 13,
-                            color: selected ? _kBrandRed : const Color(0xFF4E5969),
+                            color: selected
+                                ? _kBrandRed
+                                : (isDark ? Colors.white70 : const Color(0xFF4E5969)),
                           ),
                         ),
                       ),
@@ -2338,7 +2364,10 @@ class _DishReturnSheetState extends State<DishReturnSheet> {
               // 打印退菜单开关（对齐 smdcapp cbPrint）
               Row(
                 children: <Widget>[
-                  const Text('打印退菜单', style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
+                  Text('打印退菜单',
+                      style: TextStyle(
+                          fontSize: 14,
+                          color: isDark ? Colors.white70 : const Color(0xFF4E5969))),
                   const Spacer(),
                   Switch(
                     value: _printTicket,

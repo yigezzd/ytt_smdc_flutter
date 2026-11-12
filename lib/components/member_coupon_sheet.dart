@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 
 /// 品牌红
@@ -16,6 +17,8 @@ class MemberCoupon {
     this.favamt = 0,
     this.favtype = 0,
     this.enddate = '',
+    this.qty = 1,
+    this.userAmt = 0,
     this.raw = const <String, dynamic>{},
   });
 
@@ -51,8 +54,23 @@ class MemberCoupon {
   final int favtype;
   final String enddate;
 
+  /// 核销张数（对齐 smdcapp VipCouponBean.qty，选券默认 1 张）。
+  /// 服务端 vip/verify 按此字段核销礼券数量，缺失会报"请选择核销的礼券数量"。
+  int qty;
+
+  /// 本次抵扣金额（对齐 smdcapp VipCouponBean.userAmt）
+  double userAmt;
+
   /// 服务端原始券数据（核销接口原样回传，对齐 smdcapp Gson(VipCoupon)）
   final Map<String, dynamic> raw;
+
+  /// 核销/上传用券数据：原始券数据补核销张数 qty 与抵扣额 userAmt
+  /// （对齐 smdcapp 序列化 VipCouponBean，服务端按 qty 核销礼券数量）
+  Map<String, dynamic> get favPayload => <String, dynamic>{
+        ...raw,
+        'qty': qty,
+        if (userAmt > 0) 'userAmt': userAmt,
+      };
 
   String get typeText {
     switch (favtype) {
@@ -151,24 +169,39 @@ class _MemberCouponSheetState extends State<MemberCouponSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return Container(
       height: MediaQuery.of(context).size.height * 0.6,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF232425) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
       ),
       child: Column(
         children: <Widget>[
           const SizedBox(height: 10),
           Center(
-            child: Container(width: 36, height: 4, decoration: BoxDecoration(color: const Color(0xFFE5E6EB), borderRadius: BorderRadius.circular(2))),
+            child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
+                    borderRadius: BorderRadius.circular(2))),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
             child: Row(
               children: <Widget>[
-                const Expanded(child: Text('会员优惠券', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600))),
-                IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close, size: 20, color: Color(0xFFC9CDD4))),
+                Expanded(
+                    child: Text('会员优惠券',
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? Colors.white : null))),
+                IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: Icon(Icons.close,
+                        size: 20,
+                        color: isDark ? Colors.white38 : const Color(0xFFC9CDD4))),
               ],
             ),
           ),
@@ -177,7 +210,12 @@ class _MemberCouponSheetState extends State<MemberCouponSheet> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _coupons.isEmpty
-                    ? const Center(child: Text('暂无可用优惠券', style: TextStyle(color: Color(0xFF999999))))
+                    ? Center(
+                        child: Text('暂无可用优惠券',
+                            style: TextStyle(
+                                color: isDark
+                                    ? Colors.white54
+                                    : const Color(0xFF999999))))
                     : ListView.builder(
                         padding: const EdgeInsets.all(12),
                         itemCount: _coupons.length,
@@ -190,15 +228,17 @@ class _MemberCouponSheetState extends State<MemberCouponSheet> {
   }
 
   Widget _buildCouponCard(MemberCoupon coupon) {
+    final bool isDark = context.isDark;
     return GestureDetector(
       onTap: () => Navigator.pop(context, coupon),
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: const Color(0xFFFFF8F7),
+          color: isDark ? const Color(0xFF2E2F30) : const Color(0xFFFFF8F7),
           borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFFFBDDD9)),
+          border: Border.all(
+              color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFFBDDD9)),
         ),
         child: Row(
           children: <Widget>[
@@ -215,16 +255,24 @@ class _MemberCouponSheetState extends State<MemberCouponSheet> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(coupon.favname, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                  Text(coupon.favname,
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: isDark ? Colors.white : null)),
                   const SizedBox(height: 2),
                   Text(
                     '${coupon.typeText}  ${coupon.enddate.isNotEmpty ? '有效期至 ${coupon.enddate}' : ''}',
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF999999)),
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: isDark ? Colors.white54 : const Color(0xFF999999)),
                   ),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, size: 20, color: Color(0xFFC9CDD4)),
+            Icon(Icons.chevron_right,
+                size: 20,
+                color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4)),
           ],
         ),
       ),

@@ -41,6 +41,14 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
   /// 品牌红（对齐 smdcapp loginbtn 红色）
   static const Color _brandRed = Color(0xFFE13426);
 
+  bool get _isDark => Theme.of(context).brightness == Brightness.dark;
+
+  Color get _sheetBg => _isDark ? const Color(0xFF18191A) : _bgGray;
+
+  Color get _cardBg => _isDark ? const Color(0xFF232425) : Colors.white;
+
+  Color get _textColor => _isDark ? Colors.white : const Color(0xFF333333);
+
   /// 弹窗背景灰（对齐 smdcapp @color/line）
   static const Color _bgGray = Color(0xFFF5F5F5);
 
@@ -664,17 +672,17 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 15),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: _cardBg,
             borderRadius: BorderRadius.circular(4),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Icon(icon, size: 24, color: const Color(0xFF333333)),
+              Icon(icon, size: 24, color: _textColor),
               const SizedBox(height: 10),
               Text(
                 label,
-                style: const TextStyle(fontSize: 14, color: Color(0xFF333333)),
+                style: TextStyle(fontSize: 14, color: _textColor),
               ),
             ],
           ),
@@ -702,9 +710,9 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
     return Material(
       color: Colors.transparent,
       child: Container(
-        decoration: const BoxDecoration(
-          color: _bgGray,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+        decoration: BoxDecoration(
+          color: _sheetBg,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
         ),
         padding: const EdgeInsets.all(10),
         child: SafeArea(
@@ -720,17 +728,19 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
                   Expanded(
                     child: Text(
                       title,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 14,
-                        color: Color(0xFF333333),
+                        color: _textColor,
                       ),
                     ),
                   ),
                   GestureDetector(
                     onTap: () => Navigator.of(context).pop(),
-                    child: const Padding(
-                      padding: EdgeInsets.all(4),
-                      child: Icon(Icons.close, size: 22, color: Color(0xFF666666)),
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: Icon(Icons.close,
+                          size: 22,
+                          color: _isDark ? Colors.white54 : const Color(0xFF666666)),
                     ),
                   ),
                 ],
@@ -792,7 +802,7 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
               // 修改台桌信息 + 开始点菜（对齐 smdcapp ll_dis_and_change）
               Container(
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: _cardBg,
                   borderRadius: BorderRadius.circular(4),
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -803,21 +813,23 @@ class _TableOperationDialogState extends State<TableOperationDialog> {
                     GestureDetector(
                       onTap: _onEditTableInfo,
                       behavior: HitTestBehavior.opaque,
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 10),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
                         child: Row(
                           children: <Widget>[
-                            Icon(Icons.build_outlined, size: 22, color: Color(0xFF333333)),
-                            SizedBox(width: 10),
+                            Icon(Icons.build_outlined, size: 22, color: _textColor),
+                            const SizedBox(width: 10),
                             Text(
                               '修改台桌信息',
-                              style: TextStyle(fontSize: 14, color: Color(0xFF333333)),
+                              style: TextStyle(fontSize: 14, color: _textColor),
                             ),
                           ],
                         ),
                       ),
                     ),
-                    Container(height: 0.5, color: _bgGray),
+                    Container(
+                        height: 0.5,
+                        color: _isDark ? const Color(0xFF3A3C3D) : _bgGray),
                     const SizedBox(height: 10),
                     // 开始点菜（红色大按钮，对齐 smdcapp tv_dishes）
                     GestureDetector(
@@ -873,11 +885,13 @@ class _UniTableSheetState extends State<_UniTableSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color textColor = isDark ? Colors.white : const Color(0xFF333333);
     return Container(
       height: MediaQuery.of(context).size.height * 0.55,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF232425) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
       ),
       child: Column(
         children: <Widget>[
@@ -887,7 +901,7 @@ class _UniTableSheetState extends State<_UniTableSheet> {
               width: 36,
               height: 4,
               decoration: BoxDecoration(
-                color: const Color(0xFFE5E6EB),
+                color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB),
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -897,15 +911,18 @@ class _UniTableSheetState extends State<_UniTableSheet> {
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
             child: Row(
               children: <Widget>[
-                const Expanded(
+                Expanded(
                   child: Text('并台',
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: textColor)),
                 ),
                 IconButton(
                   onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close,
-                      size: 20, color: Color(0xFFC9CDD4)),
+                  icon: Icon(Icons.close,
+                      size: 20,
+                      color: isDark ? Colors.white54 : const Color(0xFFC9CDD4)),
                 ),
               ],
             ),
@@ -961,13 +978,13 @@ class _UniTableSheetState extends State<_UniTableSheet> {
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       color: isSelected
-                          ? const Color(0xFFFFF1F0)
-                          : const Color(0xFFFEF7E6),
+                          ? (isDark ? const Color(0xFF3A2422) : const Color(0xFFFFF1F0))
+                          : (isDark ? const Color(0xFF2E2F30) : const Color(0xFFFEF7E6)),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
                         color: isSelected
                             ? const Color(0xFFE13426)
-                            : const Color(0xFFF0E0C0),
+                            : (isDark ? const Color(0xFF4A4C4D) : const Color(0xFFF0E0C0)),
                       ),
                     ),
                     child: Stack(
@@ -975,8 +992,7 @@ class _UniTableSheetState extends State<_UniTableSheet> {
                         Center(
                           child: Text(
                             displayText,
-                            style: const TextStyle(
-                                fontSize: 14, color: Color(0xFF333333)),
+                            style: TextStyle(fontSize: 14, color: textColor),
                             textAlign: TextAlign.center,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,

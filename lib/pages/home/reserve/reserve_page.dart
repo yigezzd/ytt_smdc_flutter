@@ -256,13 +256,17 @@ class _ReservePageState extends State<ReservePage> {
       ),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: const TextStyle(fontSize: 14, color: Color(0xFFC9CDD4)),
+        hintStyle: TextStyle(
+            fontSize: 14,
+            color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4)),
         filled: true,
         fillColor: isDark ? const Color(0xFF3A3A3C) : const Color(0xFFF7F8FA),
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: Color(0xFFE5E6EB), width: 1),
+          borderSide: BorderSide(
+              color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB),
+              width: 1),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
@@ -274,8 +278,9 @@ class _ReservePageState extends State<ReservePage> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F6F8),
+      backgroundColor: isDark ? const Color(0xFF18191A) : const Color(0xFFF5F6F8),
       appBar: const MyAppBar(centerTitle: '预订管理'),
       floatingActionButton: FloatingActionButton(
         backgroundColor: _kBrandRed,
@@ -285,7 +290,10 @@ class _ReservePageState extends State<ReservePage> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _reserves.isEmpty
-              ? const Center(child: Text('暂无预订记录', style: TextStyle(color: Color(0xFF999999))))
+              ? Center(
+                  child: Text('暂无预订记录',
+                      style: TextStyle(
+                          color: isDark ? Colors.white54 : const Color(0xFF999999))))
               : RefreshIndicator(
                   onRefresh: _loadReserves,
                   child: ListView.builder(
@@ -298,6 +306,7 @@ class _ReservePageState extends State<ReservePage> {
   }
 
   Widget _buildReserveCard(Map<String, dynamic> reserve) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final String name = reserve['linkman']?.toString() ?? reserve['name']?.toString() ?? '';
     final String phone = reserve['linkphone']?.toString() ?? reserve['phone']?.toString() ?? '';
     final String personnum = reserve['personnum']?.toString() ?? '';
@@ -308,11 +317,13 @@ class _ReservePageState extends State<ReservePage> {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isDark ? const Color(0xFF232425) : Colors.white,
         borderRadius: BorderRadius.circular(10),
-        boxShadow: const <BoxShadow>[
-          BoxShadow(color: Color(0x0D000000), blurRadius: 6, offset: Offset(0, 2)),
-        ],
+        boxShadow: isDark
+            ? null
+            : const <BoxShadow>[
+                BoxShadow(color: Color(0x0D000000), blurRadius: 6, offset: Offset(0, 2)),
+              ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -320,12 +331,18 @@ class _ReservePageState extends State<ReservePage> {
           Row(
             children: <Widget>[
               Expanded(
-                child: Text(name, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                child: Text(name,
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: isDark ? Colors.white : const Color(0xFF1D2129))),
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: status == 0 ? const Color(0xFFFFF3E0) : const Color(0xFFE8F5E9),
+                  color: status == 0
+                      ? (isDark ? const Color(0xFF3A2E1C) : const Color(0xFFFFF3E0))
+                      : (isDark ? const Color(0xFF1E3323) : const Color(0xFFE8F5E9)),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
@@ -336,9 +353,15 @@ class _ReservePageState extends State<ReservePage> {
             ],
           ),
           const SizedBox(height: 8),
-          Text('电话：$phone', style: const TextStyle(fontSize: 13, color: Color(0xFF666666))),
+          Text('电话：$phone',
+              style: TextStyle(
+                  fontSize: 13,
+                  color: isDark ? Colors.white54 : const Color(0xFF666666))),
           const SizedBox(height: 4),
-          Text('人数：$personnum  时间：$reservetime', style: const TextStyle(fontSize: 12, color: Color(0xFF999999))),
+          Text('人数：$personnum  时间：$reservetime',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: isDark ? Colors.white38 : const Color(0xFF999999))),
           if (status == 0) ...<Widget>[
             const SizedBox(height: 10),
             Row(
@@ -347,7 +370,9 @@ class _ReservePageState extends State<ReservePage> {
                 OutlinedButton(
                   onPressed: () => _cancelReserve(reserve),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF666666),
+                    foregroundColor:
+                        isDark ? Colors.white54 : const Color(0xFF666666),
+                    side: isDark ? const BorderSide(color: Color(0xFF4A4C4D)) : null,
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
                     textStyle: const TextStyle(fontSize: 12),
                   ),

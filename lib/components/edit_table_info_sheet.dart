@@ -6,6 +6,7 @@ import 'package:flutter_deer/db/entity/table_type_entity.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/util/params_sp_utils.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 
 /// 品牌红
@@ -153,10 +154,11 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF232425) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       ),
       padding: EdgeInsets.fromLTRB(
         20,
@@ -170,19 +172,21 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
           // 标题栏
           Row(
             children: <Widget>[
-              const Expanded(
+              Expanded(
                 child: Text(
                   '修改开台信息',
                   style: TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFF1D2129),
+                    color: isDark ? Colors.white : const Color(0xFF1D2129),
                   ),
                 ),
               ),
               GestureDetector(
                 onTap: () => Navigator.pop(context),
-                child: const Icon(Icons.close, size: 22, color: Color(0xFF86909C)),
+                child: Icon(Icons.close,
+                    size: 22,
+                    color: isDark ? Colors.white54 : const Color(0xFF86909C)),
               ),
             ],
           ),
@@ -190,7 +194,10 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
           // 人数
           Row(
             children: <Widget>[
-              const Text('人数：', style: TextStyle(fontSize: 15, color: Color(0xFF4E5969))),
+              Text('人数：',
+                  style: TextStyle(
+                      fontSize: 15,
+                      color: isDark ? Colors.white70 : const Color(0xFF4E5969))),
               const SizedBox(width: 8),
               SizedBox(
                 width: 100,
@@ -209,16 +216,24 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
                       extentOffset: _personCtrl.text.length,
                     );
                   },
-                  style: const TextStyle(fontSize: 15, color: Color(0xFF1D2129)),
+                  style: TextStyle(
+                      fontSize: 15,
+                      color: isDark ? Colors.white : const Color(0xFF1D2129)),
                   decoration: InputDecoration(
                     contentPadding: const EdgeInsets.symmetric(vertical: 10),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(6),
-                      borderSide: const BorderSide(color: Color(0xFFE5E6EB)),
+                      borderSide: BorderSide(
+                          color: isDark
+                              ? const Color(0xFF4A4C4D)
+                              : const Color(0xFFE5E6EB)),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(6),
-                      borderSide: const BorderSide(color: Color(0xFFE5E6EB)),
+                      borderSide: BorderSide(
+                          color: isDark
+                              ? const Color(0xFF4A4C4D)
+                              : const Color(0xFFE5E6EB)),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(6),
@@ -233,7 +248,10 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
           // 服务员
           Row(
             children: <Widget>[
-              const Text('服务员：', style: TextStyle(fontSize: 15, color: Color(0xFF4E5969))),
+              Text('服务员：',
+                  style: TextStyle(
+                      fontSize: 15,
+                      color: isDark ? Colors.white70 : const Color(0xFF4E5969))),
               const SizedBox(width: 8),
               GestureDetector(
                 onTap: () async {
@@ -254,10 +272,14 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
                   children: <Widget>[
                     Text(
                       _serverName,
-                      style: const TextStyle(fontSize: 15, color: Color(0xFF1D2129)),
+                      style: TextStyle(
+                          fontSize: 15,
+                          color: isDark ? Colors.white : const Color(0xFF1D2129)),
                     ),
                     const SizedBox(width: 4),
-                    const Icon(Icons.chevron_right, size: 18, color: Color(0xFF86909C)),
+                    Icon(Icons.chevron_right,
+                        size: 18,
+                        color: isDark ? Colors.white54 : const Color(0xFF86909C)),
                   ],
                 ),
               ),
@@ -268,8 +290,10 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
           if (_showAddition && _additionReady) ...<Widget>[
             Row(
               children: <Widget>[
-                const Text('附加费：',
-                    style: TextStyle(fontSize: 15, color: Color(0xFF4E5969))),
+                Text('附加费：',
+                    style: TextStyle(
+                        fontSize: 15,
+                        color: isDark ? Colors.white70 : const Color(0xFF4E5969))),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Container(
@@ -277,13 +301,20 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
                     padding: const EdgeInsets.symmetric(horizontal: 10),
                     alignment: Alignment.centerLeft,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF7F8FA),
+                      color: isDark
+                          ? const Color(0xFF2E2F30)
+                          : const Color(0xFFF7F8FA),
                       borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: const Color(0xFFE5E6EB)),
+                      border: Border.all(
+                          color: isDark
+                              ? const Color(0xFF4A4C4D)
+                              : const Color(0xFFE5E6EB)),
                     ),
                     child: Text(
                       _additionName,
-                      style: const TextStyle(fontSize: 14, color: Color(0xFF86909C)),
+                      style: TextStyle(
+                          fontSize: 14,
+                          color: isDark ? Colors.white54 : const Color(0xFF86909C)),
                     ),
                   ),
                 ),
@@ -294,25 +325,40 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
           // 备注
           Row(
             children: <Widget>[
-              const Text('备注：', style: TextStyle(fontSize: 15, color: Color(0xFF4E5969))),
+              Text('备注：',
+                  style: TextStyle(
+                      fontSize: 15,
+                      color: isDark ? Colors.white70 : const Color(0xFF4E5969))),
               const SizedBox(width: 8),
               Expanded(
                 child: SizedBox(
                   height: 40,
                   child: TextField(
                     controller: _remarkCtrl,
-                    style: const TextStyle(fontSize: 14, color: Color(0xFF1D2129)),
+                    style: TextStyle(
+                        fontSize: 14,
+                        color: isDark ? Colors.white : const Color(0xFF1D2129)),
                     decoration: InputDecoration(
                       hintText: '请输入备注',
-                      hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFC9CDD4)),
+                      hintStyle: TextStyle(
+                          fontSize: 13,
+                          color: isDark
+                              ? const Color(0xFF666666)
+                              : const Color(0xFFC9CDD4)),
                       contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(6),
-                        borderSide: const BorderSide(color: Color(0xFFE5E6EB)),
+                        borderSide: BorderSide(
+                            color: isDark
+                                ? const Color(0xFF4A4C4D)
+                                : const Color(0xFFE5E6EB)),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(6),
-                        borderSide: const BorderSide(color: Color(0xFFE5E6EB)),
+                        borderSide: BorderSide(
+                            color: isDark
+                                ? const Color(0xFF4A4C4D)
+                                : const Color(0xFFE5E6EB)),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(6),
@@ -335,13 +381,21 @@ class _EditTableInfoSheetState extends State<EditTableInfoSheet> {
                   child: Container(
                     height: 44,
                     decoration: BoxDecoration(
-                      border: Border.all(color: const Color(0xFFE5E6EB)),
+                      border: Border.all(
+                          color: isDark
+                              ? const Color(0xFF4A4C4D)
+                              : const Color(0xFFE5E6EB)),
                       borderRadius: BorderRadius.circular(22),
                     ),
-                    child: const Center(
+                    child: Center(
                       child: Text(
                         '取消',
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF4E5969)),
+                        style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: isDark
+                                ? Colors.white70
+                                : const Color(0xFF4E5969)),
                       ),
                     ),
                   ),

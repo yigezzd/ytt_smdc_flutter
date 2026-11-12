@@ -6,6 +6,7 @@ import 'package:flutter_deer/components/confirm_dialog.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/net/mq_service.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:flutter_deer/widgets/my_app_bar.dart';
 
@@ -212,18 +213,19 @@ class _TakeoutPageState extends State<TakeoutPage> with SingleTickerProviderStat
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F6F8),
+      backgroundColor: isDark ? const Color(0xFF18191A) : const Color(0xFFF5F6F8),
       appBar: const MyAppBar(centerTitle: '外卖订单'),
       body: Column(
         children: <Widget>[
           // Tab栏
           Container(
-            color: Colors.white,
+            color: isDark ? const Color(0xFF232425) : Colors.white,
             child: TabBar(
               controller: _tabController,
               labelColor: const Color(0xFFE13426),
-              unselectedLabelColor: const Color(0xFF666666),
+              unselectedLabelColor: isDark ? Colors.white70 : const Color(0xFF666666),
               indicatorColor: const Color(0xFFE13426),
               tabs: const <Widget>[
                 Tab(text: '待处理'),
@@ -237,8 +239,11 @@ class _TakeoutPageState extends State<TakeoutPage> with SingleTickerProviderStat
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _orders.isEmpty
-                    ? const Center(
-                        child: Text('暂无外卖订单', style: TextStyle(color: Color(0xFF999999))),
+                    ? Center(
+                        child: Text(
+                          '暂无外卖订单',
+                          style: TextStyle(color: isDark ? Colors.white54 : const Color(0xFF999999)),
+                        ),
                       )
                     : RefreshIndicator(
                         onRefresh: _loadOrders,
@@ -255,6 +260,7 @@ class _TakeoutPageState extends State<TakeoutPage> with SingleTickerProviderStat
   }
 
   Widget _buildOrderCard(Map<String, dynamic> order) {
+    final bool isDark = context.isDark;
     final String orderNo = order['orderno']?.toString() ?? order['billno']?.toString() ?? '';
     final String platform = order['platform']?.toString() ?? order['source']?.toString() ?? '外卖';
     final String status = order['orderstatus']?.toString() ?? '';
@@ -267,7 +273,7 @@ class _TakeoutPageState extends State<TakeoutPage> with SingleTickerProviderStat
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isDark ? const Color(0xFF232425) : Colors.white,
         borderRadius: BorderRadius.circular(10),
         boxShadow: const <BoxShadow>[
           BoxShadow(color: Color(0x0D000000), blurRadius: 6, offset: Offset(0, 2)),
@@ -296,22 +302,37 @@ class _TakeoutPageState extends State<TakeoutPage> with SingleTickerProviderStat
           Row(
             children: <Widget>[
               Expanded(
-                child: Text('订单号：$orderNo', style: const TextStyle(fontSize: 13, color: Color(0xFF333333))),
+                child: Text(
+                  '订单号：$orderNo',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: isDark ? Colors.white : const Color(0xFF333333),
+                  ),
+                ),
               ),
               Text('¥$amt', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFFE13426))),
             ],
           ),
           if (address.isNotEmpty) ...<Widget>[
             const SizedBox(height: 4),
-            Text('地址：$address', style: const TextStyle(fontSize: 12, color: Color(0xFF666666))),
+            Text(
+              '地址：$address',
+              style: TextStyle(fontSize: 12, color: isDark ? Colors.white54 : const Color(0xFF666666)),
+            ),
           ],
           if (phone.isNotEmpty) ...<Widget>[
             const SizedBox(height: 4),
-            Text('电话：$phone', style: const TextStyle(fontSize: 12, color: Color(0xFF666666))),
+            Text(
+              '电话：$phone',
+              style: TextStyle(fontSize: 12, color: isDark ? Colors.white54 : const Color(0xFF666666)),
+            ),
           ],
           if (remark.isNotEmpty) ...<Widget>[
             const SizedBox(height: 4),
-            Text('备注：$remark', style: const TextStyle(fontSize: 12, color: Color(0xFF999999))),
+            Text(
+              '备注：$remark',
+              style: TextStyle(fontSize: 12, color: isDark ? Colors.white54 : const Color(0xFF999999)),
+            ),
           ],
           const SizedBox(height: 10),
           // 操作按钮
@@ -388,7 +409,7 @@ class _TakeoutPageState extends State<TakeoutPage> with SingleTickerProviderStat
       case '4': return Colors.green;
       case '5': return Colors.red;
       case '10': return Colors.grey;
-      default: return const Color(0xFF333333);
+      default: return context.isDark ? Colors.white70 : const Color(0xFF333333);
     }
   }
 }

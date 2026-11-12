@@ -665,8 +665,13 @@ String _friendlyNetworkError(DioException e) {
 
 /// 本机是否存在与主设备同网段的网卡（失败时按可达处理，保持原探活行为）
 Future<bool> _hasLanRouteTo(String localhost) async {
+  // Web 端 dart:io 的 InternetAddress/NetworkInterface 会抛 UnsupportedError，
+  // 该网卡枚举优化仅适用于原生移动端，Web 直接按可达处理，避免探活被整体跳过。
+  if (kIsWeb) {
+    return true;
+  }
   try {
-    return isHostInLocalSubnet(Uri.parse(localhost).host);
+    return await isHostInLocalSubnet(Uri.parse(localhost).host);
   } catch (_) {
     return true;
   }

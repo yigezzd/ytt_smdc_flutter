@@ -11,6 +11,7 @@ import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/setting/setting_router.dart';
 import 'package:flutter_deer/util/log_upload_utils.dart';
 import 'package:flutter_deer/util/order_log_utils.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sp_util/sp_util.dart';
@@ -193,8 +194,10 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
 
   /// 磁卡读取方式（对齐 smdcapp cl_ckdq_show → OptionsPickerView）
   void _onCardReader() {
+    final bool isDark = context.isDark;
     showModalBottomSheet<void>(
       context: context,
+      backgroundColor: isDark ? const Color(0xFF232425) : null,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
       ),
@@ -290,10 +293,11 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
-        backgroundColor: const Color(0xFFF9F9F9),
+        backgroundColor: isDark ? const Color(0xFF18191A) : const Color(0xFFF9F9F9),
         body: Column(
           children: <Widget>[
             _buildHeader(),
@@ -468,6 +472,8 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
 
   /// 版本更新项（对齐 smdcapp cl_update_version: 图标 + 文字 + NEW徽章 + 版本号）
   Widget _buildVersionItem() {
+    final bool isDark = context.isDark;
+    final Color textColor = isDark ? Colors.white : const Color(0xFF000000);
     return _buildCard(
       child: InkWell(
         onTap: _onVersionUpdate,
@@ -478,9 +484,9 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
             children: <Widget>[
               const Icon(Icons.system_update_outlined, size: 26, color: _brandRed),
               const SizedBox(width: 12),
-              const Text(
+              Text(
                 '版本更新',
-                style: TextStyle(fontSize: 14, color: Color(0xFF000000)),
+                style: TextStyle(fontSize: 14, color: textColor),
               ),
               const Spacer(),
               if (_hasNewVersion)
@@ -502,7 +508,7 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
               if (_hasNewVersion) const SizedBox(width: 8),
               Text(
                 _appVersion,
-                style: const TextStyle(fontSize: 16, color: Color(0xFF000000)),
+                style: TextStyle(fontSize: 16, color: textColor),
               ),
             ],
           ),
@@ -513,6 +519,9 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
 
   /// 本机设备号项（对齐 smdcapp cl_mach_no: 图标 + 文字 + 设备号值）
   Widget _buildDeviceNoItem() {
+    final bool isDark = context.isDark;
+    final Color textColor = isDark ? Colors.white : const Color(0xFF000000);
+    final Color iconColor = isDark ? Colors.white70 : const Color(0xFF666666);
     return _buildCard(
       child: InkWell(
         onTap: _onDeviceNo,
@@ -521,16 +530,16 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
           padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
           child: Row(
             children: <Widget>[
-              const Icon(Icons.devices_other_outlined, size: 26, color: Color(0xFF666666)),
+              Icon(Icons.devices_other_outlined, size: 26, color: iconColor),
               const SizedBox(width: 12),
-              const Text(
+              Text(
                 '本机设备号',
-                style: TextStyle(fontSize: 14, color: Color(0xFF000000)),
+                style: TextStyle(fontSize: 14, color: textColor),
               ),
               const Spacer(),
               Text(
                 _machNo,
-                style: const TextStyle(fontSize: 16, color: Color(0xFF000000)),
+                style: TextStyle(fontSize: 16, color: textColor),
               ),
             ],
           ),
@@ -545,6 +554,10 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
     required String title,
     required VoidCallback onTap,
   }) {
+    final bool isDark = context.isDark;
+    final Color textColor = isDark ? Colors.white : const Color(0xFF000000);
+    final Color iconColor = isDark ? Colors.white70 : const Color(0xFF666666);
+    final Color arrowColor = isDark ? const Color(0xFF666666) : const Color(0xFFCCCCCC);
     return _buildCard(
       child: InkWell(
         onTap: onTap,
@@ -553,14 +566,14 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
           padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
           child: Row(
             children: <Widget>[
-              Icon(icon, size: 26, color: const Color(0xFF666666)),
+              Icon(icon, size: 26, color: iconColor),
               const SizedBox(width: 12),
               Text(
                 title,
-                style: const TextStyle(fontSize: 14, color: Color(0xFF000000)),
+                style: TextStyle(fontSize: 14, color: textColor),
               ),
               const Spacer(),
-              const Icon(Icons.chevron_right, size: 20, color: Color(0xFFCCCCCC)),
+              Icon(Icons.chevron_right, size: 20, color: arrowColor),
             ],
           ),
         ),
@@ -575,6 +588,11 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
     required String trailing,
     required VoidCallback onTap,
   }) {
+    final bool isDark = context.isDark;
+    final Color textColor = isDark ? Colors.white : const Color(0xFF000000);
+    final Color iconColor = isDark ? Colors.white70 : const Color(0xFF666666);
+    final Color trailingColor = isDark ? Colors.white70 : const Color(0xFF999999);
+    final Color arrowColor = isDark ? const Color(0xFF666666) : const Color(0xFFCCCCCC);
     return _buildCard(
       child: InkWell(
         onTap: onTap,
@@ -583,19 +601,19 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
           padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 15),
           child: Row(
             children: <Widget>[
-              Icon(icon, size: 26, color: const Color(0xFF666666)),
+              Icon(icon, size: 26, color: iconColor),
               const SizedBox(width: 12),
               Text(
                 title,
-                style: const TextStyle(fontSize: 14, color: Color(0xFF000000)),
+                style: TextStyle(fontSize: 14, color: textColor),
               ),
               const Spacer(),
               Text(
                 trailing,
-                style: const TextStyle(fontSize: 14, color: Color(0xFF999999)),
+                style: TextStyle(fontSize: 14, color: trailingColor),
               ),
               const SizedBox(width: 4),
-              const Icon(Icons.chevron_right, size: 20, color: Color(0xFFCCCCCC)),
+              Icon(Icons.chevron_right, size: 20, color: arrowColor),
             ],
           ),
         ),
@@ -605,9 +623,10 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
 
   /// 白色圆角卡片容器（对齐 smdcapp white_rounded6_bg_v2）
   Widget _buildCard({required Widget child}) {
+    final bool isDark = context.isDark;
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isDark ? const Color(0xFF232425) : Colors.white,
         borderRadius: BorderRadius.circular(6),
       ),
       child: child,
@@ -616,6 +635,7 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
 
   /// 底部退出登录按钮（对齐 smdcapp tv_exit: gray_shape_radius3dp）
   Widget _buildLogoutButton() {
+    final bool isDark = context.isDark;
     return SafeArea(
       top: false,
       child: Padding(
@@ -627,14 +647,14 @@ class _PersonalCenterPageState extends State<PersonalCenterPage> {
             height: 44,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: const Color(0xFFF0F0F0),
+              color: isDark ? const Color(0xFF2E2F30) : const Color(0xFFF0F0F0),
               borderRadius: BorderRadius.circular(3),
             ),
-            child: const Text(
+            child: Text(
               '退出登录',
               style: TextStyle(
                 fontSize: 16,
-                color: Color(0xFF000000),
+                color: isDark ? Colors.white : const Color(0xFF000000),
                 fontWeight: FontWeight.w500,
               ),
             ),

@@ -137,19 +137,23 @@ class _MasterDeviceCheckDialogState extends State<MasterDeviceCheckDialog> {
 
   /// 灰色背景排查建议区域
   Widget _buildTroubleshooting() {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFFF5F6F8),
+        color: isDark ? const Color(0xFF2E2F30) : const Color(0xFFF5F6F8),
         borderRadius: BorderRadius.circular(8),
       ),
-      child: const Text(
+      child: Text(
         '建议排查以下问题：\n'
         '1、检查PC主设备是否开启并成功登录；\n'
         '2、当前设备是否开启WIFI并成功连上路由器；\n'
         '3、当前设备与PC主设备是否在同一局域网内；',
-        style: TextStyle(fontSize: 12.5, color: Color(0xFF666666), height: 1.8),
+        style: TextStyle(
+            fontSize: 12.5,
+            color: isDark ? Colors.white54 : const Color(0xFF666666),
+            height: 1.8),
       ),
     );
   }

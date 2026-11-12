@@ -35,22 +35,23 @@ class BossSvgIcon extends StatelessWidget {
       colorFilter: color != null
           ? ColorFilter.mode(color!, BlendMode.srcIn)
           : null,
-      placeholderBuilder: (_) => _placeholder(),
+      placeholderBuilder: (_) => _placeholder(context),
     );
   }
 
   /// 加载失败 / 文件不存在时的占位
-  Widget _placeholder() {
+  Widget _placeholder(BuildContext context) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: const Color(0xFFF0F0F0),
+        color: isDark ? const Color(0xFF2E2F30) : const Color(0xFFF0F0F0),
         borderRadius: BorderRadius.circular(size * 0.22),
       ),
       child: Icon(
         Icons.image_outlined,
-        color: const Color(0xFFBDBDBD),
+        color: isDark ? const Color(0xFF666666) : const Color(0xFFBDBDBD),
         size: size * 0.5,
       ),
     );

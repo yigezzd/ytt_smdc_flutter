@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 
 /// 品牌红
 const Color _kBrandRed = Color(0xFFE13426);
@@ -55,24 +56,39 @@ class TableSelectSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return Container(
       height: MediaQuery.of(context).size.height * 0.55,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF232425) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
       ),
       child: Column(
         children: <Widget>[
           const SizedBox(height: 10),
           Center(
-            child: Container(width: 36, height: 4, decoration: BoxDecoration(color: const Color(0xFFE5E6EB), borderRadius: BorderRadius.circular(2))),
+            child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
+                    borderRadius: BorderRadius.circular(2))),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
             child: Row(
               children: <Widget>[
-                Expanded(child: Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600))),
-                IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close, size: 20, color: Color(0xFFC9CDD4))),
+                Expanded(
+                    child: Text(title,
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? Colors.white : null))),
+                IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: Icon(Icons.close,
+                        size: 20,
+                        color: isDark ? Colors.white38 : const Color(0xFFC9CDD4))),
               ],
             ),
           ),
@@ -96,13 +112,21 @@ class TableSelectSheet extends StatelessWidget {
                   child: Container(
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF7F8FA),
+                      color: isDark
+                          ? const Color(0xFF2E2F30)
+                          : const Color(0xFFF7F8FA),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFE5E6EB)),
+                      border: Border.all(
+                          color: isDark
+                              ? const Color(0xFF4A4C4D)
+                              : const Color(0xFFE5E6EB)),
                     ),
                     child: Text(
                       name.isNotEmpty ? name : code,
-                      style: const TextStyle(fontSize: 13, color: Color(0xFF333333), fontWeight: FontWeight.w500),
+                      style: TextStyle(
+                          fontSize: 13,
+                          color: isDark ? Colors.white70 : const Color(0xFF333333),
+                          fontWeight: FontWeight.w500),
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -136,11 +160,12 @@ class _UniTableSelectSheetState extends State<_UniTableSelectSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return Container(
       height: MediaQuery.of(context).size.height * 0.55,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF232425) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
       ),
       child: Column(
         children: <Widget>[
@@ -150,7 +175,7 @@ class _UniTableSelectSheetState extends State<_UniTableSelectSheet> {
               width: 36,
               height: 4,
               decoration: BoxDecoration(
-                color: const Color(0xFFE5E6EB),
+                color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -159,13 +184,18 @@ class _UniTableSelectSheetState extends State<_UniTableSelectSheet> {
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
             child: Row(
               children: <Widget>[
-                const Expanded(
+                Expanded(
                   child: Text('并台',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? Colors.white : null)),
                 ),
                 IconButton(
                   onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close, size: 20, color: Color(0xFFC9CDD4)),
+                  icon: Icon(Icons.close,
+                      size: 20,
+                      color: isDark ? Colors.white38 : const Color(0xFFC9CDD4)),
                 ),
               ],
             ),
@@ -218,13 +248,19 @@ class _UniTableSelectSheetState extends State<_UniTableSelectSheet> {
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       color: isSelected
-                          ? const Color(0xFFFFF1F0)
-                          : const Color(0xFFFEF7E6),
+                          ? (isDark
+                              ? const Color(0xFF3A2624)
+                              : const Color(0xFFFFF1F0))
+                          : (isDark
+                              ? const Color(0xFF3A3324)
+                              : const Color(0xFFFEF7E6)),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
                         color: isSelected
                             ? _kBrandRed
-                            : const Color(0xFFF0E0C0),
+                            : (isDark
+                                ? const Color(0xFF4A4C4D)
+                                : const Color(0xFFF0E0C0)),
                       ),
                     ),
                     child: Stack(
@@ -232,8 +268,10 @@ class _UniTableSelectSheetState extends State<_UniTableSelectSheet> {
                         Center(
                           child: Text(
                             displayText,
-                            style: const TextStyle(
-                                fontSize: 14, color: Color(0xFF333333)),
+                            style: TextStyle(
+                                fontSize: 14,
+                                color:
+                                    isDark ? Colors.white70 : const Color(0xFF333333)),
                             textAlign: TextAlign.center,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,

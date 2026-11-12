@@ -3,6 +3,7 @@ import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/pages/home/table/table_models.dart';
 import 'package:flutter_deer/pages/home/table/table_repository.dart';
 import 'package:flutter_deer/util/params_sp_utils.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:flutter_deer/widgets/state_layout.dart';
 import 'package:sp_util/sp_util.dart';
@@ -192,11 +193,12 @@ class _ChangeDishesSheetState extends State<ChangeDishesSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return Container(
       height: MediaQuery.of(context).size.height * 0.7,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(6)),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF232425) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
       ),
       child: SafeArea(
         top: false,
@@ -215,23 +217,26 @@ class _ChangeDishesSheetState extends State<ChangeDishesSheet> {
 
   /// 标题栏：红竖条 + 整单操作 + 关闭（对齐 dialog_change_dishes.xml 头部）
   Widget _buildHeader() {
+    final bool isDark = context.isDark;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 6, 2),
       child: Row(
         children: <Widget>[
           Container(width: 2, height: 14, color: _kBrandRed),
           const SizedBox(width: 5),
-          const Expanded(
+          Expanded(
             child: Text('整单操作',
-                style: TextStyle(fontSize: 14, color: _kTextBlack)),
+                style: TextStyle(
+                    fontSize: 14, color: isDark ? Colors.white : _kTextBlack)),
           ),
           GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () => Navigator.pop(context),
-            child: const Padding(
-              padding: EdgeInsets.all(6),
+            child: Padding(
+              padding: const EdgeInsets.all(6),
               child: Icon(Icons.cancel_outlined,
-                  size: 22, color: Color(0xFF666666)),
+                  size: 22,
+                  color: isDark ? Colors.white54 : const Color(0xFF666666)),
             ),
           ),
         ],
@@ -241,6 +246,7 @@ class _ChangeDishesSheetState extends State<ChangeDishesSheet> {
 
   /// 区域Tab：名称(桌台数)，选中红色下划线（对齐 smdcapp AreaAdapter）
   Widget _buildAreaTabs() {
+    final bool isDark = context.isDark;
     final int allTotal = _areas.fold<int>(
         0, (int sum, TableArea a) => sum + a.tabletotal);
     return SizedBox(
@@ -270,8 +276,8 @@ class _ChangeDishesSheetState extends State<ChangeDishesSheet> {
                       fontSize: 14,
                       fontWeight: selected ? FontWeight.bold : FontWeight.normal,
                       color: selected
-                          ? const Color(0xFF1D2129)
-                          : const Color(0xFF666666),
+                          ? (isDark ? Colors.white : const Color(0xFF1D2129))
+                          : (isDark ? Colors.white54 : const Color(0xFF666666)),
                     ),
                   ),
                   const SizedBox(height: 3),
@@ -324,12 +330,14 @@ class _ChangeDishesSheetState extends State<ChangeDishesSheet> {
 
   /// 打印转菜单开关（对齐 smdcapp ChangeDishesPopup.imgdy：绿色开关 40x24）
   Widget _buildPrintSwitchRow() {
+    final bool isDark = context.isDark;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 2, 12, 2),
       child: Row(
         children: <Widget>[
-          const Text('打印转菜单',
-              style: TextStyle(fontSize: 14, color: Colors.black)),
+          Text('打印转菜单',
+              style: TextStyle(
+                  fontSize: 14, color: isDark ? Colors.white : Colors.black)),
           const SizedBox(width: 16),
           GestureDetector(
             behavior: HitTestBehavior.opaque,
@@ -341,7 +349,7 @@ class _ChangeDishesSheetState extends State<ChangeDishesSheet> {
               decoration: BoxDecoration(
                 color: _zcPrint
                     ? const Color(0xFF07C160)
-                    : const Color(0xFFC5C5C5),
+                    : (isDark ? const Color(0xFF4A4C4D) : const Color(0xFFC5C5C5)),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: AnimatedAlign(
@@ -390,6 +398,7 @@ class _ChangeDishesSheetState extends State<ChangeDishesSheet> {
   }
 
   Widget _buildButton(String text, bool primary, VoidCallback onTap) {
+    final bool isDark = context.isDark;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -397,17 +406,25 @@ class _ChangeDishesSheetState extends State<ChangeDishesSheet> {
         height: 36,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: primary ? _kBrandRed : const Color(0xFFF5F5F6),
+          color: primary
+              ? _kBrandRed
+              : (isDark ? const Color(0xFF2E2F30) : const Color(0xFFF5F5F6)),
           borderRadius: BorderRadius.circular(primary ? 4 : 6),
           border: primary
               ? null
-              : Border.all(color: const Color(0xFFD2D6D7), width: 0.5),
+              : Border.all(
+                  color: isDark
+                      ? const Color(0xFF4A4C4D)
+                      : const Color(0xFFD2D6D7),
+                  width: 0.5),
         ),
         child: Text(
           text,
           style: TextStyle(
             fontSize: 15,
-            color: primary ? Colors.white : const Color(0xFF666666),
+            color: primary
+                ? Colors.white
+                : (isDark ? Colors.white70 : const Color(0xFF666666)),
           ),
         ),
       ),
@@ -433,6 +450,7 @@ class _ZcTableCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     final TableStatus status = table.status;
     final bool isIdle = status.isPlain;
     final Color statusColor = status.color;
@@ -449,10 +467,12 @@ class _ZcTableCard extends StatelessWidget {
       onTap: onTap,
       child: Container(
         decoration: BoxDecoration(
-          color: status.bgColor,
+          color: isDark ? const Color(0xFF232425) : status.bgColor,
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
-            color: selected && !isIdle ? statusColor : _kLineGray,
+            color: selected && !isIdle
+                ? statusColor
+                : (isDark ? const Color(0xFF4A4C4D) : _kLineGray),
           ),
         ),
         child: ClipRRect(
@@ -478,7 +498,9 @@ class _ZcTableCard extends StatelessWidget {
                                   fontSize: 15,
                                   fontWeight: FontWeight.w500,
                                   height: 1.2,
-                                  color: isIdle ? _kTextBlack : statusColor,
+                                  color: isIdle
+                                      ? (isDark ? Colors.white : _kTextBlack)
+                                      : statusColor,
                                 ),
                               ),
                             ),
@@ -497,31 +519,45 @@ class _ZcTableCard extends StatelessWidget {
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: <Widget>[
-                                    const Icon(Icons.person_outline,
-                                        size: 11, color: Color(0xFF4E5969)),
+                                    Icon(Icons.person_outline,
+                                        size: 11,
+                                        color: isDark
+                                            ? Colors.white54
+                                            : const Color(0xFF4E5969)),
                                     const SizedBox(width: 2),
                                     Text(
                                       table.personText,
-                                      style: const TextStyle(
-                                          fontSize: 10, color: _kTextBlack),
+                                      style: TextStyle(
+                                          fontSize: 10,
+                                          color:
+                                              isDark ? Colors.white70 : _kTextBlack),
                                     ),
                                     if (timeParts != null) ...<Widget>[
                                       const SizedBox(width: 7),
-                                      const Icon(Icons.schedule,
-                                          size: 11, color: Color(0xFF4E5969)),
+                                      Icon(Icons.schedule,
+                                          size: 11,
+                                          color: isDark
+                                              ? Colors.white54
+                                              : const Color(0xFF4E5969)),
                                       const SizedBox(width: 2),
                                       Text(
                                         '${timeParts.$1}',
-                                        style: const TextStyle(
-                                            fontSize: 10, color: _kTextBlack),
+                                        style: TextStyle(
+                                            fontSize: 10,
+                                            color: isDark
+                                                ? Colors.white70
+                                                : _kTextBlack),
                                       ),
                                       _unitBadge('h'),
                                       if (timeParts.$3) ...<Widget>[
                                         const SizedBox(width: 1),
                                         Text(
                                           '${timeParts.$2}',
-                                          style: const TextStyle(
-                                              fontSize: 10, color: _kTextBlack),
+                                          style: TextStyle(
+                                              fontSize: 10,
+                                              color: isDark
+                                                  ? Colors.white70
+                                                  : _kTextBlack),
                                         ),
                                         _unitBadge('m'),
                                       ],
@@ -530,26 +566,27 @@ class _ZcTableCard extends StatelessWidget {
                                 ),
                               ),
                             ),
-                            if (table.isPrePrint) _outlinePill('预打'),
+                            if (table.isPrePrint) _outlinePill('预打', isDark),
                           ],
                         ),
                         const SizedBox(height: 5),
                         Row(
                           children: <Widget>[
                             if (amountText != null) ...<Widget>[
-                              const Text('¥',
+                              Text('¥',
                                   style: TextStyle(
-                                      fontSize: 10, color: _kTextBlack)),
+                                      fontSize: 10,
+                                      color: isDark ? Colors.white : _kTextBlack)),
                               const SizedBox(width: 1),
                               Expanded(
                                 child: Text(
                                   amountText,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w500,
-                                    color: _kTextBlack,
+                                    color: isDark ? Colors.white : _kTextBlack,
                                   ),
                                 ),
                               ),
@@ -648,12 +685,12 @@ class _ZcTableCard extends StatelessWidget {
   }
 
   /// 白底红框标签（对齐 smdcapp com_shape_line_red_4_bg_white：预打）
-  Widget _outlinePill(String text) {
+  Widget _outlinePill(String text, bool isDark) {
     return Container(
       margin: const EdgeInsets.only(left: 3),
       padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 0.5),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isDark ? const Color(0xFF2E2F30) : Colors.white,
         borderRadius: BorderRadius.circular(4),
         border: Border.all(color: _kBrandRed, width: 0.5),
       ),

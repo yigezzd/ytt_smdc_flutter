@@ -185,16 +185,16 @@ class PromotionManager {
 
       final List<String> billids =
           masters.map((MPMasterEntity m) => m.billid).toList();
+      // 明细/规则的 sid 是活动创建门店，跨店适用时与当前门店不同；
+      // 适用门店已由主表查询的 t_mp_store 关联把关，这里不能再按 sid 过滤
       final List<MpProductOrTypeEntity> details =
           await MpProductOrTypeDao.instance.byBillids(
         billids: billids,
         spid: spid,
-        sid: sid,
       );
       final List<MpRuleEntity> rules = await MpRuleDao.instance.byBillids(
         billids: billids,
         spid: spid,
-        sid: sid,
       );
 
       final Map<String, int> typeByBill = <String, int>{};

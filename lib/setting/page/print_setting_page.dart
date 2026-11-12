@@ -5,6 +5,7 @@ import 'package:flutter_deer/components/confirm_dialog.dart';
 import 'package:flutter_deer/res/constant_print_key.dart';
 import 'package:flutter_deer/res/resources.dart';
 import 'package:flutter_deer/util/print_service.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:flutter_deer/widgets/click_item.dart';
 import 'package:flutter_deer/widgets/my_app_bar.dart';
@@ -81,12 +82,19 @@ class _PrintSettingPageState extends State<PrintSettingPage> {
 
   /// 打印纸规格选择区域
   Widget _buildSizeSection() {
+    final bool isDark = context.isDark;
     return Container(
-      color: Colors.white,
+      color: isDark ? const Color(0xFF232425) : Colors.white,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
-          const Text('打印规格', style: TextStyle(fontSize: 14, color: Colors.black87)),
+          Text(
+            '打印规格',
+            style: TextStyle(
+              fontSize: 14,
+              color: isDark ? Colors.white : Colors.black87,
+            ),
+          ),
           const Spacer(),
           _buildSizeRadio('58mm'),
           Gaps.hGap15,
@@ -97,6 +105,7 @@ class _PrintSettingPageState extends State<PrintSettingPage> {
   }
 
   Widget _buildSizeRadio(String size) {
+    final bool isDark = context.isDark;
     final bool selected = _printSize == size;
     return GestureDetector(
       onTap: () => _onSizeChanged(size),
@@ -106,10 +115,20 @@ class _PrintSettingPageState extends State<PrintSettingPage> {
           Icon(
             selected ? Icons.radio_button_checked : Icons.radio_button_off,
             size: 20,
-            color: selected ? Theme.of(context).primaryColor : Colors.grey,
+            color: selected
+                ? Theme.of(context).primaryColor
+                : (isDark ? const Color(0xFF666666) : Colors.grey),
           ),
           Gaps.hGap5,
-          Text(size, style: TextStyle(fontSize: 14, color: selected ? Colors.black87 : Colors.grey)),
+          Text(
+            size,
+            style: TextStyle(
+              fontSize: 14,
+              color: selected
+                  ? (isDark ? Colors.white : Colors.black87)
+                  : (isDark ? Colors.white70 : Colors.grey),
+            ),
+          ),
         ],
       ),
     );
@@ -117,22 +136,31 @@ class _PrintSettingPageState extends State<PrintSettingPage> {
 
   /// 票尾走纸行数区域
   Widget _buildFeedLineSection() {
+    final bool isDark = context.isDark;
+    final Color borderColor = isDark ? const Color(0xFF4A4C4D) : Colors.grey.shade300;
+    final Color iconColor = isDark ? Colors.white70 : Colors.black54;
     return Container(
-      color: Colors.white,
+      color: isDark ? const Color(0xFF232425) : Colors.white,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
-          const Text('票尾走纸行数', style: TextStyle(fontSize: 14, color: Colors.black87)),
+          Text(
+            '票尾走纸行数',
+            style: TextStyle(
+              fontSize: 14,
+              color: isDark ? Colors.white : Colors.black87,
+            ),
+          ),
           const Spacer(),
           GestureDetector(
             onTap: _feedLineCount > 0 ? () => _updateFeedLine(_feedLineCount - 1) : null,
             child: Container(
               width: 32, height: 32,
               decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey.shade300),
+                border: Border.all(color: borderColor),
                 borderRadius: BorderRadius.circular(4),
               ),
-              child: const Icon(Icons.remove, size: 18, color: Colors.black54),
+              child: Icon(Icons.remove, size: 18, color: iconColor),
             ),
           ),
           Padding(
@@ -144,10 +172,10 @@ class _PrintSettingPageState extends State<PrintSettingPage> {
             child: Container(
               width: 32, height: 32,
               decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey.shade300),
+                border: Border.all(color: borderColor),
                 borderRadius: BorderRadius.circular(4),
               ),
-              child: const Icon(Icons.add, size: 18, color: Colors.black54),
+              child: Icon(Icons.add, size: 18, color: iconColor),
             ),
           ),
         ],
@@ -159,8 +187,10 @@ class _PrintSettingPageState extends State<PrintSettingPage> {
 
   /// 打印类型选择弹窗（对齐 smdcapp PrintSetActivity.clickPrintType）
   void _showPrinterTypePicker() {
+    final bool isDark = context.isDark;
     showModalBottomSheet<void>(
       context: context,
+      backgroundColor: isDark ? const Color(0xFF232425) : null,
       builder: (ctx) {
         return SafeArea(
           child: Column(
@@ -246,8 +276,10 @@ class _PrintSettingPageState extends State<PrintSettingPage> {
       Toast.show('暂无可用云打印机');
       return;
     }
+    final bool isDark = context.isDark;
     showModalBottomSheet<void>(
       context: context,
+      backgroundColor: isDark ? const Color(0xFF232425) : null,
       builder: (ctx) {
         return SafeArea(
           child: Column(

@@ -65,9 +65,9 @@ class MemberCouponService {
   /// [master] 主单JSON
   /// [projectlist] 优惠券明细JSON
   /// [clienttype] 客户端类型
-  /// [fav] 优惠券信息
-  /// 返回是否成功
-  Future<bool> verifyCouponPay({
+  /// [fav] 优惠券信息（须含核销张数 qty，对齐 smdcapp VipCouponBean）
+  /// 返回 null 表示成功；非 null 为服务端失败原因（对齐 smdcapp 直接展示 retmsg）
+  Future<String?> verifyCouponPay({
     required String vipid,
     required String master,
     required String projectlist,
@@ -75,18 +75,23 @@ class MemberCouponService {
     required String fav,
   }) async {
     try {
-      await requestForm(HttpApi.vipVerify, <String, dynamic>{
-        'vipid': vipid,
-        'master': master,
-        'projectlist': projectlist,
-        'clienttype': clienttype,
-        'fav': fav,
-      });
+      await requestForm(
+        HttpApi.vipVerify,
+        <String, dynamic>{
+          'vipid': vipid,
+          'master': master,
+          'projectlist': projectlist,
+          'clienttype': clienttype,
+          'fav': fav,
+        },
+        showError: false,
+      );
       // requestForm 失败时抛异常，到达此处即为成功
-      return true;
+      return null;
     } catch (e) {
       Log.e('MemberCouponService.verifyCouponPay error: $e');
-      return false;
+      final String msg = e.toString().replaceFirst('Exception: ', '').trim();
+      return msg.isNotEmpty ? msg : '优惠券核销失败，请重新选择';
     }
   }
 

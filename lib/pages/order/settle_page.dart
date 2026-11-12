@@ -23,6 +23,7 @@ import 'package:flutter_deer/pages/order/order_repository.dart';
 import 'package:flutter_deer/pages/order/pay_scan_page.dart';
 import 'package:flutter_deer/pages/order/scan_pay_dialog.dart';
 import 'package:flutter_deer/pages/order/widgets/coupon_pay_dialog.dart';
+import 'package:flutter_deer/pages/order/widgets/reduce_pay_sheet.dart';
 import 'package:flutter_deer/pages/order/widgets/sms_verify_dialog.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
@@ -280,12 +281,14 @@ class _SettlePageState extends State<SettlePage> {
         PermissionUtils.checkPermission(PermissionUtils.appTotalDiscount, showTip: false);
     // 打印单据开关记忆（对齐 smdcapp Constant.SETTLE_DY，默认关闭）
     _isPrint = SpUtil.getBool(Constant.settleDy, defValue: false) ?? false;
-    // 暂结：参数开启且正餐模式（对齐 smdcapp kqzj && storemodel==2），开启参数时默认开启
+    // 暂结：参数开启且正餐模式（对齐 smdcapp kqzj && storemodel==2）
     _canZanjie = widget.autoZanjie ||
         ((SpUtil.getBool('KQ_ZJ') ?? false) &&
             !StoreModeUtils.isFastMode() &&
             StoreModeUtils.getCurrentStoreModel() == StoreModeUtils.storeModelNormal);
-    _isZanjie = _canZanjie;
+    // 对齐 smdcapp SETTLE_ZJ 默认 false：开关默认关闭，仅订单确认页“暂结”入口强制开启。
+    // 暂结后明细已全部带 fornowid，若默认开启会导致再次结账误报“不存在可暂结的商品”
+    _isZanjie = widget.autoZanjie;
     // 会员价与促销/手工折扣取最优（对齐 smdcapp refreshAllPriceInfo）
     if (_member != null) {
       _applyMemberBest(clearMemberMark: true);
@@ -793,6 +796,8 @@ class _SettlePageState extends State<SettlePage> {
         _dsMoney = AmountCalcUtils.add(_dsMoney, oldAmt);
       }
       final double userAmt = couponAmt < _dsMoney ? couponAmt : _dsMoney;
+      // 核销张数默认 1 张（对齐 smdcapp dealCoupon(1.0)），抵扣额随券带上供服务端核销
+      coupon.userAmt = _rd2(userAmt);
       _salePayWayList.add(<String, dynamic>{
         'saleid': widget.saleid,
         'payid': '07',
@@ -802,7 +807,7 @@ class _SettlePageState extends State<SettlePage> {
         'rramt': _rd2(userAmt),
         'changeamt': 0.0,
         'favid': coupon.favid,
-        'fav': jsonEncode(coupon.raw),
+        'fav': jsonEncode(coupon.favPayload),
       });
       _hasMoney = AmountCalcUtils.add(_hasMoney, userAmt);
       _dsMoney = AmountCalcUtils.sub(_dsMoney, userAmt);
@@ -833,7 +838,11 @@ class _SettlePageState extends State<SettlePage> {
       if (data is Map<String, dynamic>) {
         final dynamic list = data['list'];
         if (list is List) {
-          _payTypeList = list.whereType<Map<String, dynamic>>().toList();
+          // 隐藏企业挂账（对齐 smdcapp PayTypeDialog.show: removeAll { it.payid == "accountpay" }）
+          _payTypeList = list
+              .whereType<Map<String, dynamic>>()
+              .where((Map<String, dynamic> e) => e['payid']?.toString() != 'accountpay')
+              .toList();
         }
       }
       // 默认选中现金
@@ -1234,21 +1243,13 @@ class _SettlePageState extends State<SettlePage> {
 
   /// 减免支付（对齐 smdcapp selectPay case "06" → showReducePopup）
   ///
-  /// 手动输入减免金额，作为"06"减免支付方式记录。
+  /// 输入减免金额 + 减免原因，作为"06"减免支付方式记录。
+  /// 后台要求减免原因必填（mustTypes 含 07）时，弹窗内未选/未填原因不允许确定。
   Future<void> _onReducePay() async {
-    final String? result = await InputDialog.show(
-      context,
-      title: '减免金额',
-      hintText: '输入减免金额',
-      maxLines: 1,
-      // 金额输入默认数字键盘（对齐 smdcapp ReducePopup 数字键盘）
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      inputFormatters: <TextInputFormatter>[
-        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-      ],
-    );
-    if (result == null || result.isEmpty || !mounted) return;
-    final double reduceAmt = _rd2(double.tryParse(result) ?? 0);
+    final ReducePayResult? result =
+        await ReducePaySheet.show(context, dsMoney: _dsMoney);
+    if (result == null || !mounted) return;
+    final double reduceAmt = _rd2(result.amount);
     if (reduceAmt <= 0) {
       Toast.show('减免金额必须大于0');
       return;
@@ -1265,6 +1266,8 @@ class _SettlePageState extends State<SettlePage> {
       'rate': 1.0,
       'rramt': reduceAmt,
       'changeamt': 0.0,
+      // 减免原因仅本地保留，上传前剔除，汇总进主表 operremark（对齐 smdcapp）
+      'reduceRemark': result.remark,
     });
     _hasMoney = AmountCalcUtils.add(_hasMoney, reduceAmt);
     _dsMoney = AmountCalcUtils.sub(_dsMoney, reduceAmt);
@@ -1677,15 +1680,16 @@ class _SettlePageState extends State<SettlePage> {
 
       // R17/R29：会员优惠券核销（对齐 smdcapp verifyPay clienttype=4，核销失败中止结算）
       if (_selectedCoupon != null && _member != null) {
-        final bool couponOk = await MemberCouponService.instance.verifyCouponPay(
+        final String? couponErr = await MemberCouponService.instance.verifyCouponPay(
           vipid: _member!.vipid,
           master: jsonEncode(_buildSaleMaster(billdate)),
           projectlist: jsonEncode(_buildSaleDetail(billdate)),
           clienttype: '4',
-          fav: jsonEncode(_selectedCoupon!.raw),
+          fav: jsonEncode(_selectedCoupon!.favPayload),
         );
-        if (!couponOk) {
-          if (mounted) Toast.show('优惠券核销失败，请重新选择');
+        if (couponErr != null) {
+          // 对齐 smdcapp：直接展示服务端 retmsg，便于定位核销失败真因
+          if (mounted) Toast.show(couponErr);
           return;
         }
       }
@@ -1984,9 +1988,16 @@ class _SettlePageState extends State<SettlePage> {
     // 减免金额合计（payid=06，对齐 smdcapp reductionamt=operamt）
     double reductionamt = 0;
     double changeamt = 0;
+    // 减免原因汇总（对齐 smdcapp showReducePopup：operremark 追加减免原因）
+    final StringBuffer reduceRemarkBuf = StringBuffer();
     for (final Map<String, dynamic> pw in _salePayWayList) {
       if (pw['payid'] == '06') {
         reductionamt = AmountCalcUtils.add(reductionamt, _toDouble(pw['payamt']));
+        final String r = pw['reduceRemark']?.toString() ?? '';
+        if (r.isNotEmpty) {
+          if (reduceRemarkBuf.isNotEmpty) reduceRemarkBuf.write(',');
+          reduceRemarkBuf.write(r);
+        }
       }
       // R53：多收找零按收款记录累计（现金多付时输入金额-应收）
       changeamt = AmountCalcUtils.add(changeamt, _toDouble(pw['changeamt']));
@@ -2038,6 +2049,8 @@ class _SettlePageState extends State<SettlePage> {
       'personnum': widget.persons.toString(),
       'memo': widget.remark,
       'remark': widget.remark,
+      // 减免原因（对齐 smdcapp operremark，撤销减免支付后自动剔除）
+      'operremark': reduceRemarkBuf.toString(),
       'opertype': '1',
       'saletype': 3,
       'status': 1,
@@ -2107,6 +2120,8 @@ class _SettlePageState extends State<SettlePage> {
       pw.remove('dy_productprice');
       pw.remove('dy_oldproductprice');
       pw.remove('dy_ids');
+      // 减免原因仅本地保留，汇总进主表 operremark，不随支付明细上传（对齐 smdcapp）
+      pw.remove('reduceRemark');
       // 金额字段统一保留2位小数（对齐 smdcapp CalcUtils.add2/sub2，
       // 防止 payamt 等因 double 精度尾差超出服务端16字符长度限制）
       for (final String key in <String>[
@@ -2253,6 +2268,7 @@ class _SettlePageState extends State<SettlePage> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
       ),
       builder: (BuildContext ctx) {
+        final bool isDark = Theme.of(ctx).brightness == Brightness.dark;
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -2262,7 +2278,7 @@ class _SettlePageState extends State<SettlePage> {
                 width: 36,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE5E6EB),
+                  color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -2275,7 +2291,9 @@ class _SettlePageState extends State<SettlePage> {
                   shrinkWrap: true,
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   itemCount: _payTypeList.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFFF2F3F5)),
+                  separatorBuilder: (_, __) => Divider(
+                      height: 1,
+                      color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF2F3F5)),
                   itemBuilder: (BuildContext ctx, int index) {
                     final Map<String, dynamic> item = _payTypeList[index];
                     final String payid = item['payid']?.toString() ?? '';
@@ -2292,7 +2310,9 @@ class _SettlePageState extends State<SettlePage> {
                         name,
                         style: TextStyle(
                           fontSize: 14,
-                          color: selected ? _kBrandRed : const Color(0xFF1D2129),
+                          color: selected
+                              ? _kBrandRed
+                              : (isDark ? Colors.white : const Color(0xFF1D2129)),
                           fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
                         ),
                       ),
@@ -2682,14 +2702,18 @@ class _SettlePageState extends State<SettlePage> {
                 style: const TextStyle(fontSize: 12, color: Color(0xFF86909C)),
               ),
             ),
-          const Divider(height: 16, color: Color(0xFFF2F3F5)),
+          Divider(
+              height: 16,
+              color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF2F3F5)),
           // 价格汇总
           _priceRow('菜品费', _dishAmt, isDark),
           _priceRow('服务费', _serviceAmt, isDark),
           _priceRow('低消', _lowAmt, isDark),
           _priceRow('优惠合计', _disAmt, isDark),
           if (_roundAmt != 0) _priceRow('抹零', -_roundAmt, isDark),
-          const Divider(height: 16, color: Color(0xFFF2F3F5)),
+          Divider(
+              height: 16,
+              color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF2F3F5)),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: <Widget>[
@@ -3107,7 +3131,9 @@ class _SettlePageState extends State<SettlePage> {
               ),
             );
           }),
-          const Divider(height: 14, color: Color(0xFFF2F3F5)),
+          Divider(
+              height: 14,
+              color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF2F3F5)),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: <Widget>[

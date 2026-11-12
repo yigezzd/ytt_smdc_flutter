@@ -2,6 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_deer/pages/order/order_models.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 
 /// 品牌红
@@ -507,6 +508,7 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     final double maxHeight = MediaQuery.of(context).size.height * 0.88;
     final List<dynamic> priceInfo = _calcSetMealPrice();
     final String skuText = priceInfo[0] as String;
@@ -519,9 +521,9 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
       ).animate(_slideAnimation),
       child: Container(
         constraints: BoxConstraints(maxHeight: maxHeight),
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF232425) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -545,12 +547,15 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
 
   /// 顶部：商品图片 + 名称 + 价格 + 关闭按钮（对齐 dialog_set_meal_bottom.xml 头部）
   Widget _buildHeader() {
+    final bool isDark = context.isDark;
     final ComboMealData data = widget.comboData;
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 14, 8, 12),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         border: Border(
-          bottom: BorderSide(color: Color(0xFFF2F3F5), width: 0.5),
+          bottom: BorderSide(
+              color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF2F3F5),
+              width: 0.5),
         ),
       ),
       child: Row(
@@ -573,10 +578,10 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
                     data.name.isNotEmpty ? data.name : widget.product.name,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.bold,
-                      color: Color(0xFF1D2129),
+                      color: isDark ? Colors.white : const Color(0xFF1D2129),
                     ),
                   ),
                 ),
@@ -585,7 +590,9 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFF1F0),
+                    color: isDark
+                        ? const Color(0xFF3A2624)
+                        : const Color(0xFFFFF1F0),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: const Text(
@@ -617,9 +624,10 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
                         padding: const EdgeInsets.only(bottom: 2),
                         child: Text(
                           '¥${_formatPrice(data.mprice1)}',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 11,
-                            color: Color(0xFF999999),
+                            color:
+                                isDark ? Colors.white54 : const Color(0xFF999999),
                             decoration: TextDecoration.lineThrough,
                           ),
                         ),
@@ -637,10 +645,12 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
               width: 32,
               height: 32,
               decoration: BoxDecoration(
-                color: const Color(0xFFF5F5F5),
+                color: isDark ? const Color(0xFF2E2F30) : const Color(0xFFF5F5F5),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.close, size: 18, color: Color(0xFF999999)),
+              child: Icon(Icons.close,
+                  size: 18,
+                  color: isDark ? Colors.white54 : const Color(0xFF999999)),
             ),
           ),
         ],
@@ -666,14 +676,17 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
   }
 
   Widget _buildCoverPlaceholder() {
+    final bool isDark = context.isDark;
     return Container(
       width: 80,
       height: 80,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: <Color>[Color(0xFFFFF1F0), Color(0xFFFFE7E3)],
+          colors: isDark
+              ? <Color>[const Color(0xFF3A2624), const Color(0xFF33211F)]
+              : <Color>[const Color(0xFFFFF1F0), const Color(0xFFFFE7E3)],
         ),
       ),
       child: const Center(
@@ -701,6 +714,7 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
 
   /// 分组标题（对齐 smdcapp dishes_item_specification_title_pop）
   Widget _buildGroupTitle(ComboGroup group) {
+    final bool isDark = context.isDark;
     // 计算组内已选进度
     double selected = 0;
     for (final ComboItem item in group.list) {
@@ -729,15 +743,17 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
                 children: <TextSpan>[
                   TextSpan(
                     text: group.groupname.isNotEmpty ? group.groupname : '套餐分组',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.bold,
-                      color: Color(0xFF1D2129),
+                      color: isDark ? Colors.white : const Color(0xFF1D2129),
                     ),
                   ),
                   TextSpan(
                     text: ' ${group.hintText}',
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF999999)),
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: isDark ? Colors.white54 : const Color(0xFF999999)),
                   ),
                 ],
               ),
@@ -747,7 +763,9 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
-              color: isFull ? const Color(0xFFE8F7E8) : const Color(0xFFFFF1F0),
+              color: isFull
+                  ? (isDark ? const Color(0xFF233428) : const Color(0xFFE8F7E8))
+                  : (isDark ? const Color(0xFF3A2624) : const Color(0xFFFFF1F0)),
               borderRadius: BorderRadius.circular(10),
             ),
             child: Text(
@@ -786,6 +804,7 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
 
   /// 套餐明细选项卡片（对齐 smdcapp dishes_item_specification_grid_pop）
   Widget _buildComboItemTile(ComboGroup group, ComboItem item, int groupIndex, int itemIndex) {
+    final bool isDark = context.isDark;
     final bool isCheck = item.isCheck;
     final bool isRepeat = item.repeatflag == 1;
     final bool soldOut = item.isSoldOut;
@@ -813,18 +832,24 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         decoration: BoxDecoration(
           color: soldOut
-              ? const Color(0xFFF7F8FA)
+              ? (isDark ? const Color(0xFF2E2F30) : const Color(0xFFF7F8FA))
               : isCheck
-                  ? (isRepeat ? const Color(0xFFFEF0EF) : _kBrandRed)
-                  : (isRepeat ? Colors.white : const Color(0xFFF7F8FA)),
+                  ? (isRepeat
+                      ? (isDark ? const Color(0xFF3A2624) : const Color(0xFFFEF0EF))
+                      : _kBrandRed)
+                  : (isRepeat
+                      ? (isDark ? const Color(0xFF232425) : Colors.white)
+                      : (isDark ? const Color(0xFF2E2F30) : const Color(0xFFF7F8FA))),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
             width: 1,
             color: soldOut
-                ? const Color(0xFFE5E6EB)
+                ? (isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB))
                 : isCheck
                     ? (isRepeat ? _kBrandRed : _kBrandRed)
-                    : (isRepeat ? const Color(0xFFE5E6EB) : Colors.transparent),
+                    : (isRepeat
+                        ? (isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB))
+                        : Colors.transparent),
           ),
         ),
         child: Column(
@@ -847,10 +872,14 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
                               fontWeight: isCheck ? FontWeight.w600 : FontWeight.normal,
                               height: 1.3,
                               color: soldOut
-                                  ? const Color(0xFFC9CDD4)
+                                  ? (isDark
+                                      ? const Color(0xFF666666)
+                                      : const Color(0xFFC9CDD4))
                                   : (!isRepeat && isCheck)
                                       ? Colors.white
-                                      : const Color(0xFF333333),
+                                      : (isDark
+                                          ? Colors.white70
+                                          : const Color(0xFF333333)),
                             ),
                           ),
                           TextSpan(
@@ -877,10 +906,12 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
                         fontWeight: isCheck ? FontWeight.w600 : FontWeight.normal,
                         height: 1.3,
                         color: soldOut
-                            ? const Color(0xFFC9CDD4)
+                            ? (isDark
+                                ? const Color(0xFF666666)
+                                : const Color(0xFFC9CDD4))
                             : (!isRepeat && isCheck)
                                 ? Colors.white
-                                : const Color(0xFF333333),
+                                : (isDark ? Colors.white70 : const Color(0xFF333333)),
                       ),
                     ),
             ),
@@ -902,7 +933,11 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.bold,
-                        color: item.selectSetMealNum > 0 ? _kBrandRed : const Color(0xFFC9CDD4),
+                        color: item.selectSetMealNum > 0
+                            ? _kBrandRed
+                            : (isDark
+                                ? const Color(0xFF666666)
+                                : const Color(0xFFC9CDD4)),
                       ),
                     ),
                   ),
@@ -916,9 +951,14 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
             ],
             // 售罄标记
             if (soldOut)
-              const Padding(
-                padding: EdgeInsets.only(top: 2),
-                child: Text('售罄', style: TextStyle(fontSize: 10, color: Color(0xFFC9CDD4))),
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text('售罄',
+                    style: TextStyle(
+                        fontSize: 10,
+                        color: isDark
+                            ? const Color(0xFF666666)
+                            : const Color(0xFFC9CDD4))),
               ),
           ],
         ),
@@ -935,7 +975,9 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
         height: 20,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: enabled ? _kBrandRed : const Color(0xFFE5E6EB),
+          color: enabled
+              ? _kBrandRed
+              : (context.isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB)),
         ),
         child: Icon(icon, size: 12, color: Colors.white),
       ),
@@ -944,12 +986,15 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
 
   /// 底部栏：总价 + SKU + 数量 + 按钮（对齐 dialog_set_meal_bottom.xml 底部）
   Widget _buildBottomBar(String skuText, double combAddAmt) {
+    final bool isDark = context.isDark;
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
       decoration: BoxDecoration(
-        color: Colors.white,
-        border: const Border(
-          top: BorderSide(color: Color(0xFFF2F3F5), width: 0.5),
+        color: isDark ? const Color(0xFF232425) : Colors.white,
+        border: Border(
+          top: BorderSide(
+              color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF2F3F5),
+              width: 0.5),
         ),
         boxShadow: <BoxShadow>[
           BoxShadow(
@@ -1008,7 +1053,11 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
                             skuText,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 10, color: Color(0xFF999999)),
+                            style: TextStyle(
+                                fontSize: 10,
+                                color: isDark
+                                    ? Colors.white54
+                                    : const Color(0xFF999999)),
                           ),
                         ),
                     ],
@@ -1028,9 +1077,14 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
                         height: 26,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          border: Border.all(color: const Color(0xFFE5E6EB)),
+                          border: Border.all(
+                              color: isDark
+                                  ? const Color(0xFF4A4C4D)
+                                  : const Color(0xFFE5E6EB)),
                         ),
-                        child: const Icon(Icons.remove, size: 14, color: Color(0xFF666666)),
+                        child: Icon(Icons.remove,
+                            size: 14,
+                            color: isDark ? Colors.white54 : const Color(0xFF666666)),
                       ),
                     ),
                     SizedBox(
@@ -1038,10 +1092,10 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
                       child: Center(
                         child: Text(
                           '$_quantity',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFF333333),
+                            color: isDark ? Colors.white : const Color(0xFF333333),
                           ),
                         ),
                       ),
@@ -1053,9 +1107,16 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
                         height: 26,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          border: Border.all(color: const Color(0xFFE5E6EB)),
+                          border: Border.all(
+                              color: isDark
+                                  ? const Color(0xFF4A4C4D)
+                                  : const Color(0xFFE5E6EB)),
                         ),
-                        child: const Icon(Icons.add, size: 14, color: Color(0xFFC9CDD4)),
+                        child: Icon(Icons.add,
+                            size: 14,
+                            color: isDark
+                                ? const Color(0xFF666666)
+                                : const Color(0xFFC9CDD4)),
                       ),
                     ),
                   ],
@@ -1103,14 +1164,24 @@ class _SetMealSheetState extends State<SetMealSheet> with SingleTickerProviderSt
                           height: 44,
                           margin: const EdgeInsets.only(right: 10),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFF7F8FA),
+                            color: isDark
+                                ? const Color(0xFF2E2F30)
+                                : const Color(0xFFF7F8FA),
                             borderRadius: BorderRadius.circular(22),
-                            border: Border.all(color: const Color(0xFFE5E6EB)),
+                            border: Border.all(
+                                color: isDark
+                                    ? const Color(0xFF4A4C4D)
+                                    : const Color(0xFFE5E6EB)),
                           ),
-                          child: const Center(
+                          child: Center(
                             child: Text(
                               '下单',
-                              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFF666666)),
+                              style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  color: isDark
+                                      ? Colors.white70
+                                      : const Color(0xFF666666)),
                             ),
                           ),
                         ),

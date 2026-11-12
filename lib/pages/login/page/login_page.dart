@@ -406,9 +406,11 @@ class _LoginPageState extends State<LoginPage> {
                       Navigator.of(ctx).pop();
                       setState(() => _isLoading = false);
                     },
-                    child: const Padding(
-                      padding: EdgeInsets.all(4),
-                      child: Icon(Icons.close, size: 18, color: Color(0xFF999999)),
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: Icon(Icons.close,
+                          size: 18,
+                          color: isDark ? Colors.white54 : const Color(0xFF999999)),
                     ),
                   ),
                 ],
@@ -416,7 +418,9 @@ class _LoginPageState extends State<LoginPage> {
               const SizedBox(height: 4.0),
               Text(
                 '当前账号关联 ${stores.length} 个商户，请选择',
-                style: const TextStyle(fontSize: 13.0, color: Color(0xFF999999)),
+                style: TextStyle(
+                    fontSize: 13.0,
+                    color: isDark ? Colors.white54 : const Color(0xFF999999)),
               ),
               const SizedBox(height: 12.0),
               ConstrainedBox(
@@ -425,8 +429,10 @@ class _LoginPageState extends State<LoginPage> {
                   shrinkWrap: true,
                   padding: EdgeInsets.zero,
                   itemCount: stores.length,
-                  separatorBuilder: (_, __) =>
-                      const Divider(height: 1, color: Color(0xFFEEEEEE), indent: 54),
+                  separatorBuilder: (_, __) => Divider(
+                      height: 1,
+                      color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFEEEEEE),
+                      indent: 54),
                   itemBuilder: (context, index) {
                     final Map<String, dynamic> store =
                         Map<String, dynamic>.from(stores[index] as Map);
@@ -489,16 +495,18 @@ class _LoginPageState extends State<LoginPage> {
                                     const SizedBox(height: 3.0),
                                     Text(
                                       subText,
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontSize: 12.0,
-                                        color: Color(0xFF999999),
+                                        color: isDark ? Colors.white54 : const Color(0xFF999999),
                                       ),
                                     ),
                                   ],
                                 ],
                               ),
                             ),
-                            const Icon(Icons.chevron_right, color: Color(0xFFCCCCCC), size: 22),
+                            Icon(Icons.chevron_right,
+                                color: isDark ? Colors.white38 : const Color(0xFFCCCCCC),
+                                size: 22),
                           ],
                         ),
                       ),
@@ -584,11 +592,12 @@ class _LoginPageState extends State<LoginPage> {
 
   /// 白色登录卡片
   Widget _buildLoginCard() {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16.0),
       padding: const EdgeInsets.fromLTRB(20.0, 4.0, 20.0, 20.0),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isDark ? const Color(0xFF232425) : Colors.white,
         borderRadius: BorderRadius.circular(16.0),
         boxShadow: [
           BoxShadow(
@@ -642,6 +651,7 @@ class _LoginPageState extends State<LoginPage> {
 
   Widget _buildTabItem(String text, int index) {
     final bool isActive = _loginType == index;
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       height: 56.0,
       alignment: Alignment.center,
@@ -652,7 +662,9 @@ class _LoginPageState extends State<LoginPage> {
             text,
             style: TextStyle(
               fontSize: isActive ? 17.0 : 15.0,
-              color: isActive ? Colours.app_main : const Color(0xFF666666),
+              color: isActive
+                  ? Colours.app_main
+                  : (isDark ? Colors.white70 : const Color(0xFF666666)),
               fontWeight: isActive ? FontWeight.w700 : FontWeight.w400,
             ),
           ),
@@ -715,7 +727,9 @@ class _LoginPageState extends State<LoginPage> {
           onTap: () => setState(() => _isShowPwd = !_isShowPwd),
           child: Icon(
             _isShowPwd ? Icons.visibility : Icons.visibility_off,
-            color: const Color(0xFFBBBBBB),
+            color: Theme.of(context).brightness == Brightness.dark
+                ? const Color(0xFF666666)
+                : const Color(0xFFBBBBBB),
             size: 20.0,
           ),
         ),
@@ -749,7 +763,9 @@ class _LoginPageState extends State<LoginPage> {
           onTap: () => setState(() => _isShowPhonePwd = !_isShowPhonePwd),
           child: Icon(
             _isShowPhonePwd ? Icons.visibility : Icons.visibility_off,
-            color: const Color(0xFFBBBBBB),
+            color: Theme.of(context).brightness == Brightness.dark
+                ? const Color(0xFF666666)
+                : const Color(0xFFBBBBBB),
             size: 20.0,
           ),
         ),
@@ -770,16 +786,20 @@ class _LoginPageState extends State<LoginPage> {
     Widget? suffixIcon,
     bool isLast = false,
   }) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14.0),
       decoration: BoxDecoration(
-        color: const Color(0xFFF7F7F7),
+        color: isDark ? const Color(0xFF2E2F30) : const Color(0xFFF7F7F7),
         borderRadius: BorderRadius.circular(8.0),
-        border: Border.all(color: const Color(0xFFE8E8E8)),
+        border: Border.all(
+            color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE8E8E8)),
       ),
       child: Row(
         children: [
-          Icon(icon, color: const Color(0xFFBBBBBB), size: 22.0),
+          Icon(icon,
+              color: isDark ? const Color(0xFF666666) : const Color(0xFFBBBBBB),
+              size: 22.0),
           const SizedBox(width: 10.0),
           Expanded(
             child: TextField(
@@ -798,13 +818,15 @@ class _LoginPageState extends State<LoginPage> {
               },
               decoration: InputDecoration(
                 hintText: hint,
-                hintStyle: const TextStyle(fontSize: 14.0, color: Color(0xFFAAAAAA)),
+                hintStyle: TextStyle(
+                    fontSize: 14.0,
+                    color: isDark ? Colors.white38 : const Color(0xFFAAAAAA)),
                 counterText: '',
                 border: InputBorder.none,
                 isCollapsed: true,
                 contentPadding: const EdgeInsets.symmetric(vertical: 14.0),
               ),
-              style: const TextStyle(fontSize: 15.0, color: Colours.text),
+              style: TextStyle(fontSize: 15.0, color: isDark ? Colors.white : Colours.text),
             ),
           ),
           if (suffixIcon != null) suffixIcon,
@@ -815,6 +837,7 @@ class _LoginPageState extends State<LoginPage> {
 
   /// 记住密码
   Widget _buildRememberPwd() {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     return GestureDetector(
       onTap: () {
         setState(() {
@@ -834,16 +857,20 @@ class _LoginPageState extends State<LoginPage> {
               color: _rememberPwd ? Colours.app_main : Colors.transparent,
               borderRadius: BorderRadius.circular(3.0),
               border: Border.all(
-                color: _rememberPwd ? Colours.app_main : const Color(0xFFCCCCCC),
+                color: _rememberPwd
+                    ? Colours.app_main
+                    : (isDark ? const Color(0xFF4A4C4D) : const Color(0xFFCCCCCC)),
                 width: 1.5,
               ),
             ),
             child: _rememberPwd ? const Icon(Icons.check, size: 12.0, color: Colors.white) : null,
           ),
           const SizedBox(width: 6.0),
-          const Text(
+          Text(
             '记住密码',
-            style: TextStyle(fontSize: 13.0, color: Color(0xFF666666)),
+            style: TextStyle(
+                fontSize: 13.0,
+                color: isDark ? Colors.white70 : const Color(0xFF666666)),
           ),
         ],
       ),
@@ -893,6 +920,7 @@ class _LoginPageState extends State<LoginPage> {
 
   /// 协议区域
   Widget _buildAgreement() {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     return Row(
       children: [
         GestureDetector(
@@ -904,7 +932,9 @@ class _LoginPageState extends State<LoginPage> {
               shape: BoxShape.circle,
               color: _agreed ? Colours.app_main : Colors.transparent,
               border: Border.all(
-                color: _agreed ? Colours.app_main : const Color(0xFFCCCCCC),
+                color: _agreed
+                    ? Colours.app_main
+                    : (isDark ? const Color(0xFF4A4C4D) : const Color(0xFFCCCCCC)),
                 width: 1.5,
               ),
             ),
@@ -915,7 +945,9 @@ class _LoginPageState extends State<LoginPage> {
         Expanded(
           child: RichText(
             text: TextSpan(
-              style: const TextStyle(fontSize: 12.0, color: Color(0xFF666666)),
+              style: TextStyle(
+                  fontSize: 12.0,
+                  color: isDark ? Colors.white70 : const Color(0xFF666666)),
               children: [
                 const TextSpan(text: '我已阅读并同意'),
                 TextSpan(

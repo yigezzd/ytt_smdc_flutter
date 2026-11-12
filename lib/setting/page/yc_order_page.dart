@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_deer/net/pay_gateway.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/util/scan_pending_store.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 
 /// 异常订单查询页（对齐 smdcapp YcOrderActivity）
@@ -33,18 +34,20 @@ class _YcOrderPageState extends State<YcOrderPage> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
+    final Color textColor = isDark ? Colors.white : Colors.black87;
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
+      backgroundColor: isDark ? const Color(0xFF18191A) : const Color(0xFFF5F5F5),
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: isDark ? const Color(0xFF232425) : Colors.white,
         elevation: 0.5,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios, size: 20, color: Colors.black87),
+          icon: Icon(Icons.arrow_back_ios, size: 20, color: textColor),
           onPressed: () => NavigatorUtils.goBack(context),
         ),
-        title: const Text(
+        title: Text(
           '异常订单',
-          style: TextStyle(color: Colors.black87, fontSize: 17, fontWeight: FontWeight.bold),
+          style: TextStyle(color: textColor, fontSize: 17, fontWeight: FontWeight.bold),
         ),
         centerTitle: true,
         actions: <Widget>[
@@ -60,15 +63,32 @@ class _YcOrderPageState extends State<YcOrderPage> {
   }
 
   Widget _buildEmpty() {
-    return const Center(
+    final bool isDark = context.isDark;
+    return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Icon(Icons.check_circle_outline, size: 64, color: Color(0xFFCCCCCC)),
-          SizedBox(height: 16),
-          Text('暂无异常订单', style: TextStyle(fontSize: 15, color: Color(0xFF999999))),
-          SizedBox(height: 8),
-          Text('所有交易流水均已正常上传', style: TextStyle(fontSize: 13, color: Color(0xFFCCCCCC))),
+          Icon(
+            Icons.check_circle_outline,
+            size: 64,
+            color: isDark ? const Color(0xFF666666) : const Color(0xFFCCCCCC),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            '暂无异常订单',
+            style: TextStyle(
+              fontSize: 15,
+              color: isDark ? Colors.white70 : const Color(0xFF999999),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '所有交易流水均已正常上传',
+            style: TextStyle(
+              fontSize: 13,
+              color: isDark ? const Color(0xFF666666) : const Color(0xFFCCCCCC),
+            ),
+          ),
         ],
       ),
     );
@@ -87,6 +107,10 @@ class _YcOrderPageState extends State<YcOrderPage> {
   }
 
   Widget _buildOrderCard(Map<String, dynamic> order) {
+    final bool isDark = context.isDark;
+    final Color primaryTextColor = isDark ? Colors.white : const Color(0xFF333333);
+    final Color secondaryTextColor = isDark ? Colors.white70 : const Color(0xFF666666);
+    final Color hintTextColor = isDark ? Colors.white70 : const Color(0xFF999999);
     final String billno = order['billno']?.toString() ?? '';
     final String tablename = order['tablename']?.toString() ?? '';
     final String amt = order['amt']?.toString() ?? '0';
@@ -97,7 +121,7 @@ class _YcOrderPageState extends State<YcOrderPage> {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isDark ? const Color(0xFF232425) : Colors.white,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Column(
@@ -108,7 +132,7 @@ class _YcOrderPageState extends State<YcOrderPage> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFFF0F0),
+                  color: isDark ? const Color(0xFF3A2626) : const Color(0xFFFFF0F0),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
@@ -117,14 +141,14 @@ class _YcOrderPageState extends State<YcOrderPage> {
                 ),
               ),
               const Spacer(),
-              Text(billdate, style: const TextStyle(fontSize: 12, color: Color(0xFF999999))),
+              Text(billdate, style: TextStyle(fontSize: 12, color: hintTextColor)),
             ],
           ),
           const SizedBox(height: 10),
-          Text('单号：$billno', style: const TextStyle(fontSize: 14, color: Color(0xFF333333))),
+          Text('单号：$billno', style: TextStyle(fontSize: 14, color: primaryTextColor)),
           const SizedBox(height: 4),
           if (tablename.isNotEmpty)
-            Text(tablename, style: const TextStyle(fontSize: 13, color: Color(0xFF666666))),
+            Text(tablename, style: TextStyle(fontSize: 13, color: secondaryTextColor)),
           const SizedBox(height: 4),
           Row(
             children: <Widget>[
@@ -132,7 +156,7 @@ class _YcOrderPageState extends State<YcOrderPage> {
                 fontSize: 16, color: Color(0xFFE13426), fontWeight: FontWeight.bold,
               )),
               const Spacer(),
-              Text('操作员：$cashname', style: const TextStyle(fontSize: 12, color: Color(0xFF999999))),
+              Text('操作员：$cashname', style: TextStyle(fontSize: 12, color: hintTextColor)),
               const SizedBox(width: 8),
               TextButton(
                 onPressed: () => _queryOrder(order),

@@ -6,6 +6,7 @@ import 'package:flutter_deer/net/connection_manager.dart';
 import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/net/table_event_bus.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:flutter_deer/widgets/my_app_bar.dart';
 
@@ -134,13 +135,19 @@ class _ZanjieOrderPageState extends State<ZanjieOrderPage> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F6F8),
+      backgroundColor: isDark ? const Color(0xFF18191A) : const Color(0xFFF5F6F8),
       appBar: const MyAppBar(centerTitle: '暂结订单'),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _orders.isEmpty
-              ? const Center(child: Text('暂无暂结订单', style: TextStyle(color: Color(0xFF999999))))
+              ? Center(
+                  child: Text(
+                    '暂无暂结订单',
+                    style: TextStyle(color: isDark ? Colors.white54 : const Color(0xFF999999)),
+                  ),
+                )
               : RefreshIndicator(
                   onRefresh: _loadOrders,
                   child: ListView.builder(
@@ -153,6 +160,7 @@ class _ZanjieOrderPageState extends State<ZanjieOrderPage> {
   }
 
   Widget _buildOrderCard(Map<String, dynamic> order) {
+    final bool isDark = context.isDark;
     final String billno = order['billno']?.toString() ?? '';
     final String tablename = order['tablename']?.toString() ?? '';
     final String payamt = order['payamt']?.toString() ?? order['amt']?.toString() ?? '0';
@@ -175,7 +183,7 @@ class _ZanjieOrderPageState extends State<ZanjieOrderPage> {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isDark ? const Color(0xFF232425) : Colors.white,
         borderRadius: BorderRadius.circular(10),
         boxShadow: const <BoxShadow>[
           BoxShadow(color: Color(0x0D000000), blurRadius: 6, offset: Offset(0, 2)),
@@ -189,7 +197,11 @@ class _ZanjieOrderPageState extends State<ZanjieOrderPage> {
               Expanded(
                 child: Text(
                   tablename.isNotEmpty ? tablename : billno,
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: isDark ? Colors.white : const Color(0xFF333333),
+                  ),
                 ),
               ),
               Container(
@@ -207,17 +219,23 @@ class _ZanjieOrderPageState extends State<ZanjieOrderPage> {
           ),
           const SizedBox(height: 8),
           // 金额明细行（对齐 smdcapp zj_order_itemv2）
-          _buildAmtRow('菜品费', cpAmt),
-          if (dscAmt > 0) _buildAmtRow('优惠金额', -dscAmt, color: Colors.green),
+          _buildAmtRow('菜品费', cpAmt, isDark: isDark),
+          if (dscAmt > 0) _buildAmtRow('优惠金额', -dscAmt, color: Colors.green, isDark: isDark),
           if (hasExtraFees) ...<Widget>[
-            if (serviceAmt > 0) _buildAmtRow('服务费', serviceAmt),
-            if (lowAmt > 0) _buildAmtRow('低消', lowAmt),
+            if (serviceAmt > 0) _buildAmtRow('服务费', serviceAmt, isDark: isDark),
+            if (lowAmt > 0) _buildAmtRow('低消', lowAmt, isDark: isDark),
           ],
           const SizedBox(height: 6),
           Row(
             children: <Widget>[
               Expanded(
-                child: Text('单号：$billno', style: const TextStyle(fontSize: 12, color: Color(0xFF666666))),
+                child: Text(
+                  '单号：$billno',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? Colors.white54 : const Color(0xFF666666),
+                  ),
+                ),
               ),
               Text('实收 ¥$payamt', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFFE13426))),
             ],
@@ -226,7 +244,7 @@ class _ZanjieOrderPageState extends State<ZanjieOrderPage> {
             const SizedBox(height: 4),
             Text(
               '$payname  $createtime',
-              style: const TextStyle(fontSize: 12, color: Color(0xFF999999)),
+              style: TextStyle(fontSize: 12, color: isDark ? Colors.white54 : const Color(0xFF999999)),
             ),
           ],
           if (paystatus == 2) ...<Widget>[
@@ -237,7 +255,8 @@ class _ZanjieOrderPageState extends State<ZanjieOrderPage> {
                 OutlinedButton(
                   onPressed: () => _cancelZanjie(order),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF666666),
+                    foregroundColor: isDark ? Colors.white70 : const Color(0xFF666666),
+                    side: isDark ? const BorderSide(color: Color(0xFF4A4C4D)) : null,
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
                     textStyle: const TextStyle(fontSize: 12),
                   ),
@@ -263,15 +282,18 @@ class _ZanjieOrderPageState extends State<ZanjieOrderPage> {
   }
 
   /// 金额明细行
-  Widget _buildAmtRow(String label, double value, {Color? color}) {
-    final Color c = color ?? const Color(0xFF666666);
+  Widget _buildAmtRow(String label, double value, {Color? color, bool isDark = false}) {
+    final Color c = color ?? (isDark ? Colors.white70 : const Color(0xFF666666));
     final String text = value < 0 ? '-¥${value.abs().toStringAsFixed(2)}' : '¥${value.toStringAsFixed(2)}';
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: <Widget>[
-          Text(label, style: const TextStyle(fontSize: 12, color: Color(0xFF999999))),
+          Text(
+            label,
+            style: TextStyle(fontSize: 12, color: isDark ? Colors.white54 : const Color(0xFF999999)),
+          ),
           Text(text, style: TextStyle(fontSize: 12, color: c)),
         ],
       ),

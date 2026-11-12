@@ -38,6 +38,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
   @override
   Widget build(BuildContext context) {
     final Color primaryColor = Theme.of(context).primaryColor;
+    final bool isDark = context.isDark;
     return PopScope(
       canPop: false, /// 使用false禁止返回键返回，达到强制升级目的
       child: Scaffold(
@@ -62,20 +63,25 @@ class _UpdateDialogState extends State<UpdateDialog> {
               Container(
                 width: 280.0,
                 decoration: BoxDecoration(
-                  color: context.dialogBackgroundColor,
+                  color: isDark ? const Color(0xFF232425) : context.dialogBackgroundColor,
                   borderRadius: const BorderRadius.only(bottomLeft: Radius.circular(8.0), bottomRight: Radius.circular(8.0))
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 15.0, vertical: 15.0),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    const Text('新版本更新', style: TextStyles.textSize16),
+                    Text(
+                      '新版本更新',
+                      style: isDark
+                          ? const TextStyle(fontSize: Dimens.font_sp16, color: Colors.white)
+                          : TextStyles.textSize16,
+                    ),
                     Gaps.vGap10,
                     const Text('1.又双叒修复了一大堆bug。\n\n2.祭天了多名程序猿。'),
                     Gaps.vGap15,
                     if (_isDownload)
                       LinearProgressIndicator(
-                        backgroundColor: Colours.line,
+                        backgroundColor: isDark ? const Color(0xFF3A3C3D) : Colours.line,
                         valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
                         value: _value,
                       )

@@ -86,8 +86,8 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
   double get _totalPrice =>
       widget.cartItems.fold(0, (double sum, CartItem item) => sum + item.totalPrice);
 
-  int get _totalCount =>
-      widget.cartItems.fold<double>(0, (double sum, CartItem item) => sum + item.qtyValue).round();
+  double get _totalCount =>
+      widget.cartItems.fold<double>(0, (double sum, CartItem item) => sum + item.priceQty);
 
   Future<void> _handleAdd(CartItem item) async {
     // 对齐 smdcapp checkQtyValid：第N份促销拆分行不能直接加数量
@@ -186,7 +186,7 @@ class _CartPanelSheetState extends State<CartPanelSheet> {
           ),
           const SizedBox(width: 6),
           Text(
-            '($_totalCount)',
+            '(${_formatQty(_totalCount)})',
             style: TextStyle(
               fontSize: 13,
               color: isDark ? const Color(0xFF999999) : const Color(0xFF86909C),

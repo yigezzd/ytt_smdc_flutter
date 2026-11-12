@@ -173,7 +173,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   VipMember? _member;
 
   /// 商品数量缓存 Map（productid → 数量），O(1) 查询代替 O(n) 遍历
-  final Map<String, int> _productCountMap = <String, int>{};
+  final Map<String, double> _productCountMap = <String, double>{};
 
   /// 商品所属分类反查 Map（productid → typeid），用于分类角标统计
   final Map<String, String> _productTypeIdMap = <String, String>{};
@@ -191,7 +191,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   final ValueNotifier<String?> _activeSubTypeId = ValueNotifier<String?>(null);
 
   /// 分类购物车数量 Map（typeid → 数量），用于左侧分类角标
-  final Map<String, int> _categoryCountMap = <String, int>{};
+  final Map<String, double> _categoryCountMap = <String, double>{};
 
   late AnimationController _cartBadgeController;
 
@@ -232,6 +232,9 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
   /// 沽清实时快照时间（R5）
   DateTime? _warnSnapshotAt;
+
+  /// 分类商品快照刷新中的任务（同分类并发复用，避免连点加号重复拉全量菜品）
+  final Map<String, Future<void>> _productRefreshTasks = <String, Future<void>>{};
 
   /// 锁台事件订阅（R2）
   StreamSubscription<Map<String, dynamic>>? _lockSubscription;
@@ -1297,14 +1300,14 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
   // ==================== 购物车逻辑 ====================
 
-  int get _totalCount =>
-      _cartItems.fold<double>(0, (double sum, CartItem item) => sum + item.qtyValue).round();
+  double get _totalCount =>
+      _cartItems.fold<double>(0, (double sum, CartItem item) => sum + item.priceQty);
 
   double get _totalPrice =>
       _cartItems.fold(0, (double sum, CartItem item) => sum + item.totalPrice);
 
   /// 某商品在购物车中的数量（O(1) 查询）
-  int _productCount(DishProduct product) {
+  double _productCount(DishProduct product) {
     return _productCountMap[product.productid] ?? 0;
   }
 
@@ -1314,10 +1317,10 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
     _categoryCountMap.clear();
     for (final CartItem item in _cartItems) {
       _productCountMap[item.product.id] =
-          (_productCountMap[item.product.id] ?? 0) + item.qtyValue.ceil();
+          (_productCountMap[item.product.id] ?? 0) + item.priceQty;
       final String? typeid = _productTypeIdMap[item.product.id];
       if (typeid != null) {
-        _categoryCountMap[typeid] = (_categoryCountMap[typeid] ?? 0) + item.qtyValue.ceil();
+        _categoryCountMap[typeid] = (_categoryCountMap[typeid] ?? 0) + item.priceQty;
       }
     }
   }
@@ -1344,18 +1347,17 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
   Future<void> _addToCart(DishProduct dish,
       {double? quantity, String specText = '', double extraPrice = 0}) async {
     if (!_ensureSaleTime(dish)) return;
-    // R4/R5/R6：加购前拉取该分类最新商品与沽清状态，避免 Web 停用/改价/沽清后仍能点菜
-    await _refreshRealtimeSnapshot(dish.typeid);
-    if (!mounted) return;
-    final _RealtimeProductSnapshot? snapshot = _realtimeSnapshots[dish.typeid];
-    final DishProduct? latest = snapshot?.products[dish.productid];
-    if (snapshot != null && (latest == null || latest.isDisabled)) {
+    // R4/R5/R6：停用/改价先用已缓存的实时快照同步校验，网络刷新放到入车之后后台执行；
+    // 若在加号点击处等待菜品+沽清接口，现场每次加购会卡 1~2 秒（smdcapp 为本地即时加车）
+    final _RealtimeProductSnapshot? cachedSnapshot = _realtimeSnapshots[dish.typeid];
+    final DishProduct? cachedLatest = cachedSnapshot?.products[dish.productid];
+    if (cachedSnapshot != null && (cachedLatest == null || cachedLatest.isDisabled)) {
       Toast.show('菜品【${dish.name}】已停用，无法点餐');
       return;
     }
     final bool simpleDish =
         dish.specflag == 0 && dish.combflag == 0 && dish.weighflag == 0 && dish.curflag == 0;
-    final double? latestPrice = simpleDish ? latest?.sellprice : null;
+    final double? latestPrice = simpleDish ? cachedLatest?.sellprice : null;
     // 本单已点数量（限点校验 + 起售/增售判断共用）
     final double currentQty = _cartItems
         .where((CartItem item) => item.product.id == dish.productid)
@@ -1417,13 +1419,13 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       }
     }
     final Product product = _toProduct(dish);
+    final String key = '${product.id}_$specText';
     bool repriced = false;
     if (latestPrice != null && (latestPrice - product.price).abs() > 0.005) {
       product.price = latestPrice;
       repriced = true;
     }
     setState(() {
-      final String key = '${product.id}_$specText';
       // 必点菜行数量独立管理（对齐 smdcapp 必点行 mustflag=1 不参与普通加购合并）；
       // 第N份促销拆分行不参与合并，否则会把促销数量并入普通行
       final int index = _cartItems.indexWhere(
@@ -1452,6 +1454,49 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       Toast.show('菜品【${dish.name}】价格已更新为 ¥${latestPrice!.toStringAsFixed(2)}');
     }
     _cartBadgeController.forward(from: 0);
+    // 后台刷新分类快照并回纠：停用则回退本次加购数量，改价则更新购物车行价
+    unawaited(_refreshSnapshotAndReconcile(dish, key, step, simpleDish));
+  }
+
+  /// 加购后的后台校验：刷新实时快照后回纠刚入车的菜品
+  ///
+  /// 刷新失败或无快照时保持已加购状态（不误删用户点的菜）。
+  Future<void> _refreshSnapshotAndReconcile(
+      DishProduct dish, String key, double step, bool simpleDish) async {
+    await _refreshRealtimeSnapshot(dish.typeid);
+    if (!mounted) return;
+    final _RealtimeProductSnapshot? snapshot = _realtimeSnapshots[dish.typeid];
+    if (snapshot == null) return;
+    final DishProduct? latest = snapshot.products[dish.productid];
+    bool disabled = false;
+    double? newPrice;
+    setState(() {
+      final int index = _cartItems.indexWhere(
+          (CartItem item) => item.uniqueKey == key && item.mustflag != 1 && !item.isNthPromo);
+      if (index < 0) return;
+      final CartItem item = _cartItems[index];
+      if (latest != null && latest.isDisabled) {
+        disabled = true;
+        final double next = double.parse((item.qtyValue - step).toStringAsFixed(3));
+        if (next <= 0) {
+          _cartItems.removeAt(index);
+        } else {
+          _setCartItemQty(item, next);
+        }
+      } else if (simpleDish &&
+          latest != null &&
+          (latest.sellprice - item.product.price).abs() > 0.005) {
+        _applyLatestPrice(item, latest.sellprice);
+        newPrice = latest.sellprice;
+      }
+      _applyNthDiscount();
+      _rebuildCountMap();
+    });
+    if (disabled) {
+      Toast.show('菜品【${dish.name}】已停用，无法点餐');
+    } else if (newPrice != null) {
+      Toast.show('菜品【${dish.name}】价格已更新为 ¥${_fmtPrice(newPrice!)}');
+    }
   }
 
   /// Web 改价后同步购物车行价格，并清掉基于旧价命中的促销后重新匹配
@@ -1473,18 +1518,19 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         cached != null &&
         now.difference(cached.at) < const Duration(seconds: 2);
     if (!productFresh) {
-      try {
-        final List<DishProduct> products =
-            await OrderRepository.fetchProductsForValidation(typeid: typeid);
-        if (products.isNotEmpty) {
-          _realtimeSnapshots[typeid] = _RealtimeProductSnapshot(
-            now,
-            <String, DishProduct>{
-              for (final DishProduct p in products) p.productid: p,
-            },
-          );
+      // 同分类已有刷新在途时复用，避免连点加号并发重复拉全量菜品
+      final Future<void>? running = _productRefreshTasks[typeid];
+      if (running != null) {
+        await running;
+      } else {
+        final Future<void> task = _fetchRealtimeProducts(typeid);
+        _productRefreshTasks[typeid] = task;
+        try {
+          await task;
+        } finally {
+          _productRefreshTasks.remove(typeid);
         }
-      } catch (_) {}
+      }
     }
     final bool warnFresh =
         _warnSnapshotAt != null && now.difference(_warnSnapshotAt!) < const Duration(seconds: 2);
@@ -1504,6 +1550,22 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
         _guQingLeftMap[pid] = warnqty - saleqty;
       }
       if (mounted) setState(() {});
+    } catch (_) {}
+  }
+
+  /// 拉取分类商品实时快照（停用/改价校验数据源，供加购前后台刷新）
+  Future<void> _fetchRealtimeProducts(String typeid) async {
+    try {
+      final List<DishProduct> products =
+          await OrderRepository.fetchProductsForValidation(typeid: typeid);
+      if (products.isNotEmpty) {
+        _realtimeSnapshots[typeid] = _RealtimeProductSnapshot(
+          DateTime.now(),
+          <String, DishProduct>{
+            for (final DishProduct p in products) p.productid: p,
+          },
+        );
+      }
     } catch (_) {}
   }
 
@@ -2809,10 +2871,11 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
       builder: (BuildContext sheetCtx) {
         return StatefulBuilder(
           builder: (BuildContext ctx, StateSetter setSheetState) {
+            final bool isDark = Theme.of(ctx).brightness == Brightness.dark;
             return Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF232425) : Colors.white,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
               ),
               padding: EdgeInsets.fromLTRB(
                 20,
@@ -2826,19 +2889,21 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                   // 标题栏
                   Row(
                     children: <Widget>[
-                      const Expanded(
+                      Expanded(
                         child: Text(
                           '修改开台信息',
                           style: TextStyle(
                             fontSize: 17,
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFF1D2129),
+                            color: isDark ? Colors.white : const Color(0xFF1D2129),
                           ),
                         ),
                       ),
                       GestureDetector(
                         onTap: () => Navigator.of(sheetCtx).pop(),
-                        child: const Icon(Icons.close, size: 22, color: Color(0xFF86909C)),
+                        child: Icon(Icons.close,
+                            size: 22,
+                            color: isDark ? Colors.white54 : const Color(0xFF86909C)),
                       ),
                     ],
                   ),
@@ -2846,7 +2911,10 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                   // 人数
                   Row(
                     children: <Widget>[
-                      const Text('人数：', style: TextStyle(fontSize: 15, color: Color(0xFF4E5969))),
+                      Text('人数：',
+                          style: TextStyle(
+                              fontSize: 15,
+                              color: isDark ? Colors.white70 : const Color(0xFF4E5969))),
                       const SizedBox(width: 8),
                       SizedBox(
                         width: 100,
@@ -2865,16 +2933,24 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                               extentOffset: personCtrl.text.length,
                             );
                           },
-                          style: const TextStyle(fontSize: 15, color: Color(0xFF1D2129)),
+                          style: TextStyle(
+                              fontSize: 15,
+                              color: isDark ? Colors.white : const Color(0xFF1D2129)),
                           decoration: InputDecoration(
                             contentPadding: const EdgeInsets.symmetric(vertical: 10),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(6),
-                              borderSide: const BorderSide(color: Color(0xFFE5E6EB)),
+                              borderSide: BorderSide(
+                                  color: isDark
+                                      ? const Color(0xFF4A4C4D)
+                                      : const Color(0xFFE5E6EB)),
                             ),
                             enabledBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(6),
-                              borderSide: const BorderSide(color: Color(0xFFE5E6EB)),
+                              borderSide: BorderSide(
+                                  color: isDark
+                                      ? const Color(0xFF4A4C4D)
+                                      : const Color(0xFFE5E6EB)),
                             ),
                             focusedBorder: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(6),
@@ -2889,7 +2965,10 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                   // 服务员
                   Row(
                     children: <Widget>[
-                      const Text('服务员：', style: TextStyle(fontSize: 15, color: Color(0xFF4E5969))),
+                      Text('服务员：',
+                          style: TextStyle(
+                              fontSize: 15,
+                              color: isDark ? Colors.white70 : const Color(0xFF4E5969))),
                       const SizedBox(width: 8),
                       GestureDetector(
                         onTap: () async {
@@ -2910,10 +2989,14 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                           children: <Widget>[
                             Text(
                               serverName,
-                              style: const TextStyle(fontSize: 15, color: Color(0xFF1D2129)),
+                              style: TextStyle(
+                                  fontSize: 15,
+                                  color: isDark ? Colors.white : const Color(0xFF1D2129)),
                             ),
                             const SizedBox(width: 4),
-                            const Icon(Icons.chevron_right, size: 18, color: Color(0xFF86909C)),
+                            Icon(Icons.chevron_right,
+                                size: 18,
+                                color: isDark ? Colors.white54 : const Color(0xFF86909C)),
                           ],
                         ),
                       ),
@@ -2924,8 +3007,10 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                     const SizedBox(height: 16),
                     Row(
                       children: <Widget>[
-                        const Text('附加费：',
-                            style: TextStyle(fontSize: 15, color: Color(0xFF4E5969))),
+                        Text('附加费：',
+                            style: TextStyle(
+                                fontSize: 15,
+                                color: isDark ? Colors.white70 : const Color(0xFF4E5969))),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Container(
@@ -2933,13 +3018,18 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                             padding: const EdgeInsets.symmetric(horizontal: 10),
                             alignment: Alignment.centerLeft,
                             decoration: BoxDecoration(
-                              color: const Color(0xFFF7F8FA),
+                              color: isDark ? const Color(0xFF2E2F30) : const Color(0xFFF7F8FA),
                               borderRadius: BorderRadius.circular(6),
-                              border: Border.all(color: const Color(0xFFE5E6EB)),
+                              border: Border.all(
+                                  color: isDark
+                                      ? const Color(0xFF4A4C4D)
+                                      : const Color(0xFFE5E6EB)),
                             ),
                             child: Text(
                               additionName,
-                              style: const TextStyle(fontSize: 14, color: Color(0xFF86909C)),
+                              style: TextStyle(
+                                  fontSize: 14,
+                                  color: isDark ? Colors.white54 : const Color(0xFF86909C)),
                             ),
                           ),
                         ),
@@ -2950,26 +3040,39 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                   // 备注
                   Row(
                     children: <Widget>[
-                      const Text('备注：', style: TextStyle(fontSize: 15, color: Color(0xFF4E5969))),
+                      Text('备注：',
+                          style: TextStyle(
+                              fontSize: 15,
+                              color: isDark ? Colors.white70 : const Color(0xFF4E5969))),
                       const SizedBox(width: 8),
                       Expanded(
                         child: SizedBox(
                           height: 40,
                           child: TextField(
                             controller: remarkCtrl,
-                            style: const TextStyle(fontSize: 14, color: Color(0xFF1D2129)),
+                            style: TextStyle(
+                                fontSize: 14,
+                                color: isDark ? Colors.white : const Color(0xFF1D2129)),
                             decoration: InputDecoration(
                               hintText: '请输入备注',
-                              hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFC9CDD4)),
+                              hintStyle: TextStyle(
+                                  fontSize: 13,
+                                  color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4)),
                               contentPadding:
                                   const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(6),
-                                borderSide: const BorderSide(color: Color(0xFFE5E6EB)),
+                                borderSide: BorderSide(
+                                    color: isDark
+                                        ? const Color(0xFF4A4C4D)
+                                        : const Color(0xFFE5E6EB)),
                               ),
                               enabledBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(6),
-                                borderSide: const BorderSide(color: Color(0xFFE5E6EB)),
+                                borderSide: BorderSide(
+                                    color: isDark
+                                        ? const Color(0xFF4A4C4D)
+                                        : const Color(0xFFE5E6EB)),
                               ),
                               focusedBorder: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(6),
@@ -2992,16 +3095,19 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                           child: Container(
                             height: 44,
                             decoration: BoxDecoration(
-                              border: Border.all(color: const Color(0xFFE5E6EB)),
+                              border: Border.all(
+                                  color: isDark
+                                      ? const Color(0xFF4A4C4D)
+                                      : const Color(0xFFE5E6EB)),
                               borderRadius: BorderRadius.circular(22),
                             ),
-                            child: const Center(
+                            child: Center(
                               child: Text(
                                 '取消',
                                 style: TextStyle(
                                     fontSize: 15,
                                     fontWeight: FontWeight.w600,
-                                    color: Color(0xFF4E5969)),
+                                    color: isDark ? Colors.white70 : const Color(0xFF4E5969)),
                               ),
                             ),
                           ),
@@ -3608,7 +3714,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                             ),
                             child: Center(
                               child: Text(
-                                '${_categoryCountMap[category.typeid]}',
+                                '${_fmtQty(_categoryCountMap[category.typeid] ?? 0)}',
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 10,
@@ -3888,7 +3994,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
 
   /// 底部购物车栏
   Widget _buildCartBar(bool isDark) {
-    final int count = _totalCount;
+    final double count = _totalCount;
     final bool hasItems = count > 0;
 
     return Positioned(
@@ -3960,7 +4066,7 @@ class _OrderPageState extends State<OrderPage> with TickerProviderStateMixin {
                               ),
                               child: Center(
                                 child: Text(
-                                  '$count',
+                                  '${_fmtQty(count)}',
                                   style: const TextStyle(
                                     color: Colors.white,
                                     fontSize: 11,
@@ -4135,7 +4241,7 @@ class _DishProductCard extends StatelessWidget {
   });
 
   final DishProduct product;
-  final int count;
+  final double count;
   final bool isDark;
 
   /// 是否显示数字角标（对齐 smdcapp ENABLE_PRODUCT_NUM）
@@ -4497,7 +4603,7 @@ class _DishProductCard extends StatelessWidget {
             width: 30,
             child: Center(
               child: Text(
-                '$count',
+                '${_fmtQty(count)}',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.bold,

@@ -78,7 +78,8 @@ class _DishSelectSheetState extends State<DishSelectSheet> {
   Widget build(BuildContext context) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final Color titleColor = isDark ? Colors.white : const Color(0xFF1D2129);
-    final Color subColor = isDark ? const Color(0xFF999999) : const Color(0xFF86909C);
+    final Color subColor = isDark ? Colors.white54 : const Color(0xFF86909C);
+    final Color disabledColor = isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4);
 
     return Container(
       decoration: BoxDecoration(
@@ -144,7 +145,7 @@ class _DishSelectSheetState extends State<DishSelectSheet> {
               ),
             ),
           ),
-          const Divider(height: 1, color: Color(0xFFF2F3F5)),
+          Divider(height: 1, color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF2F3F5)),
           Flexible(
             child: ListView.builder(
               shrinkWrap: true,
@@ -171,7 +172,7 @@ class _DishSelectSheetState extends State<DishSelectSheet> {
                           checked ? Icons.check_box : Icons.check_box_outline_blank,
                           size: 20,
                           color: e.disabled
-                              ? const Color(0xFFC9CDD4)
+                              ? disabledColor
                               : (checked ? _kBrandRed : subColor),
                         ),
                         const SizedBox(width: 10),
@@ -185,7 +186,7 @@ class _DishSelectSheetState extends State<DishSelectSheet> {
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                   fontSize: 14,
-                                  color: e.disabled ? const Color(0xFFC9CDD4) : titleColor,
+                                  color: e.disabled ? disabledColor : titleColor,
                                 ),
                               ),
                               if (e.subtitle.isNotEmpty)
@@ -224,7 +225,8 @@ class _DishSelectSheetState extends State<DishSelectSheet> {
                       onPressed: () => Navigator.of(context).pop(),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: subColor,
-                        side: const BorderSide(color: Color(0xFFE5E6EB)),
+                        side: BorderSide(
+                            color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB)),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(22),
                         ),

@@ -4749,10 +4749,14 @@ class _DetailOperationSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color titleColor = isDark ? Colors.white : const Color(0xFF1D2129);
+    final Color subColor = isDark ? Colors.white54 : const Color(0xFF86909C);
+    final Color itemColor = isDark ? Colors.white70 : const Color(0xFF4E5969);
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF232425) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
       ),
       child: SafeArea(
         top: false,
@@ -4767,7 +4771,7 @@ class _DetailOperationSheet extends StatelessWidget {
                 width: 36,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE5E6EB),
+                  color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -4777,19 +4781,21 @@ class _DetailOperationSheet extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
               child: Row(
                 children: <Widget>[
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       '整单操作',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF1D2129),
+                        color: titleColor,
                       ),
                     ),
                   ),
                   IconButton(
                     onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close, size: 20, color: Color(0xFFC9CDD4)),
+                    icon: Icon(Icons.close,
+                        size: 20,
+                        color: isDark ? Colors.white54 : const Color(0xFFC9CDD4)),
                   ),
                 ],
               ),
@@ -4802,7 +4808,7 @@ class _DetailOperationSheet extends StatelessWidget {
                     children: <Widget>[
                       Text(
                         group.name,
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF86909C)),
+                        style: TextStyle(fontSize: 12, color: subColor),
                       ),
                       const SizedBox(height: 10),
                       Wrap(
@@ -4820,16 +4826,21 @@ class _DetailOperationSheet extends StatelessWidget {
                                           width: 46,
                                           height: 46,
                                           decoration: BoxDecoration(
-                                            color: const Color(0xFFF7F8FA),
+                                            color: isDark
+                                                ? const Color(0xFF2E2F30)
+                                                : const Color(0xFFF7F8FA),
                                             borderRadius: BorderRadius.circular(12),
-                                            border: Border.all(color: const Color(0xFFF2F3F5)),
+                                            border: Border.all(
+                                                color: isDark
+                                                    ? const Color(0xFF3A3C3D)
+                                                    : const Color(0xFFF2F3F5)),
                                           ),
-                                          child: Icon(item.icon, size: 22, color: const Color(0xFF4E5969)),
+                                          child: Icon(item.icon, size: 22, color: itemColor),
                                         ),
                                         const SizedBox(height: 5),
                                         Text(
                                           item.name,
-                                          style: const TextStyle(fontSize: 11, color: Color(0xFF4E5969)),
+                                          style: TextStyle(fontSize: 11, color: itemColor),
                                           textAlign: TextAlign.center,
                                         ),
                                       ],
@@ -4903,10 +4914,12 @@ class _SingleItemSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    final Color itemColor = isDark ? Colors.white70 : const Color(0xFF4E5969);
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF232425) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
       ),
       child: SafeArea(
         top: false,
@@ -4921,7 +4934,7 @@ class _SingleItemSheet extends StatelessWidget {
                 width: 36,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE5E6EB),
+                  color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -4933,17 +4946,19 @@ class _SingleItemSheet extends StatelessWidget {
                   Expanded(
                     child: Text(
                       itemName,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF1D2129),
+                        color: isDark ? Colors.white : const Color(0xFF1D2129),
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   IconButton(
                     onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close, size: 20, color: Color(0xFFC9CDD4)),
+                    icon: Icon(Icons.close,
+                        size: 20,
+                        color: isDark ? Colors.white54 : const Color(0xFFC9CDD4)),
                   ),
                 ],
               ),
@@ -4965,20 +4980,25 @@ class _SingleItemSheet extends StatelessWidget {
                                   width: 46,
                                   height: 46,
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFFF7F8FA),
+                                    color: isDark
+                                        ? const Color(0xFF2E2F30)
+                                        : const Color(0xFFF7F8FA),
                                     borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: const Color(0xFFF2F3F5)),
+                                    border: Border.all(
+                                        color: isDark
+                                            ? const Color(0xFF3A3C3D)
+                                            : const Color(0xFFF2F3F5)),
                                   ),
                                   child: Icon(
                                     _icons[op.action] ?? Icons.circle_outlined,
                                     size: 22,
-                                    color: const Color(0xFF4E5969),
+                                    color: itemColor,
                                   ),
                                 ),
                                 const SizedBox(height: 5),
                                 Text(
                                   op.label.replaceAll('\n', ''),
-                                  style: const TextStyle(fontSize: 11, color: Color(0xFF4E5969)),
+                                  style: TextStyle(fontSize: 11, color: itemColor),
                                 ),
                               ],
                             ),

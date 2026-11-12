@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_deer/pages/order/order_models.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 
 /// 品牌红
 const Color _kBrandRed = Color(0xFFE63F31);
@@ -88,6 +89,7 @@ class _SpecBottomSheetState extends State<SpecBottomSheet>
 
   /// 单个规格选项chip
   Widget _buildOptionChip(int groupIndex, int optionIndex, SpecOption option) {
+    final bool isDark = context.isDark;
     final bool selected = _selectedIndexes[groupIndex] == optionIndex;
 
     return GestureDetector(
@@ -104,10 +106,14 @@ class _SpecBottomSheetState extends State<SpecBottomSheet>
             curve: Curves.easeOut,
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
             decoration: BoxDecoration(
-              color: selected ? _kBrandRed : const Color(0xFFF5F5F5),
+              color: selected
+                  ? _kBrandRed
+                  : (isDark ? const Color(0xFF2E2F30) : const Color(0xFFF5F5F5)),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: selected ? _kBrandRed : const Color(0xFFE8E8E8),
+                color: selected
+                    ? _kBrandRed
+                    : (isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE8E8E8)),
               ),
               boxShadow: selected
                   ? const <BoxShadow>[
@@ -120,7 +126,9 @@ class _SpecBottomSheetState extends State<SpecBottomSheet>
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-                color: selected ? Colors.white : const Color(0xFF333333),
+                color: selected
+                    ? Colors.white
+                    : (isDark ? Colors.white70 : const Color(0xFF333333)),
               ),
             ),
           ),
@@ -151,14 +159,15 @@ class _SpecBottomSheetState extends State<SpecBottomSheet>
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     final Product product = widget.product;
 
     return FadeTransition(
       opacity: _fadeAnimation,
       child: Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF232425) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
         ),
         child: SafeArea(
           top: false,
@@ -179,35 +188,39 @@ class _SpecBottomSheetState extends State<SpecBottomSheet>
                         children: <Widget>[
                           Text(
                             product.name,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
-                              color: Color(0xFF1D2129),
+                              color: isDark ? Colors.white : const Color(0xFF1D2129),
                             ),
                           ),
                           const SizedBox(height: 4),
                           Text(
                             product.desc,
-                            style: const TextStyle(fontSize: 12, color: Color(0xFF999999)),
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: isDark
+                                    ? Colors.white54
+                                    : const Color(0xFF999999)),
                           ),
                           const SizedBox(height: 10),
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.end,
                             children: <Widget>[
-                              const Text(
+                              Text(
                                 '¥',
                                 style: TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.bold,
-                                  color: Color(0xFF1D2129),
+                                  color: isDark ? Colors.white : const Color(0xFF1D2129),
                                 ),
                               ),
                               Text(
                                 product.price.toStringAsFixed(2),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 22,
                                   fontWeight: FontWeight.bold,
-                                  color: Color(0xFF1D2129),
+                                  color: isDark ? Colors.white : const Color(0xFF1D2129),
                                   height: 1,
                                 ),
                               ),
@@ -217,9 +230,11 @@ class _SpecBottomSheetState extends State<SpecBottomSheet>
                                   padding: const EdgeInsets.only(bottom: 2),
                                   child: Text(
                                     '¥${product.originalPrice!.toStringAsFixed(2)}',
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 12,
-                                      color: Color(0xFFBBBBBB),
+                                      color: isDark
+                                          ? const Color(0xFF666666)
+                                          : const Color(0xFFBBBBBB),
                                       decoration: TextDecoration.lineThrough,
                                     ),
                                   ),
@@ -256,11 +271,15 @@ class _SpecBottomSheetState extends State<SpecBottomSheet>
                       child: Container(
                         width: 28,
                         height: 28,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFFF2F3F5),
+                        decoration: BoxDecoration(
+                          color: isDark
+                              ? const Color(0xFF2E2F30)
+                              : const Color(0xFFF2F3F5),
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.close, size: 16, color: Color(0xFF86909C)),
+                        child: Icon(Icons.close,
+                            size: 16,
+                            color: isDark ? Colors.white54 : const Color(0xFF86909C)),
                       ),
                     ),
                   ],
@@ -287,10 +306,10 @@ class _SpecBottomSheetState extends State<SpecBottomSheet>
                             children: <Widget>[
                               Text(
                                 group.name,
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w600,
-                                  color: Color(0xFF1D2129),
+                                  color: isDark ? Colors.white : const Color(0xFF1D2129),
                                 ),
                               ),
                               const SizedBox(height: 10),
@@ -341,9 +360,11 @@ class _SpecBottomSheetState extends State<SpecBottomSheet>
                                 padding: const EdgeInsets.only(bottom: 1),
                                 child: Text(
                                   '¥${(_currentOriginalPrice * _quantity).toStringAsFixed(0)}',
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 12,
-                                    color: Color(0xFFBBBBBB),
+                                    color: isDark
+                                        ? const Color(0xFF666666)
+                                        : const Color(0xFFBBBBBB),
                                     decoration: TextDecoration.lineThrough,
                                   ),
                                 ),
@@ -353,7 +374,11 @@ class _SpecBottomSheetState extends State<SpecBottomSheet>
                           const SizedBox(height: 4),
                           Text(
                             _specText,
-                            style: const TextStyle(fontSize: 11, color: Color(0xFF999999)),
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: isDark
+                                    ? Colors.white54
+                                    : const Color(0xFF999999)),
                           ),
                         ],
                       ),
@@ -364,7 +389,9 @@ class _SpecBottomSheetState extends State<SpecBottomSheet>
                         _QuantityButton(
                           icon: Icons.remove,
                           enabled: _quantity > 1,
-                          activeColor: const Color(0xFFC9CDD4),
+                          activeColor: isDark
+                              ? const Color(0xFF4A4C4D)
+                              : const Color(0xFFC9CDD4),
                           onTap: () => setState(() => _quantity--),
                         ),
                         SizedBox(
@@ -372,10 +399,10 @@ class _SpecBottomSheetState extends State<SpecBottomSheet>
                           child: Center(
                             child: Text(
                               '$_quantity',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFF1D2129),
+                                color: isDark ? Colors.white : const Color(0xFF1D2129),
                               ),
                             ),
                           ),
@@ -403,16 +430,19 @@ class _SpecBottomSheetState extends State<SpecBottomSheet>
                         child: Container(
                           height: 46,
                           decoration: BoxDecoration(
-                            color: const Color(0xFFF2F3F5),
+                            color: isDark
+                                ? const Color(0xFF2E2F30)
+                                : const Color(0xFFF2F3F5),
                             borderRadius: BorderRadius.circular(23),
                           ),
-                          child: const Center(
+                          child: Center(
                             child: Text(
                               '下单',
                               style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w600,
-                                color: Color(0xFF4E5969),
+                                color:
+                                    isDark ? Colors.white70 : const Color(0xFF4E5969),
                               ),
                             ),
                           ),
@@ -475,6 +505,7 @@ class _QuantityButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return GestureDetector(
       onTap: enabled ? onTap : null,
       child: AnimatedContainer(
@@ -482,7 +513,9 @@ class _QuantityButton extends StatelessWidget {
         width: 30,
         height: 30,
         decoration: BoxDecoration(
-          color: enabled ? activeColor : const Color(0xFFF2F3F5),
+          color: enabled
+              ? activeColor
+              : (isDark ? const Color(0xFF2E2F30) : const Color(0xFFF2F3F5)),
           shape: BoxShape.circle,
           boxShadow: enabled
               ? <BoxShadow>[

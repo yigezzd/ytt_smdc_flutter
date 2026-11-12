@@ -16,6 +16,7 @@ import 'package:flutter_deer/routers/fluro_navigator.dart';
 import 'package:flutter_deer/routers/routers.dart';
 import 'package:flutter_deer/util/params_sp_utils.dart';
 import 'package:flutter_deer/util/permission_utils.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:sp_util/sp_util.dart';
 
@@ -286,14 +287,15 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     final double bottomPadding = MediaQuery.of(context).padding.bottom;
     // 键盘弹起时把内容顶到键盘上方，避免输入框被遮挡
     final double keyboardInset = MediaQuery.of(context).viewInsets.bottom;
 
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.only(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF232425) : Colors.white,
+        borderRadius: const BorderRadius.only(
           topLeft: Radius.circular(16),
           topRight: Radius.circular(16),
         ),
@@ -310,7 +312,7 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
                 width: 36,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE5E6EB),
+                  color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -321,12 +323,12 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
               child: Stack(
                 alignment: Alignment.center,
                 children: <Widget>[
-                  const Text(
+                  Text(
                     '开台',
                     style: TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.bold,
-                      color: Color(0xFF1D2129),
+                      color: isDark ? Colors.white : const Color(0xFF1D2129),
                     ),
                   ),
                   Positioned(
@@ -334,12 +336,12 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () => Navigator.of(context).pop(),
-                      child: const Padding(
-                        padding: EdgeInsets.all(6),
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
                         child: Icon(
                           Icons.close,
                           size: 22,
-                          color: Color(0xFF86909C),
+                          color: isDark ? Colors.white54 : const Color(0xFF86909C),
                         ),
                       ),
                     ),
@@ -361,16 +363,16 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
                     FilteringTextInputFormatter.digitsOnly,
                   ],
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 15, color: Color(0xFF1D2129)),
+                  style: TextStyle(fontSize: 15, color: isDark ? Colors.white : const Color(0xFF1D2129)),
                   decoration: InputDecoration(
                     contentPadding: const EdgeInsets.symmetric(vertical: 8),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(6),
-                      borderSide: const BorderSide(color: Color(0xFFE5E6EB)),
+                      borderSide: BorderSide(color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB)),
                     ),
                     enabledBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(6),
-                      borderSide: const BorderSide(color: Color(0xFFE5E6EB)),
+                      borderSide: BorderSide(color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB)),
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(6),
@@ -403,10 +405,14 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
                   children: <Widget>[
                     Text(
                       _serverName,
-                      style: const TextStyle(fontSize: 14, color: Color(0xFF1D2129)),
+                      style: TextStyle(fontSize: 14, color: isDark ? Colors.white : const Color(0xFF1D2129)),
                     ),
                     const SizedBox(width: 4),
-                    const Icon(Icons.chevron_right, size: 18, color: Color(0xFF86909C)),
+                    Icon(
+                      Icons.chevron_right,
+                      size: 18,
+                      color: isDark ? Colors.white54 : const Color(0xFF86909C),
+                    ),
                   ],
                 ),
               ),
@@ -424,16 +430,16 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
                     children: <Widget>[
                       Text(
                         _fjfName,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 14,
-                          color: Color(0xFF1D2129),
+                          color: isDark ? Colors.white : const Color(0xFF1D2129),
                         ),
                       ),
                       const SizedBox(width: 4),
-                      const Icon(
+                      Icon(
                         Icons.chevron_right,
                         size: 18,
-                        color: Color(0xFF86909C),
+                        color: isDark ? Colors.white54 : const Color(0xFF86909C),
                       ),
                     ],
                   ),
@@ -449,18 +455,21 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
                   height: 36,
                   child: TextField(
                     controller: _remarkController,
-                    style: const TextStyle(fontSize: 14, color: Color(0xFF1D2129)),
+                    style: TextStyle(fontSize: 14, color: isDark ? Colors.white : const Color(0xFF1D2129)),
                     decoration: InputDecoration(
                       hintText: '请输入备注',
-                      hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFC9CDD4)),
+                      hintStyle: TextStyle(
+                        fontSize: 13,
+                        color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4),
+                      ),
                       contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(6),
-                        borderSide: const BorderSide(color: Color(0xFFE5E6EB)),
+                        borderSide: BorderSide(color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB)),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(6),
-                        borderSide: const BorderSide(color: Color(0xFFE5E6EB)),
+                        borderSide: BorderSide(color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB)),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(6),
@@ -482,16 +491,16 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
                     child: Container(
                       height: 42,
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF2F3F5),
+                        color: isDark ? const Color(0xFF2E2F30) : const Color(0xFFF2F3F5),
                         borderRadius: BorderRadius.circular(21),
                       ),
-                      child: const Center(
+                      child: Center(
                         child: Text(
                           '点菜',
                           style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w600,
-                            color: Color(0xFF4E5969),
+                            color: isDark ? Colors.white70 : const Color(0xFF4E5969),
                           ),
                         ),
                       ),
@@ -547,7 +556,10 @@ class _OpenTableDialogState extends State<OpenTableDialog> {
       children: <Widget>[
         Text(
           label,
-          style: const TextStyle(fontSize: 14, color: Color(0xFF4E5969)),
+          style: TextStyle(
+            fontSize: 14,
+            color: context.isDark ? Colors.white70 : const Color(0xFF4E5969),
+          ),
         ),
         const SizedBox(width: 4),
         Flexible(child: child),
@@ -588,10 +600,11 @@ class _FjfSelectSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.only(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF232425) : Colors.white,
+        borderRadius: const BorderRadius.only(
           topLeft: Radius.circular(16),
           topRight: Radius.circular(16),
         ),
@@ -612,7 +625,7 @@ class _FjfSelectSheet extends StatelessWidget {
               width: 36,
               height: 4,
               decoration: BoxDecoration(
-                color: const Color(0xFFE5E6EB),
+                color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -623,12 +636,12 @@ class _FjfSelectSheet extends StatelessWidget {
             child: Stack(
               alignment: Alignment.center,
               children: <Widget>[
-                const Text(
+                Text(
                   '选择附加费',
                   style: TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFF1D2129),
+                    color: isDark ? Colors.white : const Color(0xFF1D2129),
                   ),
                 ),
                 Positioned(
@@ -636,12 +649,12 @@ class _FjfSelectSheet extends StatelessWidget {
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: () => Navigator.of(context).pop(),
-                    child: const Padding(
-                      padding: EdgeInsets.all(6),
+                    child: Padding(
+                      padding: const EdgeInsets.all(6),
                       child: Icon(
                         Icons.close,
                         size: 22,
-                        color: Color(0xFF86909C),
+                        color: isDark ? Colors.white54 : const Color(0xFF86909C),
                       ),
                     ),
                   ),
@@ -671,19 +684,21 @@ class _FjfSelectSheet extends StatelessWidget {
                   child: Container(
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: isDark ? const Color(0xFF2E2F30) : Colors.white,
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: selected ? _brandRed : const Color(0xFFE5E6EB),
+                        color: selected
+                            ? _brandRed
+                            : (isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB)),
                       ),
                     ),
                     child: Text(
                       option.name,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 15,
-                        color: Color(0xFF1D2129),
+                        color: isDark ? Colors.white : const Color(0xFF1D2129),
                       ),
                     ),
                   ),

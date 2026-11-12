@@ -50,8 +50,9 @@ Future<bool> checkStockBeforeOrder(
       'qty': item.isWeigh ? item.weighNum : item.qtyValue,
       'specid': item.specid,
       'spec': item.specName,
-      // 服务端将入参原样回传（errlist），用于精确删除购物车行
-      'stockcheckkey': rowKey,
+      // 用 onlyid 承载行标识：服务端按 DetailListBean 反序列化，只原样回传 onlyid 等
+      // 已知字段（自造字段会被丢弃），据此精确删除对应购物车行（对齐 smdcapp checkStock）
+      'onlyid': rowKey,
     });
     if (!item.isCombo) continue;
     for (int j = 0; j < item.combItems.length; j++) {
@@ -65,7 +66,7 @@ Future<bool> checkStockBeforeOrder(
         'qty': child.qty * item.qtyValue,
         'specid': child.specid,
         'spec': child.specname,
-        'stockcheckkey': childKey,
+        'onlyid': childKey,
       });
     }
   }
@@ -82,7 +83,7 @@ Future<bool> checkStockBeforeOrder(
   final List<StockCheckEntry> entries = <StockCheckEntry>[];
   final Set<String> seen = <String>{};
   for (final Map<String, dynamic> e in errs) {
-    String key = e['stockcheckkey']?.toString() ?? '';
+    String key = e['onlyid']?.toString() ?? '';
     if (!rowRefs.containsKey(key)) {
       key = _matchRowKey(rowRefs, e);
       if (key.isEmpty) continue;
@@ -121,7 +122,7 @@ Future<bool> checkStockBeforeOrder(
   return true;
 }
 
-/// 服务端未回传 stockcheckkey 时，按商品+规格兜底匹配购物车行
+/// 服务端未回传 onlyid 时，按商品+规格兜底匹配购物车行
 String _matchRowKey(Map<String, _StockRowRef> rowRefs, Map<String, dynamic> err) {
   final String pid = err['productid']?.toString() ?? '';
   final String specid = err['specid']?.toString() ?? '';

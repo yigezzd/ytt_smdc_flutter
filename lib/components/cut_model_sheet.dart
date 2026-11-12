@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_deer/util/store_mode_utils.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 
 /// 模式切换底部弹窗（对齐 smdcapp CutModelPopup）
 ///
@@ -34,10 +35,11 @@ class _CutModelSheetState extends State<CutModelSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xFFF2F3F5),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF18191A) : const Color(0xFFF2F3F5),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
       ),
       padding: const EdgeInsets.fromLTRB(12, 14, 12, 20),
       child: Column(
@@ -47,21 +49,23 @@ class _CutModelSheetState extends State<CutModelSheet> {
           // 标题行：选择模式 + 关闭按钮
           Row(
             children: <Widget>[
-              const Expanded(
+              Expanded(
                 child: Text(
                   '选择模式',
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFF1D2129),
+                    color: isDark ? Colors.white : const Color(0xFF1D2129),
                   ),
                 ),
               ),
               GestureDetector(
                 onTap: () => Navigator.of(context).pop(),
-                child: const Padding(
-                  padding: EdgeInsets.all(4),
-                  child: Icon(Icons.close, size: 20, color: Color(0xFF86909C)),
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(Icons.close,
+                      size: 20,
+                      color: isDark ? Colors.white54 : const Color(0xFF86909C)),
                 ),
               ),
             ],
@@ -112,6 +116,7 @@ class _ModeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -119,7 +124,7 @@ class _ModeCard extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: isDark ? const Color(0xFF232425) : Colors.white,
           borderRadius: BorderRadius.circular(8),
         ),
         child: Row(
@@ -130,7 +135,9 @@ class _ModeCard extends StatelessWidget {
                   ? Icons.check_circle
                   : Icons.radio_button_unchecked,
               size: 18,
-              color: selected ? const Color(0xFFE63F31) : const Color(0xFFC9CDD4),
+              color: selected
+                  ? const Color(0xFFE63F31)
+                  : (isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4)),
             ),
             const SizedBox(width: 10),
             Column(
@@ -138,18 +145,18 @@ class _ModeCard extends StatelessWidget {
               children: <Widget>[
                 Text(
                   title,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF1D2129),
+                    color: isDark ? Colors.white : const Color(0xFF1D2129),
                   ),
                 ),
                 const SizedBox(height: 3),
                 Text(
                   subtitle,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 12,
-                    color: Color(0xFF86909C),
+                    color: isDark ? Colors.white54 : const Color(0xFF86909C),
                   ),
                 ),
               ],

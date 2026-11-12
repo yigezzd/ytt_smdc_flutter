@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_deer/pages/order/order_repository.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 
 /// 会员搜索弹窗（对齐 smdcapp MemberActivity 会员登录页）
 ///
@@ -67,6 +68,7 @@ class _MemberSearchSheetState extends State<MemberSearchSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     // 键盘弹起时整层上移，避免搜索框/结果列表被系统键盘遮挡
     final double keyboardInset = MediaQuery.of(context).viewInsets.bottom;
     final double maxHeight =
@@ -74,9 +76,9 @@ class _MemberSearchSheetState extends State<MemberSearchSheet> {
     return Container(
       margin: EdgeInsets.only(bottom: keyboardInset),
       constraints: BoxConstraints(maxHeight: maxHeight),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF232425) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -87,15 +89,18 @@ class _MemberSearchSheetState extends State<MemberSearchSheet> {
             width: 36,
             height: 4,
             decoration: BoxDecoration(
-              color: const Color(0xFFE5E6EB),
+              color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
               borderRadius: BorderRadius.circular(2),
             ),
           ),
           // 标题
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
             child: Text('录入会员',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1D2129))),
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : const Color(0xFF1D2129))),
           ),
           // 搜索栏
           Padding(
@@ -110,17 +115,27 @@ class _MemberSearchSheetState extends State<MemberSearchSheet> {
                     onSubmitted: (_) => _doSearch(),
                     decoration: InputDecoration(
                       hintText: '输入卡号/姓名/手机号',
-                      hintStyle: const TextStyle(fontSize: 14, color: Color(0xFFC9CDD4)),
-                      prefixIcon: const Icon(Icons.search, size: 20, color: Color(0xFF86909C)),
+                      hintStyle: TextStyle(
+                          fontSize: 14,
+                          color: isDark
+                              ? const Color(0xFF666666)
+                              : const Color(0xFFC9CDD4)),
+                      prefixIcon: Icon(Icons.search,
+                          size: 20,
+                          color: isDark ? Colors.white54 : const Color(0xFF86909C)),
                       filled: true,
-                      fillColor: const Color(0xFFF7F8FA),
+                      fillColor: isDark
+                          ? const Color(0xFF2E2F30)
+                          : const Color(0xFFF7F8FA),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
                         borderSide: BorderSide.none,
                       ),
                       contentPadding: const EdgeInsets.symmetric(vertical: 10),
                     ),
-                    style: const TextStyle(fontSize: 14, color: Color(0xFF1D2129)),
+                    style: TextStyle(
+                        fontSize: 14,
+                        color: isDark ? Colors.white : const Color(0xFF1D2129)),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -140,7 +155,11 @@ class _MemberSearchSheetState extends State<MemberSearchSheet> {
             ),
           ),
           const SizedBox(height: 10),
-          const Divider(height: 1, color: Color(0xFFF2F3F5)),
+          Divider(
+              height: 1,
+              color: isDark
+                  ? const Color(0xFF3A3C3D)
+                  : const Color(0xFFF2F3F5)),
           // 结果列表
           Flexible(
             child: _buildBody(),
@@ -151,6 +170,7 @@ class _MemberSearchSheetState extends State<MemberSearchSheet> {
   }
 
   Widget _buildBody() {
+    final bool isDark = context.isDark;
     if (_isSearching) {
       return const Center(
         child: Padding(
@@ -165,19 +185,25 @@ class _MemberSearchSheetState extends State<MemberSearchSheet> {
     }
 
     if (!_hasSearched) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.symmetric(vertical: 30),
-          child: Text('输入关键字搜索会员', style: TextStyle(fontSize: 13, color: Color(0xFFC9CDD4))),
+          padding: const EdgeInsets.symmetric(vertical: 30),
+          child: Text('输入关键字搜索会员',
+              style: TextStyle(
+                  fontSize: 13,
+                  color: isDark ? Colors.white54 : const Color(0xFFC9CDD4))),
         ),
       );
     }
 
     if (_results.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.symmetric(vertical: 30),
-          child: Text('没有找到会员', style: TextStyle(fontSize: 13, color: Color(0xFFC9CDD4))),
+          padding: const EdgeInsets.symmetric(vertical: 30),
+          child: Text('没有找到会员',
+              style: TextStyle(
+                  fontSize: 13,
+                  color: isDark ? Colors.white54 : const Color(0xFFC9CDD4))),
         ),
       );
     }
@@ -186,7 +212,11 @@ class _MemberSearchSheetState extends State<MemberSearchSheet> {
       shrinkWrap: true,
       padding: const EdgeInsets.symmetric(vertical: 4),
       itemCount: _results.length,
-      separatorBuilder: (_, __) => const Divider(height: 1, indent: 16, endIndent: 16, color: Color(0xFFF2F3F5)),
+      separatorBuilder: (_, __) => Divider(
+          height: 1,
+          indent: 16,
+          endIndent: 16,
+          color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF2F3F5)),
       itemBuilder: (BuildContext context, int index) {
         final VipMember member = _results[index];
         return _buildMemberItem(member);
@@ -195,6 +225,7 @@ class _MemberSearchSheetState extends State<MemberSearchSheet> {
   }
 
   Widget _buildMemberItem(VipMember member) {
+    final bool isDark = context.isDark;
     return InkWell(
       onTap: () => Navigator.pop(context, member),
       child: Padding(
@@ -206,7 +237,7 @@ class _MemberSearchSheetState extends State<MemberSearchSheet> {
               width: 38,
               height: 38,
               decoration: BoxDecoration(
-                color: const Color(0xFFFFF1F0),
+                color: isDark ? const Color(0xFF3A2624) : const Color(0xFFFFF1F0),
                 borderRadius: BorderRadius.circular(19),
               ),
               child: const Center(
@@ -223,13 +254,18 @@ class _MemberSearchSheetState extends State<MemberSearchSheet> {
                     children: <Widget>[
                       Text(
                         member.vipname,
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500, color: Color(0xFF1D2129)),
+                        style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w500,
+                            color: isDark ? Colors.white : const Color(0xFF1D2129)),
                       ),
                       const SizedBox(width: 6),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFFFF7E8),
+                          color: isDark
+                              ? const Color(0xFF3A3324)
+                              : const Color(0xFFFFF7E8),
                           borderRadius: BorderRadius.circular(3),
                         ),
                         child: Text(
@@ -242,12 +278,16 @@ class _MemberSearchSheetState extends State<MemberSearchSheet> {
                   const SizedBox(height: 3),
                   Text(
                     '卡号：${member.vipno}  余额：¥${_formatAmt(member.nowmoney)}  积分：${_formatAmt(member.nowpoint)}',
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF86909C)),
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? Colors.white54 : const Color(0xFF86909C)),
                   ),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, size: 18, color: Color(0xFFC9CDD4)),
+            Icon(Icons.chevron_right,
+                size: 18,
+                color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4)),
           ],
         ),
       ),

@@ -83,9 +83,11 @@ class _AuthPermissionDialogState extends State<AuthPermissionDialog> {
                 ),
                 GestureDetector(
                   onTap: () => Navigator.pop(context, false),
-                  child: const Padding(
-                    padding: EdgeInsets.all(4),
-                    child: Icon(Icons.close, size: 18, color: Color(0xFF999999)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(Icons.close,
+                        size: 18,
+                        color: isDark ? Colors.white54 : const Color(0xFF999999)),
                   ),
                 ),
               ],
@@ -160,13 +162,17 @@ class _AuthPermissionDialogState extends State<AuthPermissionDialog> {
   }) {
     return InputDecoration(
       hintText: hintText,
-      hintStyle: const TextStyle(fontSize: 14, color: Color(0xFFC9CDD4)),
+      hintStyle: TextStyle(
+          fontSize: 14,
+          color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4)),
       filled: true,
       fillColor: isDark ? const Color(0xFF3A3A3C) : const Color(0xFFF7F8FA),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: Color(0xFFE5E6EB), width: 1),
+        borderSide: BorderSide(
+            color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB),
+            width: 1),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(8),
@@ -176,6 +182,7 @@ class _AuthPermissionDialogState extends State<AuthPermissionDialog> {
   }
 
   Widget _buildTabButton(String label, bool selected, VoidCallback onTap) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     return Expanded(
       child: GestureDetector(
         onTap: onTap,
@@ -183,7 +190,9 @@ class _AuthPermissionDialogState extends State<AuthPermissionDialog> {
           height: 38,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: selected ? const Color(0xFFE63F31) : const Color(0xFFF2F3F5),
+            color: selected
+                ? const Color(0xFFE63F31)
+                : (isDark ? const Color(0xFF3A3A3C) : const Color(0xFFF2F3F5)),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Text(
@@ -192,7 +201,9 @@ class _AuthPermissionDialogState extends State<AuthPermissionDialog> {
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
-              color: selected ? Colors.white : const Color(0xFF4E5969),
+              color: selected
+                  ? Colors.white
+                  : (isDark ? Colors.white70 : const Color(0xFF4E5969)),
             ),
           ),
         ),

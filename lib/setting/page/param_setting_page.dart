@@ -6,6 +6,7 @@ import 'package:flutter_deer/net/http_api.dart';
 import 'package:flutter_deer/net/http_helper.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/routers/fluro_navigator.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:sp_util/sp_util.dart';
 
@@ -194,18 +195,20 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
+    final Color textColor = isDark ? Colors.white : Colors.black87;
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
+      backgroundColor: isDark ? const Color(0xFF18191A) : const Color(0xFFF5F5F5),
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: isDark ? const Color(0xFF232425) : Colors.white,
         elevation: 0.5,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios, size: 20, color: Colors.black87),
+          icon: Icon(Icons.arrow_back_ios, size: 20, color: textColor),
           onPressed: () => NavigatorUtils.goBack(context),
         ),
-        title: const Text(
+        title: Text(
           '参数设置',
-          style: TextStyle(color: Colors.black87, fontSize: 17, fontWeight: FontWeight.bold),
+          style: TextStyle(color: textColor, fontSize: 17, fontWeight: FontWeight.bold),
         ),
         centerTitle: true,
       ),
@@ -252,6 +255,7 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
   }
 
   Widget _buildSection(String title, List<Widget> children) {
+    final bool isDark = context.isDark;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -259,12 +263,15 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
           padding: const EdgeInsets.only(left: 4, bottom: 6),
           child: Text(
             title,
-            style: const TextStyle(fontSize: 13, color: Color(0xFF999999)),
+            style: TextStyle(
+              fontSize: 13,
+              color: isDark ? Colors.white70 : const Color(0xFF999999),
+            ),
           ),
         ),
         Container(
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: isDark ? const Color(0xFF232425) : Colors.white,
             borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
@@ -276,21 +283,28 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
   }
 
   Widget _buildServerTypeItem() {
+    final bool isDark = context.isDark;
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          const Text(
+          Text(
             '服务连接方式',
-            style: TextStyle(fontSize: 15, color: Color(0xFF333333)),
+            style: TextStyle(
+              fontSize: 15,
+              color: isDark ? Colors.white : const Color(0xFF333333),
+            ),
           ),
           const SizedBox(height: 6),
           Text(
             ConnectionManager.isServerTypeManaged
                 ? '后台统一管理，不可修改'
                 : '修改后重新登录生效',
-            style: const TextStyle(fontSize: 12, color: Color(0xFF999999)),
+            style: TextStyle(
+              fontSize: 12,
+              color: isDark ? Colors.white70 : const Color(0xFF999999),
+            ),
           ),
           const SizedBox(height: 12),
           Wrap(
@@ -308,6 +322,7 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
   }
 
   Widget _buildServerTypeOption(String title, String type) {
+    final bool isDark = context.isDark;
     final bool selected = _serverType == type;
     return ChoiceChip(
       label: Text(title),
@@ -315,19 +330,22 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
       onSelected: (_) => _selectServerType(type),
       showCheckmark: false,
       selectedColor: const Color(0xFFE13426),
-      backgroundColor: Colors.white,
+      backgroundColor: isDark ? const Color(0xFF2E2F30) : Colors.white,
       labelStyle: TextStyle(
         fontSize: 14,
-        color: selected ? Colors.white : const Color(0xFF333333),
+        color: selected ? Colors.white : (isDark ? Colors.white70 : const Color(0xFF333333)),
       ),
       side: BorderSide(
-        color: selected ? const Color(0xFFE13426) : const Color(0xFFE5E5E5),
+        color: selected
+            ? const Color(0xFFE13426)
+            : (isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E5E5)),
       ),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
     );
   }
 
   Widget _buildSwitchItem(String title, bool value, ValueChanged<bool> onChanged) {
+    final bool isDark = context.isDark;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
@@ -337,7 +355,10 @@ class _ParamSettingPageState extends State<ParamSettingPage> {
               padding: const EdgeInsets.symmetric(vertical: 12),
               child: Text(
                 title,
-                style: const TextStyle(fontSize: 15, color: Color(0xFF333333)),
+                style: TextStyle(
+                  fontSize: 15,
+                  color: isDark ? Colors.white : const Color(0xFF333333),
+                ),
               ),
             ),
           ),

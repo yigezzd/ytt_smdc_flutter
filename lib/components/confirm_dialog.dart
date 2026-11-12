@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:flutter_deer/util/toast_utils.dart';
+
 /// 品牌红（全局统一）
 const Color _kBrandRed = Color(0xFFE63F31);
 
@@ -305,6 +307,8 @@ class InputDialog extends StatefulWidget {
     this.autoSelectAll = false,
     this.submitOnEnter = false,
     this.obscureText = false,
+    this.required = false,
+    this.requiredMessage,
   });
 
   /// 弹窗标题
@@ -346,6 +350,12 @@ class InputDialog extends StatefulWidget {
   /// 密码输入（消费密码等敏感内容以圆点显示）
   final bool obscureText;
 
+  /// 是否必填：为 true 时输入为空点确定会提示且不关闭（对齐 smdcapp 原因必填 mustTypes）
+  final bool required;
+
+  /// 必填校验未通过时的提示文案（默认"请输入内容"）
+  final String? requiredMessage;
+
   /// 弹出输入弹窗，返回输入的文本；返回 null 表示取消
   ///
   /// [barrierDismissible] 默认 false：输入框弹窗点遮罩不关闭，
@@ -366,6 +376,8 @@ class InputDialog extends StatefulWidget {
     bool autoSelectAll = false,
     bool submitOnEnter = false,
     bool obscureText = false,
+    bool required = false,
+    String? requiredMessage,
   }) {
     return showDialog<String>(
       context: context,
@@ -384,6 +396,8 @@ class InputDialog extends StatefulWidget {
         autoSelectAll: autoSelectAll,
         submitOnEnter: submitOnEnter,
         obscureText: obscureText,
+        required: required,
+        requiredMessage: requiredMessage,
       ),
     );
   }
@@ -435,7 +449,12 @@ class _InputDialogState extends State<InputDialog> {
   }
 
   void _submit() {
-    Navigator.of(context).pop(_controller.text.trim());
+    final String text = _controller.text.trim();
+    if (widget.required && text.isEmpty) {
+      Toast.show(widget.requiredMessage ?? '请输入内容');
+      return;
+    }
+    Navigator.of(context).pop(text);
   }
 
   /// 找零金额（未超出应收时为 null）
@@ -561,7 +580,7 @@ class _InputDialogState extends State<InputDialog> {
               Expanded(
                 child: DialogActionButton(
                   text: widget.confirmText,
-                  onTap: () => Navigator.of(context).pop(_controller.text.trim()),
+                  onTap: _submit,
                 ),
               ),
             ],

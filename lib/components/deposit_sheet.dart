@@ -13,6 +13,7 @@ import 'package:flutter_deer/pages/order/pay_scan_page.dart';
 import 'package:flutter_deer/pages/order/scan_pay_dialog.dart';
 import 'package:flutter_deer/res/constant.dart';
 import 'package:flutter_deer/util/print_service.dart';
+import 'package:flutter_deer/util/theme_utils.dart';
 import 'package:flutter_deer/util/toast_utils.dart';
 import 'package:intl/intl.dart';
 import 'package:sp_util/sp_util.dart';
@@ -162,11 +163,12 @@ class _DepositSheetState extends State<DepositSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     final String payName = _selectedPay?['name']?.toString() ?? '现金';
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF232425) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
       ),
       child: SafeArea(
         top: false,
@@ -180,7 +182,9 @@ class _DepositSheetState extends State<DepositSheet> {
                 child: Container(
                   margin: const EdgeInsets.only(top: 10),
                   width: 36, height: 4,
-                  decoration: BoxDecoration(color: const Color(0xFFE5E6EB), borderRadius: BorderRadius.circular(2)),
+                  decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
+                      borderRadius: BorderRadius.circular(2)),
                 ),
               ),
               const SizedBox(height: 14),
@@ -188,17 +192,24 @@ class _DepositSheetState extends State<DepositSheet> {
                 children: <Widget>[
                   Expanded(
                     child: Text('交押金 - ${widget.tableName}',
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: isDark ? Colors.white : null)),
                   ),
                   IconButton(
                     onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close, size: 20, color: Color(0xFFC9CDD4)),
+                    icon: Icon(Icons.close,
+                        size: 20,
+                        color: isDark ? Colors.white38 : const Color(0xFFC9CDD4)),
                   ),
                 ],
               ),
               const SizedBox(height: 12),
-              const Text('押金金额',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF86909C))),
+              Text('押金金额',
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: isDark ? Colors.white54 : const Color(0xFF86909C))),
               const SizedBox(height: 8),
               // 金额输入（样式对齐 InputDialog：浅灰底 + 圆角 + 聚焦品牌红描边）
               TextField(
@@ -208,22 +219,30 @@ class _DepositSheetState extends State<DepositSheet> {
                 inputFormatters: <TextInputFormatter>[
                   FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
                 ],
-                style: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF1D2129)),
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: isDark ? Colors.white : const Color(0xFF1D2129)),
                 decoration: InputDecoration(
                   isDense: true,
                   hintText: '0.00',
-                  hintStyle: const TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.normal, color: Color(0xFFC9CDD4)),
+                  hintStyle: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.normal,
+                      color: isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4)),
                   prefixText: '¥ ',
-                  prefixStyle: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF1D2129)),
+                  prefixStyle: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.white : const Color(0xFF1D2129)),
                   filled: true,
-                  fillColor: const Color(0xFFF7F8FA),
+                  fillColor: isDark ? const Color(0xFF2E2F30) : const Color(0xFFF7F8FA),
                   contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                   enabledBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
-                    borderSide: const BorderSide(color: Color(0xFFE5E6EB), width: 1),
+                    borderSide: BorderSide(
+                        color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB),
+                        width: 1),
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
@@ -238,17 +257,24 @@ class _DepositSheetState extends State<DepositSheet> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
                   decoration: BoxDecoration(
-                    border: Border.all(color: const Color(0xFFE5E6EB)),
+                    border: Border.all(
+                        color: isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB)),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
                     children: <Widget>[
-                      const Text('支付方式', style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
+                      Text('支付方式',
+                          style: TextStyle(
+                              fontSize: 14,
+                              color: isDark ? Colors.white70 : const Color(0xFF4E5969))),
                       const Spacer(),
                       Text(payName,
-                          style: const TextStyle(
-                              fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF1D2129))),
-                      const Icon(Icons.chevron_right, size: 18, color: Color(0xFFC9CDD4)),
+                          style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: isDark ? Colors.white : const Color(0xFF1D2129))),
+                      Icon(Icons.chevron_right,
+                          size: 18, color: isDark ? Colors.white38 : const Color(0xFFC9CDD4)),
                     ],
                   ),
                 ),
@@ -258,7 +284,10 @@ class _DepositSheetState extends State<DepositSheet> {
               Row(
                 children: <Widget>[
                   const Spacer(),
-                  const Text('打印押金单', style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
+                  Text('打印押金单',
+                      style: TextStyle(
+                          fontSize: 14,
+                          color: isDark ? Colors.white70 : const Color(0xFF4E5969))),
                   const SizedBox(width: 6),
                   Switch(
                     value: _printBill,
@@ -300,10 +329,11 @@ class _DepositSheetState extends State<DepositSheet> {
       context: context,
       backgroundColor: Colors.transparent,
       builder: (BuildContext ctx) {
+        final bool isDark = ctx.isDark;
         return Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF232425) : Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
           ),
           child: SafeArea(
             top: false,
@@ -311,10 +341,19 @@ class _DepositSheetState extends State<DepositSheet> {
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 const SizedBox(height: 10),
-                Container(width: 36, height: 4, decoration: BoxDecoration(color: const Color(0xFFE5E6EB), borderRadius: BorderRadius.circular(2))),
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  child: Text('选择支付方式', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
+                        borderRadius: BorderRadius.circular(2))),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text('选择支付方式',
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? Colors.white : null)),
                 ),
                 const Divider(height: 1),
                 Flexible(
@@ -330,7 +369,9 @@ class _DepositSheetState extends State<DepositSheet> {
                             style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-                                color: selected ? _kBrandRed : const Color(0xFF1D2129))),
+                                color: selected
+                                    ? _kBrandRed
+                                    : (isDark ? Colors.white : const Color(0xFF1D2129)))),
                         trailing: selected
                             ? const Icon(Icons.check, size: 18, color: _kBrandRed)
                             : null,
@@ -693,17 +734,23 @@ class _DepositRecordSheetState extends State<_DepositRecordSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isDark = context.isDark;
     return Container(
       height: MediaQuery.of(context).size.height * 0.65,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF232425) : Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
       ),
       child: Column(
         children: <Widget>[
           const SizedBox(height: 10),
           Center(
-            child: Container(width: 36, height: 4, decoration: BoxDecoration(color: const Color(0xFFE5E6EB), borderRadius: BorderRadius.circular(2))),
+            child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF3A3C3D) : const Color(0xFFE5E6EB),
+                    borderRadius: BorderRadius.circular(2))),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
@@ -712,10 +759,17 @@ class _DepositRecordSheetState extends State<_DepositRecordSheet> {
                 Expanded(
                   child: Text(
                     widget.tableName.isNotEmpty ? '押金记录-${widget.tableName}' : '押金记录',
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: isDark ? Colors.white : null),
                   ),
                 ),
-                IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close, size: 20, color: Color(0xFFC9CDD4))),
+                IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: Icon(Icons.close,
+                        size: 20,
+                        color: isDark ? Colors.white38 : const Color(0xFFC9CDD4))),
               ],
             ),
           ),
@@ -724,11 +778,14 @@ class _DepositRecordSheetState extends State<_DepositRecordSheet> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : ColoredBox(
-                    color: const Color(0xFFF9F9F9),
+                    color: isDark ? const Color(0xFF18191A) : const Color(0xFFF9F9F9),
                     child: _records.isEmpty
-                        ? const Center(
+                        ? Center(
                             child: Text('暂无押金记录',
-                                style: TextStyle(color: Color(0xFF999999))))
+                                style: TextStyle(
+                                    color: isDark
+                                        ? Colors.white54
+                                        : const Color(0xFF999999))))
                         : ListView.builder(
                             padding: const EdgeInsets.only(top: 10),
                             itemCount: _records.length,
@@ -744,6 +801,7 @@ class _DepositRecordSheetState extends State<_DepositRecordSheet> {
 
   /// 单条押金记录卡片（对齐 smdcapp yj_order_item.xml + YJOrderActivity.onBind）
   Widget _buildRecord(Map<String, dynamic> r) {
+    final bool isDark = context.isDark;
     final int status = _toInt(r['status']);
     final double payamt = _toDouble(r['payamt']);
     final double refundamt = _toDouble(r['refundamt']);
@@ -756,7 +814,7 @@ class _DepositRecordSheetState extends State<_DepositRecordSheet> {
       margin: const EdgeInsets.fromLTRB(10, 0, 10, 10),
       padding: const EdgeInsets.fromLTRB(16, 10, 18, 10),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isDark ? const Color(0xFF232425) : Colors.white,
         borderRadius: BorderRadius.circular(5),
       ),
       child: Column(
@@ -813,7 +871,7 @@ class _DepositRecordSheetState extends State<_DepositRecordSheet> {
                 child: OutlinedButton(
                   onPressed: _refunding ? null : () => _reprint(r),
                   style: OutlinedButton.styleFrom(
-                    backgroundColor: Colors.white,
+                    backgroundColor: isDark ? const Color(0xFF2E2F30) : Colors.white,
                     foregroundColor: _kBrandRed,
                     side: const BorderSide(color: _kBrandRed),
                     padding: EdgeInsets.zero,
@@ -852,7 +910,9 @@ class _DepositRecordSheetState extends State<_DepositRecordSheet> {
 
   Widget _recordText(String text) => Text(
         text,
-        style: const TextStyle(fontSize: 14, color: Color(0xFF333333)),
+        style: TextStyle(
+            fontSize: 14,
+            color: context.isDark ? Colors.white70 : const Color(0xFF333333)),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       );

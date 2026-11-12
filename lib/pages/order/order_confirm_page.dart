@@ -131,6 +131,33 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     return tmpSaleid.isNotEmpty ? tmpSaleid : widget.saleid;
   }
 
+  bool get _isDark => Theme.of(context).brightness == Brightness.dark;
+
+  Color get _pageBg => _isDark ? const Color(0xFF18191A) : const Color(0xFFF5F6F8);
+
+  Color get _cardBg => _isDark ? const Color(0xFF232425) : Colors.white;
+
+  Color get _divider => _isDark ? const Color(0xFF3A3C3D) : const Color(0xFFF2F3F5);
+
+  Color get _line => _isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB);
+
+  Color get _softBg => _isDark ? const Color(0xFF2E2F30) : const Color(0xFFF7F8FA);
+
+  Color get _refundedBg => _isDark ? const Color(0xFF2E2F30) : const Color(0xFFEAEEF6);
+
+  Color get _redSoftBg => _isDark ? const Color(0xFF3A2422) : const Color(0xFFFFF1F0);
+
+  Color get _textPrimary => _isDark ? Colors.white : const Color(0xFF1D2129);
+
+  Color get _textSecondary => _isDark ? Colors.white70 : const Color(0xFF4E5969);
+
+  Color get _textHint => _isDark ? Colors.white54 : const Color(0xFF86909C);
+
+  Color get _textPlaceholder => _isDark ? const Color(0xFF666666) : const Color(0xFFC9CDD4);
+
+  Color get _cardShadow =>
+      _isDark ? Colors.transparent : const Color(0xFF1D2129).withValues(alpha: 0.04);
+
   @override
   void initState() {
     super.initState();
@@ -2286,6 +2313,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       title: '整单备注',
       hintText: '输入整单备注…',
       initialValue: _orderRemark,
+      required: ParamsSpUtils.isRemarkMust('01'),
+      requiredMessage: '请输入整单备注',
     );
     if (result != null) {
       setState(() => _orderRemark = result);
@@ -2299,9 +2328,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       backgroundColor: Colors.transparent,
       builder: (BuildContext ctx) {
         return Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+          decoration: BoxDecoration(
+            color: _cardBg,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
           ),
           child: SafeArea(
             child: Column(
@@ -2312,13 +2341,15 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                   width: 36,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFE5E6EB),
+                    color: _line,
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 14),
-                  child: Text('操作', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  child: Text('操作',
+                      style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.bold, color: _textPrimary)),
                 ),
                 _OperationItem(
                     icon: Icons.lock_open,
@@ -2391,7 +2422,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                       _deleteWholeOrder();
                     }),
                 const SizedBox(height: 8),
-                Container(height: 8, color: const Color(0xFFF5F6F8)),
+                Container(height: 8, color: _pageBg),
                 _OperationItem(icon: Icons.close, label: '取消', onTap: () => Navigator.pop(ctx)),
                 const SizedBox(height: 10),
               ],
@@ -2630,30 +2661,30 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
   /// 标题栏：返回箭头 + "桌台名--订单确认"
   Widget _buildTitleBar() {
     return Container(
-      color: Colors.white,
+      color: _cardBg,
       child: SafeArea(
         bottom: false,
         child: Container(
           height: 46,
-          decoration: const BoxDecoration(
-            border: Border(bottom: BorderSide(color: Color(0xFFF0F0F0), width: 0.5)),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: _divider, width: 0.5)),
           ),
           child: Row(
             children: <Widget>[
               IconButton(
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 46, minHeight: 46),
-                icon: const Icon(Icons.arrow_back_ios_new, size: 17, color: Color(0xFF1D2129)),
+                icon: Icon(Icons.arrow_back_ios_new, size: 17, color: _textPrimary),
                 onPressed: () => NavigatorUtils.goBack(context),
               ),
               Expanded(
                 child: Text(
                   // 对齐 smdcapp OrderFastDetailActivity3：快餐模式标题为“订单详情”
                   widget.fastMode ? '订单详情' : '${widget.tableName}--订单确认',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF1D2129),
+                    color: _textPrimary,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -2671,11 +2702,11 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: _cardBg,
         borderRadius: BorderRadius.circular(12),
         boxShadow: <BoxShadow>[
           BoxShadow(
-            color: const Color(0xFF1D2129).withValues(alpha: 0.04),
+            color: _cardShadow,
             blurRadius: 10,
             offset: const Offset(0, 2),
           ),
@@ -2686,20 +2717,20 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
           // ── 合计金额区（浅红渐变突出） ──
           Container(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
-                colors: <Color>[Color(0xFFFFF7F5), Colors.white],
+                colors: <Color>[_isDark ? const Color(0xFF2A1F1D) : const Color(0xFFFFF7F5), _cardBg],
               ),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
             ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: <Widget>[
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 3),
-                  child: Text('合计', style: TextStyle(fontSize: 13, color: Color(0xFF86909C))),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 3),
+                  child: Text('合计', style: TextStyle(fontSize: 13, color: _textHint)),
                 ),
                 const SizedBox(width: 10),
                 Text(
@@ -2716,7 +2747,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                   margin: const EdgeInsets.only(bottom: 2),
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFFFF1F0),
+                    color: _redSoftBg,
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
@@ -2728,7 +2759,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
               ],
             ),
           ),
-          const Divider(height: 1, indent: 16, endIndent: 16, color: Color(0xFFF2F3F5)),
+          Divider(height: 1, indent: 16, endIndent: 16, color: _divider),
           // ── 整单备注行 ──
           GestureDetector(
             onTap: _showRemarkDialog,
@@ -2737,18 +2768,16 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
               child: Row(
                 children: <Widget>[
-                  const Icon(Icons.edit_note, size: 18, color: Color(0xFFC9CDD4)),
+                  Icon(Icons.edit_note, size: 18, color: _textPlaceholder),
                   const SizedBox(width: 6),
-                  const Text('整单备注', style: TextStyle(fontSize: 13, color: Color(0xFF4E5969))),
+                  Text('整单备注', style: TextStyle(fontSize: 13, color: _textSecondary)),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Text(
                       _orderRemark.isNotEmpty ? _orderRemark : '点击添加备注',
                       style: TextStyle(
                         fontSize: 13,
-                        color: _orderRemark.isNotEmpty
-                            ? const Color(0xFF1D2129)
-                            : const Color(0xFFC9CDD4),
+                        color: _orderRemark.isNotEmpty ? _textPrimary : _textPlaceholder,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -2756,7 +2785,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                     ),
                   ),
                   const SizedBox(width: 2),
-                  const Icon(Icons.chevron_right, size: 16, color: Color(0xFFC9CDD4)),
+                  Icon(Icons.chevron_right, size: 16, color: _textPlaceholder),
                 ],
               ),
             ),
@@ -2781,11 +2810,11 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: _cardBg,
         borderRadius: BorderRadius.circular(12),
         boxShadow: <BoxShadow>[
           BoxShadow(
-            color: const Color(0xFF1D2129).withValues(alpha: 0.04),
+            color: _cardShadow,
             blurRadius: 10,
             offset: const Offset(0, 2),
           ),
@@ -2794,7 +2823,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       child: TabBar(
         controller: _tabController,
         labelColor: _kBrandRed,
-        unselectedLabelColor: const Color(0xFF86909C),
+        unselectedLabelColor: _textHint,
         labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
         unselectedLabelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.normal),
         indicatorColor: _kBrandRed,
@@ -2817,9 +2846,12 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
             Icon(Icons.receipt_long_outlined,
-                size: 44, color: const Color(0xFF1D2129).withValues(alpha: 0.15)),
+                size: 44,
+                color: _isDark
+                    ? Colors.white.withValues(alpha: 0.15)
+                    : const Color(0xFF1D2129).withValues(alpha: 0.15)),
             const SizedBox(height: 8),
-            const Text('暂无商品', style: TextStyle(fontSize: 13, color: Color(0xFFC9CDD4))),
+            Text('暂无商品', style: TextStyle(fontSize: 13, color: _textPlaceholder)),
           ],
         ),
       );
@@ -2829,7 +2861,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
       padding: const EdgeInsets.symmetric(vertical: 6),
       itemCount: items.length,
       separatorBuilder: (_, __) =>
-          const Divider(height: 1, indent: 14, endIndent: 14, color: Color(0xFFF2F3F5)),
+          Divider(height: 1, indent: 14, endIndent: 14, color: _divider),
       itemBuilder: (BuildContext context, int index) {
         final CartItem item = items[index];
         return _buildItemRow(item, editable: editable, isOrdered: isOrdered);
@@ -2879,7 +2911,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
     final double originTotal = item.originTotalPrice;
 
     final Widget mainRow = Container(
-      color: refunded ? const Color(0xFFEAEEF6) : null,
+      color: refunded ? _refundedBg : null,
       padding: EdgeInsets.fromLTRB(14, 12, 14, item.isBag || cookDesc.isNotEmpty ? 4 : 12),
       child: Row(
         children: <Widget>[
@@ -2897,8 +2929,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                     Flexible(
                       child: Text(
                         item.displayName,
-                        style: const TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w500, color: Color(0xFF1D2129)),
+                        style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w500, color: _textPrimary),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -2921,7 +2953,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                       if (skuDesc.isNotEmpty) skuDesc,
                       if (item.cartRemark.isNotEmpty) '备注:${item.cartRemark}'
                     ].join(' | '),
-                    style: const TextStyle(fontSize: 11, color: Color(0xFFC9CDD4)),
+                    style: TextStyle(fontSize: 11, color: _textPlaceholder),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -2936,9 +2968,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
               if (showOrigin)
                 Text(
                   '¥${_formatPrice(originTotal)}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
-                    color: Color(0xFF9C9C9C),
+                    color: _isDark ? Colors.white38 : const Color(0xFF9C9C9C),
                     decoration: TextDecoration.lineThrough,
                   ),
                 ),
@@ -2949,7 +2981,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w600,
-                  color: refunded ? const Color(0xFF86909C) : const Color(0xFF1D2129),
+                  color: refunded ? _textHint : _textPrimary,
                 ),
               ),
             ],
@@ -2960,13 +2992,13 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: const Color(0xFFF7F8FA),
+                color: _softBg,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Text(
                 '×${item.weighNum == item.weighNum.roundToDouble() ? item.weighNum.toInt().toString() : item.weighNum.toString()}',
-                style: const TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF86909C)),
+                style: TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w500, color: _textHint),
               ),
             )
           else if (editable)
@@ -2981,9 +3013,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                     height: 26,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      border: Border.all(color: const Color(0xFFE5E6EB), width: 1.2),
+                      border: Border.all(color: _line, width: 1.2),
                     ),
-                    child: const Icon(Icons.remove, size: 13, color: Color(0xFF86909C)),
+                    child: Icon(Icons.remove, size: 13, color: _textHint),
                   ),
                 ),
                 SizedBox(
@@ -2991,8 +3023,8 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                   child: Center(
                     child: Text(
                       _fmtQtyValue(item.qtyValue),
-                      style: const TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF1D2129)),
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.bold, color: _textPrimary),
                     ),
                   ),
                 ),
@@ -3018,12 +3050,12 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: const Color(0xFFF7F8FA),
+                color: _softBg,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Text('x${_fmtQtyValue(item.qtyValue)}',
-                  style: const TextStyle(
-                      fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF86909C))),
+                  style: TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w500, color: _textHint)),
             ),
           const SizedBox(width: 6),
           // 三点菜单（待下单→待下单菜单；已下单→已下单菜单，对齐 smdcapp 两套菜单）
@@ -3034,10 +3066,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF7F8FA),
+                  color: _softBg,
                   borderRadius: BorderRadius.circular(18),
                 ),
-                child: const Icon(Icons.more_horiz, size: 20, color: Color(0xFF86909C)),
+                child: Icon(Icons.more_horiz, size: 20, color: _textHint),
               ),
             ),
         ],
@@ -3050,7 +3082,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         if (item.isBag || cookDesc.isNotEmpty)
           Container(
             width: double.infinity,
-            color: refunded ? const Color(0xFFEAEEF6) : null,
+            color: refunded ? _refundedBg : null,
             padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -3059,17 +3091,19 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                   Text.rich(
                     TextSpan(
                       children: <InlineSpan>[
-                        const TextSpan(
+                        TextSpan(
                           text: '做法：',
                           style: TextStyle(
-                            color: Color(0xFF333333),
+                            color: _isDark ? Colors.white70 : const Color(0xFF333333),
                             fontWeight: FontWeight.w600,
                           ),
                         ),
                         TextSpan(text: cookDesc),
                       ],
                     ),
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF666666)),
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: _isDark ? Colors.white54 : const Color(0xFF666666)),
                   ),
               ],
             ),
@@ -3077,9 +3111,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
         if (item.isCombo) ...<Widget>[
           for (int i = 0; i < item.combItems.length; i++) ...<Widget>[
             if (i > 0)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 6),
-                child: Divider(height: 1, indent: 26, endIndent: 14, color: Color(0xFFF2F3F5)),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Divider(height: 1, indent: 26, endIndent: 14, color: _divider),
               ),
             _buildCombChildRow(item.combItems[i], item),
           ],
@@ -3119,18 +3153,22 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                     name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF666666)),
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: _isDark ? Colors.white54 : const Color(0xFF666666)),
                   ),
                 ),
                 // 明细做法加价（对齐 smdcapp tvSellPrice = ￥cookaddamt）
                 Text(
                   '￥${_formatPrice(c.cookExtra)}',
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF666666)),
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: _isDark ? Colors.white54 : const Color(0xFF666666)),
                 ),
                 const SizedBox(width: 10),
                 Text(
                   'x ${_formatPrice(c.qty * item.qtyValue)}',
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF1D2129)),
+                  style: TextStyle(fontSize: 12, color: _textPrimary),
                 ),
               ],
             ),
@@ -3141,10 +3179,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                 child: Text.rich(
                   TextSpan(
                     children: <InlineSpan>[
-                      const TextSpan(
+                      TextSpan(
                         text: '做法：',
                         style: TextStyle(
-                          color: Color(0xFF333333),
+                          color: _isDark ? Colors.white70 : const Color(0xFF333333),
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -3153,7 +3191,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF666666)),
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: _isDark ? Colors.white54 : const Color(0xFF666666)),
                 ),
               ),
           ],
@@ -3627,10 +3667,10 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
   Widget _buildBottomBar() {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: _cardBg,
         boxShadow: <BoxShadow>[
           BoxShadow(
-            color: const Color(0xFF1D2129).withValues(alpha: 0.05),
+            color: _isDark ? Colors.transparent : const Color(0xFF1D2129).withValues(alpha: 0.05),
             blurRadius: 8,
             offset: const Offset(0, -2),
           ),
@@ -3650,33 +3690,33 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: <Widget>[
-                        const Text('出品单', style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
+                        Text('出品单', style: TextStyle(fontSize: 14, color: _textSecondary)),
                         const SizedBox(width: 2),
                         Switch(
                           value: _printCpd,
                           activeThumbColor: Colors.white,
                           activeTrackColor: const Color(0xFF00BFA5),
                           inactiveThumbColor: Colors.white,
-                          inactiveTrackColor: const Color(0xFFE5E6EB),
+                          inactiveTrackColor: _line,
                           onChanged: (bool v) => setState(() => _printCpd = v),
                         ),
                       ],
                     ),
                   ),
-                  Container(width: 0.5, height: 16, color: const Color(0xFFE5E6EB)),
+                  Container(width: 0.5, height: 16, color: _line),
                   Expanded(
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: <Widget>[
-                        const Text('出品分单',
-                            style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
+                        Text('出品分单',
+                            style: TextStyle(fontSize: 14, color: _textSecondary)),
                         const SizedBox(width: 2),
                         Switch(
                           value: _printCpdBranch,
                           activeThumbColor: Colors.white,
                           activeTrackColor: const Color(0xFF00BFA5),
                           inactiveThumbColor: Colors.white,
-                          inactiveTrackColor: const Color(0xFFE5E6EB),
+                          inactiveTrackColor: _line,
                           onChanged: (bool v) {
                             SpUtil.putBool('ENABLE_CPD_BRANCH', v);
                             setState(() => _printCpdBranch = v);
@@ -3685,19 +3725,19 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                       ],
                     ),
                   ),
-                  Container(width: 0.5, height: 16, color: const Color(0xFFE5E6EB)),
+                  Container(width: 0.5, height: 16, color: _line),
                   Expanded(
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: <Widget>[
-                        const Text('客单', style: TextStyle(fontSize: 14, color: Color(0xFF4E5969))),
+                        Text('客单', style: TextStyle(fontSize: 14, color: _textSecondary)),
                         const SizedBox(width: 2),
                         Switch(
                           value: _printKd,
                           activeThumbColor: Colors.white,
                           activeTrackColor: const Color(0xFF00BFA5),
                           inactiveThumbColor: Colors.white,
-                          inactiveTrackColor: const Color(0xFFE5E6EB),
+                          inactiveTrackColor: _line,
                           onChanged: (bool v) => setState(() => _printKd = v),
                         ),
                       ],
@@ -3706,7 +3746,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                 ],
               ),
             ),
-            const Divider(height: 1, color: Color(0xFFF2F3F5)),
+            Divider(height: 1, color: _divider),
             // 按钮行
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
@@ -3716,7 +3756,7 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
                   Expanded(
                     child: _BottomBtn(
                       label: '操作',
-                      trailing: const Icon(Icons.more_horiz, size: 15, color: Color(0xFF86909C)),
+                      trailing: Icon(Icons.more_horiz, size: 15, color: _textHint),
                       onTap: _showOperationMenu,
                     ),
                   ),
@@ -3786,9 +3826,9 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
   @override
   Widget build(BuildContext context) {
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: ThemeUtils.dark,
+      value: _isDark ? ThemeUtils.light : ThemeUtils.dark,
       child: Scaffold(
-        backgroundColor: const Color(0xFFF5F6F8),
+        backgroundColor: _pageBg,
         body: Column(
           children: <Widget>[
             _buildTitleBar(),
@@ -3798,11 +3838,11 @@ class _OrderConfirmPageState extends State<OrderConfirmPage> with SingleTickerPr
               child: Container(
                 margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: _cardBg,
                   borderRadius: BorderRadius.circular(12),
                   boxShadow: <BoxShadow>[
                     BoxShadow(
-                      color: const Color(0xFF1D2129).withValues(alpha: 0.04),
+                      color: _cardShadow,
                       blurRadius: 10,
                       offset: const Offset(0, 2),
                     ),
@@ -3878,16 +3918,20 @@ class _BottomBtn extends StatelessWidget {
       child: Container(
         height: 38,
         decoration: BoxDecoration(
-          color: const Color(0xFFF7F8FA),
+          color: context.isDark ? const Color(0xFF2E2F30) : const Color(0xFFF7F8FA),
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFFE5E6EB), width: 0.5),
+          border: Border.all(
+              color: context.isDark ? const Color(0xFF4A4C4D) : const Color(0xFFE5E6EB),
+              width: 0.5),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
             Text(label,
-                style: const TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF4E5969))),
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: context.isDark ? Colors.white70 : const Color(0xFF4E5969))),
             if (trailing != null) trailing!,
           ],
         ),
@@ -3916,9 +3960,11 @@ class _OperationItem extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
         child: Row(
           children: <Widget>[
-            Icon(icon, size: 20, color: const Color(0xFF4E5969)),
+            Icon(icon, size: 20, color: context.isDark ? Colors.white70 : const Color(0xFF4E5969)),
             const SizedBox(width: 12),
-            Text(label, style: const TextStyle(fontSize: 15, color: Color(0xFF1D2129))),
+            Text(label,
+                style: TextStyle(
+                    fontSize: 15, color: context.isDark ? Colors.white : const Color(0xFF1D2129))),
           ],
         ),
       ),
